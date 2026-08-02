@@ -1,0 +1,19 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# 编译、日志
+*.class
+*.log
+
+# Mac系统文件
+.DS_Store
+
+# 本地配置（防止上传数据库密码）
+application-local.yml
