@@ -20,6 +20,7 @@ public class OrderResponse {
     private double couponDiscount;
     private String couponName;
     private int earnedPoints;
+    private String estimatedReadyTime;
 
     public OrderResponse() {}
 
@@ -82,4 +83,6 @@ public class OrderResponse {
     public void setCouponName(String couponName) { this.couponName = couponName; }
     public int getEarnedPoints() { return earnedPoints; }
     public void setEarnedPoints(int earnedPoints) { this.earnedPoints = earnedPoints; }
+    public String getEstimatedReadyTime() { return estimatedReadyTime; }
+    public void setEstimatedReadyTime(String estimatedReadyTime) { this.estimatedReadyTime = estimatedReadyTime; }
 }

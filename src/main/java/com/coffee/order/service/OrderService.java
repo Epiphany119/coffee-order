@@ -16,12 +16,14 @@ import com.coffee.order.observer.KitchenDisplay;
 import com.coffee.order.observer.OrderPublisher;
 import com.coffee.order.repository.*;
 import com.coffee.order.state.OrderStateContext;
+import com.coffee.order.state.PendingState;
 import com.coffee.order.strategy.PricingStrategy;
 import com.coffee.order.strategy.PricingStrategyFactory;
 import com.coffee.order.strategy.SpendingDiscountStrategy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.*;
 
 @Service
@@ -33,19 +35,24 @@ public class OrderService {
     private final GuestOrderRepository guestOrderRepo;
     private final ProductFactoryRegistry factoryRegistry;
     private final MemberPointsRepository memberPointsRepo;
+    private final BeverageReadyScheduler beverageReadyScheduler;
+
+    public static final int DEFAULT_PREPARE_MINUTES = 12;
 
     public OrderService(ProductRepository productRepo,
                         CoffeeUserRepository userRepo,
                         UserOrderRepository userOrderRepo,
                         GuestOrderRepository guestOrderRepo,
                         ProductFactoryRegistry factoryRegistry,
-                        MemberPointsRepository memberPointsRepo) {
+                        MemberPointsRepository memberPointsRepo,
+                        BeverageReadyScheduler beverageReadyScheduler) {
         this.productRepo = productRepo;
         this.userRepo = userRepo;
         this.userOrderRepo = userOrderRepo;
         this.guestOrderRepo = guestOrderRepo;
         this.factoryRegistry = factoryRegistry;
         this.memberPointsRepo = memberPointsRepo;
+        this.beverageReadyScheduler = beverageReadyScheduler;
 
         publisher.subscribe(new CustomerNotifier());
         publisher.subscribe(new KitchenDisplay());
@@ -115,6 +122,9 @@ public class OrderService {
         CouponResult coupon = applyCoupon(request.getCouponCode(), afterMember, userId != null && userId > 0);
         double couponRatio = afterMember == 0 ? 1 : coupon.finalPrice / afterMember;
 
+        LocalDateTime readyTime = LocalDateTime.now().plusMinutes(DEFAULT_PREPARE_MINUTES);
+        String readyTimeStr = readyTime.toLocalDate() + " " + readyTime.toLocalTime().withSecond(0).withNano(0);
+
         // 第二遍：建订单
         List<Map<String, Object>> itemDetails = new ArrayList<>();
         int totalCups = 0;
@@ -141,6 +151,7 @@ public class OrderService {
             detail.put("quantity", item.getQuantity());
             detail.put("unitPrice", unitFinal);
             detail.put("subtotal", round2(unitFinal * item.getQuantity()));
+            detail.put("estimatedReadyTime", readyTimeStr);
             itemDetails.add(detail);
         }
 
@@ -163,7 +174,7 @@ public class OrderService {
         OrderResponse resp = new OrderResponse(null, "多品类订单",
                 round2(totalOriginal), round2(totalFinal),
                 strategyName, "待处理",
-                "下单成功！共" + totalCups + "件",
+                "下单成功！共" + totalCups + "件，预计" + DEFAULT_PREPARE_MINUTES + "分钟后可取餐",
                 newTotalSpent, memberLevel);
         resp.setTotalCups(totalCups);
         resp.setItems(itemDetails);
@@ -171,6 +182,7 @@ public class OrderService {
         resp.setCouponDiscount(coupon.discount);
         resp.setCouponName(coupon.name);
         resp.setEarnedPoints(earnedPoints);
+        resp.setEstimatedReadyTime(readyTimeStr);
         return resp;
     }
 
@@ -239,6 +251,10 @@ public class OrderService {
      */
     private OrderResponse persistAndPublish(AssembledItem assembled, long userId,
                                             String guestId, double unitFinal) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime readyTime = now.plusMinutes(DEFAULT_PREPARE_MINUTES);
+        String readyTimeStr = readyTime.toLocalDate() + " " + readyTime.toLocalTime().withSecond(0).withNano(0);
+
         if (userId > 0) {
             UserOrder order = new UserOrder();
             order.setUserId(userId);
@@ -248,11 +264,18 @@ public class OrderService {
             order.setOriginalPrice(assembled.unitPrice);
             order.setFinalPrice(unitFinal);
             order.setStatus("PENDING");
+            order.setEstimatedReadyTime(readyTime);
             order = userOrderRepo.save(order);
             publisher.notifyObservers(order.getId(), assembled.fullName, "PENDING");
-            return new OrderResponse(order.getId(), assembled.fullName,
-                    assembled.unitPrice, unitFinal, "", "待处理", "下单成功",
+
+            beverageReadyScheduler.scheduleUserOrder(order.getId(), userId, assembled.fullName, readyTime);
+
+            OrderResponse resp = new OrderResponse(order.getId(), assembled.fullName,
+                    assembled.unitPrice, unitFinal, "", "待处理",
+                    "下单成功，预计 " + DEFAULT_PREPARE_MINUTES + " 分钟后可取餐",
                     0, "", assembled.categoryCode);
+            resp.setEstimatedReadyTime(readyTimeStr);
+            return resp;
         } else {
             GuestOrder order = new GuestOrder();
             order.setGuestId(guestId);
@@ -262,10 +285,17 @@ public class OrderService {
             order.setOriginalPrice(assembled.unitPrice);
             order.setFinalPrice(unitFinal);
             order.setStatus("PENDING");
+            order.setEstimatedReadyTime(readyTime);
             order = guestOrderRepo.save(order);
-            return new OrderResponse(order.getId(), assembled.fullName,
-                    assembled.unitPrice, unitFinal, "", "待处理", "下单成功",
+
+            beverageReadyScheduler.scheduleGuestOrder(order.getId(), guestId, assembled.fullName, readyTime);
+
+            OrderResponse resp = new OrderResponse(order.getId(), assembled.fullName,
+                    assembled.unitPrice, unitFinal, "", "待处理",
+                    "下单成功，预计 " + DEFAULT_PREPARE_MINUTES + " 分钟后可取餐",
                     0, "游客", assembled.categoryCode);
+            resp.setEstimatedReadyTime(readyTimeStr);
+            return resp;
         }
     }
 
@@ -463,6 +493,7 @@ public class OrderService {
         m.put("finalPrice", o.getFinalPrice());
         m.put("status", o.getStatus());
         m.put("createdAt", o.getCreatedAt());
+        m.put("estimatedReadyTime", o.getEstimatedReadyTime());
         return m;
     }
 
@@ -477,6 +508,7 @@ public class OrderService {
         m.put("finalPrice", o.getFinalPrice());
         m.put("status", o.getStatus());
         m.put("createdAt", o.getCreatedAt());
+        m.put("estimatedReadyTime", o.getEstimatedReadyTime());
         return m;
     }
 

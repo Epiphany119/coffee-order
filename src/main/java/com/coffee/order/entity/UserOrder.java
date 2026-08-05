@@ -34,6 +34,9 @@ public class UserOrder {
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
+    @Column
+    private LocalDateTime estimatedReadyTime;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
@@ -57,4 +60,6 @@ public class UserOrder {
     public void setStatus(String status) { this.status = status; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getEstimatedReadyTime() { return estimatedReadyTime; }
+    public void setEstimatedReadyTime(LocalDateTime estimatedReadyTime) { this.estimatedReadyTime = estimatedReadyTime; }
 }

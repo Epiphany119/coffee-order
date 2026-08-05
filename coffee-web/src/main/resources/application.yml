@@ -1,0 +1,36 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: coffee-order-system
+  datasource:
+    url: jdbc:mysql://localhost:3306/coffee_order_pro?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: epiphany
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+# 座位模块配置
+coffee:
+  seat:
+    # 二维码内容基础地址：必须填手机能访问到的地址！
+    # 手机扫码会打开这个地址 —— localhost 是手机自己，永远打不开。
+    # 开发环境填电脑局域网 IP（换 WiFi 后 IP 会变，需要同步改）；
+    # 生产环境填部署域名。
+    qr-base-url: http://192.168.31.42:5173
+    # 店名（座位编号前缀）
+    store-name: 静安店
+    # 分配后未落座的超时释放时长（分钟）
+    assign-timeout-minutes: 15
+
+logging:
+  level:
+    com.coffee: DEBUG
