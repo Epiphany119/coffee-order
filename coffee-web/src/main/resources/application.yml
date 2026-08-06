@@ -13,7 +13,8 @@ spring:
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # SQL 日志走 slf4j，级别由下方 logging.level 控制（默认 INFO 不打印 SQL，需要调试时临时调 DEBUG）
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
   global-config:
     db-config:
       id-type: auto
@@ -33,4 +34,5 @@ coffee:
 
 logging:
   level:
-    com.coffee: DEBUG
+    # 默认 INFO：启动只输出关键日志；需要看 SQL 时临时改为 DEBUG
+    com.coffee: INFO

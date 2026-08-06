@@ -10,6 +10,10 @@ import java.time.LocalDateTime;
 public class Seat {
 
     private Long id;
+    /** 店铺 id（座位按店隔离） */
+    private Long storeId;
+    /** 座位模板 id（seat_template，规格统一管理） */
+    private Long templateId;
     private String storeName;
     private String seatNo;
     private int capacity;
@@ -50,6 +54,10 @@ public class Seat {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public Long getStoreId() { return storeId; }
+    public void setStoreId(Long storeId) { this.storeId = storeId; }
+    public Long getTemplateId() { return templateId; }
+    public void setTemplateId(Long templateId) { this.templateId = templateId; }
     public String getStoreName() { return storeName; }
     public void setStoreName(String storeName) { this.storeName = storeName; }
     public String getSeatNo() { return seatNo; }

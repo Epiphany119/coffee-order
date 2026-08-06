@@ -32,7 +32,11 @@
         </dependency>
         <dependency>
             <groupId>com.coffee</groupId>
-            <artifactId>coffee-module-product-biz</artifactId>
+            <artifactId>coffee-module-membership-biz</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.coffee</groupId>
+            <artifactId>coffee-module-menu-biz</artifactId>
         </dependency>
         <dependency>
             <groupId>com.coffee</groupId>

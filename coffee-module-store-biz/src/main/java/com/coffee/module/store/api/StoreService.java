@@ -26,6 +26,11 @@ public interface StoreService {
     List<StoreResponse> listAvailableStores();
 
     /**
+     * 营业中店铺列表（status = OPEN，用户端左上角选店）
+     */
+    List<StoreResponse> listOpenStores();
+
+    /**
      * 店铺详情
      */
     StoreResponse getStore(Long storeId);

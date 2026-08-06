@@ -48,6 +48,12 @@ public class StoreRepositoryImpl implements StoreRepository {
     }
 
     @Override
+    public List<Store> findOpen() {
+        return storeMapper.selectOpen().stream()
+                .map(this::toDomain).toList();
+    }
+
+    @Override
     public List<Store> findByMerchantId(Long merchantId) {
         return storeMapper.selectByMerchantId(merchantId).stream()
                 .map(this::toDomain).toList();

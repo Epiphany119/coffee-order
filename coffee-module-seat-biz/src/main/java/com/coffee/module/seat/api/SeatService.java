@@ -32,7 +32,12 @@ public interface SeatService {
     SeatResponse leaveSeat(Long seatId);
 
     /**
-     * 全部座位状态（管理用）
+     * 店铺座位状态列表（管理用，storeId 为空查全部）
      */
-    List<SeatResponse> listSeats();
+    List<SeatResponse> listSeats(Long storeId);
+
+    /**
+     * 指定店铺中指定身份（用户/游客）已落座的座位（幽灵占座恢复用，按占用时间倒序）
+     */
+    List<SeatResponse> listOccupiedSeats(Long storeId, Long userId, String guestId);
 }

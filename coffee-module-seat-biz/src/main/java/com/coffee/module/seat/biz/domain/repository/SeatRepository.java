@@ -10,8 +10,11 @@ import java.util.List;
  */
 public interface SeatRepository {
 
-    /** 查询容量足够且空闲的座位（按容量升序，取前 N 张） */
-    List<Seat> findFreeSeats(int requiredCapacity, int limit);
+    /** 查询指定店铺容量足够且空闲的座位（按容量升序，取前 N 张） */
+    List<Seat> findFreeSeats(Long storeId, int requiredCapacity, int limit);
+
+    /** 店铺座位数量（初始化补座用） */
+    long countByStoreId(Long storeId);
 
     /** 乐观分配：仅当座位仍为空闲时更新为已分配，返回是否成功 */
     boolean tryAssign(Long seatId, Long userId, String guestId);
@@ -30,7 +33,11 @@ public interface SeatRepository {
     /** 按 店名+编号 查询 */
     Seat findByCode(String storeName, String seatNo);
 
-    List<Seat> findAll();
+    /** 全部座位（storeId 为空查全部，否则按店过滤） */
+    List<Seat> findAll(Long storeId);
+
+    /** 指定店铺中指定身份（用户/游客）已落座的座位（幽灵占座恢复用） */
+    List<Seat> findOccupiedByStoreAndIdentity(Long storeId, Long userId, String guestId);
 
     long count();
 

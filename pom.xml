@@ -15,7 +15,8 @@
         <module>coffee-common</module>
         <module>coffee-module-auth-biz</module>
         <module>coffee-module-member-biz</module>
-        <module>coffee-module-product-biz</module>
+        <module>coffee-module-membership-biz</module>
+        <module>coffee-module-menu-biz</module>
         <module>coffee-module-order-biz</module>
         <module>coffee-module-seat-biz</module>
         <module>coffee-module-store-biz</module>
@@ -50,7 +51,12 @@
             </dependency>
             <dependency>
                 <groupId>com.coffee</groupId>
-                <artifactId>coffee-module-product-biz</artifactId>
+                <artifactId>coffee-module-membership-biz</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.coffee</groupId>
+                <artifactId>coffee-module-menu-biz</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

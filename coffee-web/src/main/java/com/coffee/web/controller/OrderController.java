@@ -29,8 +29,8 @@ public class OrderController {
     }
 
     @GetMapping("/menu")
-    public Result<Map<String, Object>> getMenu() {
-        return Result.success(orderService.getMenuInfo());
+    public Result<Map<String, Object>> getMenu(@RequestParam(value = "storeId", required = false) Long storeId) {
+        return Result.success(orderService.getMenuInfo(storeId));
     }
 
     @PostMapping("/order")
@@ -59,8 +59,21 @@ public class OrderController {
     }
 
     @GetMapping("/orders")
-    public Result<List<Map<String, Object>>> getAllOrders() {
+    public Result<List<Map<String, Object>>> getAllOrders(
+            @RequestParam(value = "storeId", required = false) Long storeId,
+            @RequestParam(value = "status", required = false) String status) {
+        if (storeId != null) {
+            return Result.success(orderService.getStoreOrders(storeId, status));
+        }
         return Result.success(orderService.getAllOrders());
+    }
+
+    /** 商家操作订单状态（接单 start / 完成 complete / 取消 cancel），校验订单归属店铺 */
+    @PostMapping("/orders/{id}/action")
+    public Result<OrderResponse> merchantOrderAction(@PathVariable Long id,
+                                                     @RequestParam String action,
+                                                     @RequestParam Long storeId) {
+        return Result.success(orderService.updateStoreOrderStatus(id, action, storeId));
     }
 
     @GetMapping("/member/{userId}/dashboard")
@@ -82,6 +95,7 @@ public class OrderController {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("nickname", member != null && member.getNickname() != null ? member.getNickname() : "会员");
         result.put("totalSpent", spent);
+        result.put("totalSaved", orderService.getTotalSaved(userId));
         result.put("memberLevel", levelDTO.getLabel());
         result.put("points", member != null && member.getPoints() != null ? member.getPoints() : 0);
         result.put("pointsLevel", member != null && member.getPointsLevel() != null ? member.getPointsLevel() : "BRONZE");
@@ -89,18 +103,19 @@ public class OrderController {
         result.put("amountToNext", Math.max(0, nextThreshold - spent));
         result.put("progress", progress);
         result.put("coupons", List.of(
-                couponInfo("FIKA8", "下午茶立减 ¥8", 48, 8),
-                couponInfo("SWEET12", "甜品满 ¥78 减 ¥12", 78, 12),
-                couponInfo("BEAN15", "咖啡满 ¥88 减 ¥15", 88, 15)));
+                couponInfo("FIKA8", "下午茶立减 ¥8", 48, 8, "下午茶品类满 ¥48 立减 ¥8"),
+                couponInfo("SWEET12", "甜品满 ¥78 减 ¥12", 78, 12, "甜品品类满 ¥78 立减 ¥12"),
+                couponInfo("BEAN15", "咖啡满 ¥88 减 ¥15", 88, 15, "咖啡品类满 ¥88 立减 ¥15")));
         return Result.success(result);
     }
 
-    private Map<String, Object> couponInfo(String code, String name, double minimum, double discount) {
+    private Map<String, Object> couponInfo(String code, String name, double minimum, double discount, String description) {
         Map<String, Object> coupon = new LinkedHashMap<>();
         coupon.put("code", code);
         coupon.put("name", name);
         coupon.put("minimum", minimum);
         coupon.put("discount", discount);
+        coupon.put("description", description);
         return coupon;
     }
 }

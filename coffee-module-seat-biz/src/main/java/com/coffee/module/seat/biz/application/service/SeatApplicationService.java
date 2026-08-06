@@ -49,13 +49,26 @@ public class SeatApplicationService implements SeatService {
     @Override
     @Transactional
     public SeatResponse assignSeat(AssignSeatRequest request) {
+        if (request.getStoreId() == null) {
+            throw new IllegalArgumentException("请先选择店铺");
+        }
         int peopleCount = request.getPeopleCount();
         if (peopleCount < 1 || peopleCount > MAX_PEOPLE) {
             throw new IllegalArgumentException("就餐人数需在 1-" + MAX_PEOPLE + " 人之间");
         }
 
+        // 一人一桌：该身份在本店已有未释放座位（已分配/已落座）时直接返回已有座位，
+        // 防止用户重复取号（如刷新/重进/换账号残留）导致同一身份占多桌
+        List<Seat> existing = seatRepository.findOccupiedByStoreAndIdentity(
+                request.getStoreId(), request.getUserId(), request.getGuestId());
+        if (!existing.isEmpty()) {
+            log.info("[seat] 复用已有座位 store={} code={} userId={} guestId={}（一人一桌）",
+                    request.getStoreId(), existing.get(0).code(), request.getUserId(), request.getGuestId());
+            return toResponse(existing.get(0), true);
+        }
+
         int requiredCapacity = requiredCapacity(peopleCount);
-        List<Seat> candidates = seatRepository.findFreeSeats(requiredCapacity, 50);
+        List<Seat> candidates = seatRepository.findFreeSeats(request.getStoreId(), requiredCapacity, 50);
 
         if (candidates.isEmpty()) {
             throw new IllegalStateException("当前没有可用的座位，请稍后再试");
@@ -76,8 +89,8 @@ public class SeatApplicationService implements SeatService {
 
         assigned.assignTo(request.getUserId(), request.getGuestId());
 
-        log.info("[seat] 分配座位 code={} people={} userId={} guestId={}",
-                assigned.code(), peopleCount, request.getUserId(), request.getGuestId());
+        log.info("[seat] 分配座位 store={} code={} people={} userId={} guestId={}",
+                request.getStoreId(), assigned.code(), peopleCount, request.getUserId(), request.getGuestId());
 
         return toResponse(assigned, true);
     }
@@ -94,6 +107,14 @@ public class SeatApplicationService implements SeatService {
         Seat seat = seatRepository.findById(seatId);
         if (seat == null) {
             throw new IllegalArgumentException("座位不存在");
+        }
+        // 一人一桌：该身份在本店已有其他未释放座位时拒绝落座，防止同一身份同时占多桌
+        List<Seat> existing = seatRepository.findOccupiedByStoreAndIdentity(
+                seat.getStoreId(), request.getUserId(), request.getGuestId());
+        for (Seat s : existing) {
+            if (!s.getId().equals(seatId)) {
+                throw new IllegalStateException("你已在「" + s.code() + "」取号/落座，请先离座释放再落座新座位");
+            }
         }
         // 座位编号即凭证：任何状态（空闲/已分配/已被他人占用）扫码均可直接落座。
         // 落座即记录占用者，前端据此校验座位归属，避免跨账号继承他人座位状态
@@ -126,8 +147,22 @@ public class SeatApplicationService implements SeatService {
     }
 
     @Override
-    public List<SeatResponse> listSeats() {
-        return seatRepository.findAll().stream()
+    public List<SeatResponse> listSeats(Long storeId) {
+        return seatRepository.findAll(storeId).stream()
+                .map(s -> toResponse(s, false))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<SeatResponse> listOccupiedSeats(Long storeId, Long userId, String guestId) {
+        if (storeId == null) {
+            throw new IllegalArgumentException("请先选择店铺");
+        }
+        // 无身份标识时无从恢复，直接返回空
+        if (userId == null && (guestId == null || guestId.isBlank())) {
+            return List.of();
+        }
+        return seatRepository.findOccupiedByStoreAndIdentity(storeId, userId, guestId).stream()
                 .map(s -> toResponse(s, false))
                 .collect(Collectors.toList());
     }
@@ -154,7 +189,7 @@ public class SeatApplicationService implements SeatService {
         return MAX_PEOPLE;
     }
 
-    /** 解析座位编号（店名-编号），校验店名 */
+    /** 解析座位编号（店名-编号，编号自带店铺，直接查库） */
     private Seat findByCode(String code) {
         if (code == null || code.isBlank()) {
             throw new IllegalArgumentException("座位编号不能为空");
@@ -165,9 +200,6 @@ public class SeatApplicationService implements SeatService {
         }
         String storeName = code.substring(0, idx);
         String seatNo = code.substring(idx + 1);
-        if (!properties.getStoreName().equals(storeName)) {
-            throw new IllegalArgumentException("无法识别的座位编号");
-        }
         Seat seat = seatRepository.findByCode(storeName, seatNo);
         if (seat == null) {
             throw new IllegalArgumentException("座位不存在");
@@ -183,9 +215,10 @@ public class SeatApplicationService implements SeatService {
                     + URLEncoder.encode(seat.code(), StandardCharsets.UTF_8);
             qrBase64 = qrCodeGenerator.generateBase64(qrContent, 280, 280);
         }
-        return SeatResponse.from(seat.getStatus(), seat.getId(), seat.getStoreName(),
-                seat.getSeatNo(), seat.getCapacity(),
+        return SeatResponse.from(seat.getStatus(), seat.getId(), seat.getStoreId(),
+                seat.getStoreName(), seat.getSeatNo(), seat.getCapacity(),
                 seat.getAssignedUserId(), seat.getAssignedGuestId(),
+                seat.getAssignedAt(), seat.getOccupiedAt(),
                 qrContent, qrBase64);
     }
 }

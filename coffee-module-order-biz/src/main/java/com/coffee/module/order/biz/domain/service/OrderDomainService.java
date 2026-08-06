@@ -17,13 +17,14 @@ public class OrderDomainService {
     public static final int DEFAULT_PREPARE_MINUTES = 12;
 
     public Order createOrder(Long userId, String guestId, String beverageName, String size,
-                            String condiments, Double originalPrice, Double finalPrice,
+                            String customSize, String condiments, Double originalPrice, Double finalPrice,
                             String categoryCode) {
         Order order = new Order();
         order.setUserId(userId);
         order.setGuestId(guestId);
         order.setBeverageName(beverageName);
         order.setSize(size);
+        order.setCustomSize(customSize);
         order.setCondiments(condiments);
         order.setOriginalPrice(originalPrice);
         order.setFinalPrice(finalPrice);
@@ -51,9 +52,12 @@ public class OrderDomainService {
 
     public Order.OrderStatus calculateNextStatus(String currentStatus, String action) {
         return switch (currentStatus) {
-            case "PENDING" -> action.equals("start") ? Order.OrderStatus.PREPARING : Order.OrderStatus.PENDING;
+            case "PENDING" -> action.equals("start") ? Order.OrderStatus.PREPARING :
+                             action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.PENDING;
             case "PREPARING" -> action.equals("complete") ? Order.OrderStatus.COMPLETED :
                                action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.PREPARING;
+            // 已完成订单允许取消（退款语义）：消费累计/积分在应用层回滚
+            case "COMPLETED" -> action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.COMPLETED;
             default -> Order.OrderStatus.valueOf(currentStatus);
         };
     }

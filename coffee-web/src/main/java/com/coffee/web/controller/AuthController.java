@@ -44,4 +44,18 @@ public class AuthController {
     public AuthResponse getUserInfo(@PathVariable Long id) {
         return authService.getUserInfo(id);
     }
+
+    /** 用户店铺偏好：GET /api/auth/user/{id}/preference */
+    @GetMapping("/user/{id}/preference")
+    public Map<String, Object> getPreference(@PathVariable Long id) {
+        return Map.of("success", true, "lastStoreId", authService.getLastStoreId(id));
+    }
+
+    /** 保存店铺偏好：PUT /api/auth/user/{id}/preference  body {"storeId":1} */
+    @PutMapping("/user/{id}/preference")
+    public Map<String, Object> updatePreference(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        Long storeId = body.get("storeId") == null ? null : Long.valueOf(body.get("storeId").toString());
+        authService.updateLastStore(id, storeId);
+        return Map.of("success", true, "message", "偏好已保存");
+    }
 }

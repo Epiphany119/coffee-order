@@ -31,4 +31,14 @@ public interface AuthService {
      * 重置密码 — 凭令牌设置新密码
      */
     AuthResponse resetPassword(ResetPasswordRequest request);
+
+    /**
+     * 获取用户上次选择的店铺 ID（无记录返回 null）
+     */
+    Long getLastStoreId(Long userId);
+
+    /**
+     * 保存用户店铺偏好
+     */
+    void updateLastStore(Long userId, Long storeId);
 }

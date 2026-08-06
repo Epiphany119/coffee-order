@@ -47,7 +47,7 @@ public class StoreApplicationService implements StoreService {
         store.setAddress(request.getAddress());
         store.setPhone(request.getPhone());
         store.setBusinessHours(request.getBusinessHours());
-        store.setStatus(request.getStatus() != null ? request.getStatus() : StoreStatus.OPEN);
+        store.setStatus(request.getStatus() != null ? request.getStatus() : StoreStatus.CLOSED);
         store.setMerchantId(request.getMerchantId());
         if (request.getMerchantId() != null) {
             requireMerchantNotJoined(request.getMerchantId());
@@ -64,6 +64,11 @@ public class StoreApplicationService implements StoreService {
     @Override
     public List<StoreResponse> listAvailableStores() {
         return storeRepository.findAvailable().stream().map(this::toResponse).toList();
+    }
+
+    @Override
+    public List<StoreResponse> listOpenStores() {
+        return storeRepository.findOpen().stream().map(this::toResponse).toList();
     }
 
     @Override

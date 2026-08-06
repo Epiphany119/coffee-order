@@ -124,6 +124,21 @@ public class AuthApplicationService implements AuthService {
                 user.getTotalSpent() != null ? user.getTotalSpent() : 0.0);
     }
 
+    // ======================== 店铺偏好 ========================
+
+    @Override
+    public Long getLastStoreId(Long userId) {
+        User user = userRepository.findById(userId);
+        return user != null ? user.getLastStoreId() : null;
+    }
+
+    @Override
+    public void updateLastStore(Long userId, Long storeId) {
+        if (userId != null) {
+            userRepository.updateLastStore(userId, storeId);
+        }
+    }
+
     // ======================== 忘记密码 ========================
 
     @Override

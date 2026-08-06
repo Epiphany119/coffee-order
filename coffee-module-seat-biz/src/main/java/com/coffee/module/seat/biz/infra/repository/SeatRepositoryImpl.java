@@ -1,6 +1,5 @@
 package com.coffee.module.seat.biz.infra.repository;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.coffee.module.seat.api.dto.SeatStatus;
 import com.coffee.module.seat.biz.domain.Seat;
 import com.coffee.module.seat.biz.domain.repository.SeatRepository;
@@ -25,10 +24,15 @@ public class SeatRepositoryImpl implements SeatRepository {
     }
 
     @Override
-    public List<Seat> findFreeSeats(int requiredCapacity, int limit) {
-        return seatMapper.selectFreeSeats(requiredCapacity, limit).stream()
+    public List<Seat> findFreeSeats(Long storeId, int requiredCapacity, int limit) {
+        return seatMapper.selectFreeSeats(storeId, requiredCapacity, limit).stream()
                 .map(this::toSeat)
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public long countByStoreId(Long storeId) {
+        return seatMapper.countByStoreId(storeId);
     }
 
     @Override
@@ -53,7 +57,7 @@ public class SeatRepositoryImpl implements SeatRepository {
 
     @Override
     public Seat findById(Long seatId) {
-        SeatPO po = seatMapper.selectById(seatId);
+        SeatPO po = seatMapper.selectByIdWithJoin(seatId);
         return po == null ? null : toSeat(po);
     }
 
@@ -64,10 +68,15 @@ public class SeatRepositoryImpl implements SeatRepository {
     }
 
     @Override
-    public List<Seat> findAll() {
-        return seatMapper.selectList(
-                new LambdaQueryWrapper<SeatPO>().orderByAsc(SeatPO::getId)
-        ).stream().map(this::toSeat).collect(Collectors.toList());
+    public List<Seat> findAll(Long storeId) {
+        return seatMapper.selectListByStore(storeId).stream()
+                .map(this::toSeat).collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Seat> findOccupiedByStoreAndIdentity(Long storeId, Long userId, String guestId) {
+        return seatMapper.selectOccupiedByStoreAndIdentity(storeId, userId, guestId).stream()
+                .map(this::toSeat).collect(Collectors.toList());
     }
 
     @Override
@@ -86,6 +95,8 @@ public class SeatRepositoryImpl implements SeatRepository {
     private Seat toSeat(SeatPO po) {
         Seat s = new Seat();
         s.setId(po.getId());
+        s.setStoreId(po.getStoreId());
+        s.setTemplateId(po.getTemplateId());
         s.setStoreName(po.getStoreName());
         s.setSeatNo(po.getSeatNo());
         s.setCapacity(po.getCapacity());
@@ -100,9 +111,8 @@ public class SeatRepositoryImpl implements SeatRepository {
     private SeatPO toPO(Seat s) {
         SeatPO po = new SeatPO();
         po.setId(s.getId());
-        po.setStoreName(s.getStoreName());
-        po.setSeatNo(s.getSeatNo());
-        po.setCapacity(s.getCapacity());
+        po.setStoreId(s.getStoreId());
+        po.setTemplateId(s.getTemplateId());
         po.setStatus(s.getStatus() == null ? SeatStatus.FREE : s.getStatus());
         po.setAssignedUserId(s.getAssignedUserId());
         po.setAssignedGuestId(s.getAssignedGuestId());

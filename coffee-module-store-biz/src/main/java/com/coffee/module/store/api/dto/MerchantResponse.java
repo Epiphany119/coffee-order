@@ -11,6 +11,8 @@ public class MerchantResponse {
     private String merchantNo;
     private String nickname;
     private String phone;
+    /** 绑定的店名（入驻后非空） */
+    private String storeName;
     private MerchantStatus status;
 
     public MerchantResponse() {}
@@ -21,7 +23,7 @@ public class MerchantResponse {
     }
 
     public static MerchantResponse ok(Long id, String merchantNo, String nickname,
-                                      String phone, MerchantStatus status) {
+                                      String phone, MerchantStatus status, String storeName) {
         MerchantResponse r = new MerchantResponse();
         r.success = true;
         r.message = "操作成功";
@@ -30,6 +32,7 @@ public class MerchantResponse {
         r.nickname = nickname;
         r.phone = phone;
         r.status = status;
+        r.storeName = storeName;
         return r;
     }
 
@@ -49,6 +52,8 @@ public class MerchantResponse {
     public void setNickname(String nickname) { this.nickname = nickname; }
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
+    public String getStoreName() { return storeName; }
+    public void setStoreName(String storeName) { this.storeName = storeName; }
     public MerchantStatus getStatus() { return status; }
     public void setStatus(MerchantStatus status) { this.status = status; }
 }

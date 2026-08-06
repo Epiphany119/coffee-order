@@ -18,6 +18,8 @@ public interface StoreRepository {
 
     List<Store> findAvailable();
 
+    List<Store> findOpen();
+
     List<Store> findByMerchantId(Long merchantId);
 
     boolean existsByCode(String code);

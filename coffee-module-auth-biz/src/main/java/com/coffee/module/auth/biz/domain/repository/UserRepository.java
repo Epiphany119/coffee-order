@@ -11,4 +11,5 @@ public interface UserRepository {
     boolean existsByUsername(String username);
     User save(User user);
     void updatePassword(Long id, String passwordHash);
+    void updateLastStore(Long id, Long storeId);
 }

@@ -45,9 +45,17 @@ public class SeatController {
         return seatService.leaveSeat(id);
     }
 
-    /** 全部座位状态 */
+    /** 店铺座位状态列表（storeId 为空查全部） */
     @GetMapping("/list")
-    public List<SeatResponse> list() {
-        return seatService.listSeats();
+    public List<SeatResponse> list(@RequestParam(value = "storeId", required = false) Long storeId) {
+        return seatService.listSeats(storeId);
+    }
+
+    /** 按身份查当前店已落座座位（前端幽灵占座恢复：本地无座位时找回自己占的座） */
+    @GetMapping("/occupied")
+    public List<SeatResponse> occupied(@RequestParam("storeId") Long storeId,
+                                       @RequestParam(value = "userId", required = false) Long userId,
+                                       @RequestParam(value = "guestId", required = false) String guestId) {
+        return seatService.listOccupiedSeats(storeId, userId, guestId);
     }
 }

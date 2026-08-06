@@ -23,4 +23,7 @@ public interface UserMapper extends BaseMapper<UserPO> {
 
     @Update("UPDATE coffee_user SET password = #{password} WHERE id = #{id}")
     void updatePassword(@Param("id") Long id, @Param("password") String password);
+
+    @Update("UPDATE coffee_user SET last_store_id = #{storeId} WHERE id = #{id}")
+    void updateLastStore(@Param("id") Long id, @Param("storeId") Long storeId);
 }

@@ -23,6 +23,11 @@ public interface MemberService {
     void addSpending(Long userId, double amount);
 
     /**
+     * 扣回消费金额（取消已完成订单时回滚累计消费）
+     */
+    void subtractSpending(Long userId, double amount);
+
+    /**
      * 获取累计消费
      */
     double getTotalSpent(Long userId);

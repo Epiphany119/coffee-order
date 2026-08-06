@@ -52,6 +52,19 @@ public class MemberDomainService implements MemberService {
     }
 
     @Override
+    public void subtractSpending(Long userId, double amount) {
+        if (userId == null || userId <= 0 || amount <= 0) return;
+        Member member = memberRepository.findById(userId);
+        if (member != null) {
+            double current = member.getTotalSpent() != null ? member.getTotalSpent() : 0;
+            // 防负：最多扣到 0（数据不一致时不允许出现负数累计消费）
+            member.setTotalSpent(Math.max(0, current - amount));
+            member.setMemberLevel(member.getLevel());
+            memberRepository.save(member);
+        }
+    }
+
+    @Override
     public double getTotalSpent(Long userId) {
         if (userId == null || userId <= 0) return 0;
         Member member = memberRepository.findById(userId);

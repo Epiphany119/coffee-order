@@ -40,6 +40,13 @@ public class MerchantRepositoryImpl implements MerchantRepository {
     }
 
     @Override
+    public Optional<Merchant> findByStoreId(Long storeId) {
+        MerchantPO po = merchantMapper.selectOne(
+                new LambdaQueryWrapper<MerchantPO>().eq(MerchantPO::getStoreId, storeId).last("LIMIT 1"));
+        return Optional.ofNullable(po).map(this::toDomain);
+    }
+
+    @Override
     public boolean existsByMerchantNo(String merchantNo) {
         return merchantMapper.selectCount(
                 new LambdaQueryWrapper<MerchantPO>().eq(MerchantPO::getMerchantNo, merchantNo)) > 0;
@@ -49,6 +56,11 @@ public class MerchantRepositoryImpl implements MerchantRepository {
     public boolean existsByUsername(String username) {
         return merchantMapper.selectCount(
                 new LambdaQueryWrapper<MerchantPO>().eq(MerchantPO::getUsername, username)) > 0;
+    }
+
+    @Override
+    public void deleteByUsername(String username) {
+        merchantMapper.delete(new LambdaQueryWrapper<MerchantPO>().eq(MerchantPO::getUsername, username));
     }
 
     @Override
@@ -71,6 +83,8 @@ public class MerchantRepositoryImpl implements MerchantRepository {
         m.setPasswordHash(po.getPassword());
         m.setNickname(po.getNickname());
         m.setPhone(po.getPhone());
+        m.setStoreName(po.getStoreName());
+        m.setStoreId(po.getStoreId());
         m.setStatus(po.getStatus());
         m.setCreatedAt(po.getCreatedAt());
         m.setUpdatedAt(po.getUpdatedAt());
@@ -85,6 +99,8 @@ public class MerchantRepositoryImpl implements MerchantRepository {
         po.setPassword(m.getPasswordHash());
         po.setNickname(m.getNickname());
         po.setPhone(m.getPhone());
+        po.setStoreName(m.getStoreName());
+        po.setStoreId(m.getStoreId());
         po.setStatus(m.getStatus());
         po.setCreatedAt(m.getCreatedAt());
         po.setUpdatedAt(m.getUpdatedAt());

@@ -12,6 +12,7 @@ public class User {
     private String nickname;
     private Double totalSpent;
     private String role;
+    private Long lastStoreId;
     private LocalDateTime createdAt;
 
     public static User register(String username, String passwordHash, String nickname) {
@@ -37,6 +38,8 @@ public class User {
     public void setTotalSpent(Double totalSpent) { this.totalSpent = totalSpent; }
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+    public Long getLastStoreId() { return lastStoreId; }
+    public void setLastStoreId(Long lastStoreId) { this.lastStoreId = lastStoreId; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

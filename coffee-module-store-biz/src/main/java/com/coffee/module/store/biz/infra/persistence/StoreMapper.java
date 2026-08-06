@@ -22,4 +22,8 @@ public interface StoreMapper extends BaseMapper<StorePO> {
     /** 可入驻店铺（未绑定商家），按 id 升序 */
     @Select("SELECT * FROM store WHERE merchant_id IS NULL ORDER BY id ASC")
     List<StorePO> selectAvailable();
+
+    /** 营业中店铺（status = OPEN，用户端选店），按 id 升序 */
+    @Select("SELECT * FROM store WHERE status = 'OPEN' ORDER BY id ASC")
+    List<StorePO> selectOpen();
 }

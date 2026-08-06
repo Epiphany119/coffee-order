@@ -52,6 +52,11 @@ public class UserRepositoryImpl implements UserRepository {
         userMapper.updatePassword(id, passwordHash);
     }
 
+    @Override
+    public void updateLastStore(Long id, Long storeId) {
+        userMapper.updateLastStore(id, storeId);
+    }
+
     /**
      * 获取原始密码（用于旧用户明文比对后自动升级）
      */
@@ -67,6 +72,7 @@ public class UserRepositoryImpl implements UserRepository {
         user.setNickname(po.getNickname());
         user.setTotalSpent(po.getTotalSpent());
         user.setRole(po.getRole());
+        user.setLastStoreId(po.getLastStoreId());
         user.setCreatedAt(po.getCreatedAt());
         return user;
     }
@@ -79,6 +85,7 @@ public class UserRepositoryImpl implements UserRepository {
         po.setNickname(user.getNickname());
         po.setTotalSpent(user.getTotalSpent());
         po.setRole(user.getRole());
+        po.setLastStoreId(user.getLastStoreId());
         po.setCreatedAt(user.getCreatedAt());
         return po;
     }

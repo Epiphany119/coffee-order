@@ -1,6 +1,7 @@
 package com.coffee.module.seat.biz.infra.persistence;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.coffee.module.seat.api.dto.SeatStatus;
@@ -9,14 +10,24 @@ import java.time.LocalDateTime;
 
 /**
  * 座位持久化对象
+ * 表结构：store_id + template_id（映射 seat_template）+ 运行时状态
+ * store_name / seat_no / capacity 不再落库，由 JOIN seat_template / store 查询填充
  */
 @TableName("seat")
 public class SeatPO {
 
     @TableId(type = IdType.AUTO)
     private Long id;
+    /** 店铺 id（座位按店隔离：分配/列表均按店过滤） */
+    private Long storeId;
+    /** 座位模板 id（seat_template 99 桌定义，全店共用） */
+    private Long templateId;
+    /** 以下字段不落库，由 JOIN 查询结果填充 */
+    @TableField(exist = false)
     private String storeName;
+    @TableField(exist = false)
     private String seatNo;
+    @TableField(exist = false)
     private Integer capacity;
     private SeatStatus status;
     private Long assignedUserId;
@@ -28,6 +39,10 @@ public class SeatPO {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public Long getStoreId() { return storeId; }
+    public void setStoreId(Long storeId) { this.storeId = storeId; }
+    public Long getTemplateId() { return templateId; }
+    public void setTemplateId(Long templateId) { this.templateId = templateId; }
     public String getStoreName() { return storeName; }
     public void setStoreName(String storeName) { this.storeName = storeName; }
     public String getSeatNo() { return seatNo; }

@@ -21,6 +21,10 @@ public class MerchantPO {
     private String password;
     private String nickname;
     private String phone;
+    /** 绑定的店名（入驻时冗余写入，容错/展示用） */
+    private String storeName;
+    /** 绑定的店铺 id */
+    private Long storeId;
     private MerchantStatus status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -37,6 +41,10 @@ public class MerchantPO {
     public void setNickname(String nickname) { this.nickname = nickname; }
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
+    public String getStoreName() { return storeName; }
+    public void setStoreName(String storeName) { this.storeName = storeName; }
+    public Long getStoreId() { return storeId; }
+    public void setStoreId(Long storeId) { this.storeId = storeId; }
     public MerchantStatus getStatus() { return status; }
     public void setStatus(MerchantStatus status) { this.status = status; }
     public LocalDateTime getCreatedAt() { return createdAt; }
