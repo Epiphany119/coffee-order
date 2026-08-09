@@ -9,6 +9,7 @@ import com.coffee.module.menu.biz.infra.storage.LocalImageStorage;
 import com.coffee.module.store.api.StoreService;
 import com.coffee.module.store.api.dto.StoreRequest;
 import com.coffee.module.store.api.dto.StoreResponse;
+import com.coffee.web.security.AccessGuard;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -36,6 +37,10 @@ public class StoreController {
     /** 创建店铺（商家建店 / 管理端） */
     @PostMapping
     public StoreResponse create(@RequestBody StoreRequest request) {
+        if (request.getMerchantId() == null) {
+            throw new com.coffee.common.core.exception.ServiceException(400, "创建店铺必须指定商家身份");
+        }
+        AccessGuard.requireMerchant(request.getMerchantId());
         return storeService.createStore(request);
     }
 
@@ -66,12 +71,14 @@ public class StoreController {
     /** 更新店铺（店名/地址/电话/营业时间/状态） */
     @PutMapping("/{id}")
     public StoreResponse update(@PathVariable("id") Long id, @RequestBody StoreRequest request) {
+        requireStoreOwner(id);
         return storeService.updateStore(id, request);
     }
 
     /** 删除店铺 */
     @DeleteMapping("/{id}")
     public void delete(@PathVariable("id") Long id) {
+        requireStoreOwner(id);
         storeService.deleteStore(id);
     }
 
@@ -79,12 +86,14 @@ public class StoreController {
     @PostMapping("/{id}/bind")
     public StoreResponse bind(@PathVariable("id") Long id,
                               @RequestParam("merchantId") Long merchantId) {
+        AccessGuard.requireMerchant(merchantId);
         return storeService.bindMerchant(id, merchantId);
     }
 
     /** 商家菜单：按店查全部商品（含下架） */
     @GetMapping("/{storeId}/menu")
     public List<MenuItemDTO> storeMenu(@PathVariable("storeId") Long storeId) {
+        requireStoreOwner(storeId);
         return productService.listByStore(storeId);
     }
 
@@ -98,6 +107,7 @@ public class StoreController {
     @PostMapping("/{storeId}/category")
     public MenuCategoryDTO createCategory(@PathVariable("storeId") Long storeId,
                                           @RequestBody MenuCategoryRequest request) {
+        requireStoreOwner(storeId);
         return productService.createCategory(storeId, request);
     }
 
@@ -105,6 +115,7 @@ public class StoreController {
     @PostMapping("/{storeId}/menu")
     public MenuItemDTO createMenu(@PathVariable("storeId") Long storeId,
                                  @RequestBody MenuItemRequest request) {
+        requireStoreOwner(storeId);
         return productService.createForStore(storeId, request);
     }
 
@@ -112,6 +123,7 @@ public class StoreController {
     @PostMapping("/{storeId}/menu/image")
     public Map<String, String> uploadMenuImage(@PathVariable("storeId") Long storeId,
                                                @RequestParam("file") MultipartFile file) {
+        requireStoreOwner(storeId);
         return Map.of("url", imageStorage.store(storeId, file));
     }
 
@@ -120,6 +132,16 @@ public class StoreController {
     public MenuItemDTO updateMenu(@PathVariable("storeId") Long storeId,
                                  @PathVariable("productId") Long productId,
                                  @RequestBody MenuItemRequest request) {
+        requireStoreOwner(storeId);
         return productService.updateProduct(storeId, productId, request);
+    }
+
+    private void requireStoreOwner(Long storeId) {
+        Long merchantId = AccessGuard.currentMerchantId();
+        boolean ownsStore = storeService.listByMerchant(merchantId).stream()
+                .anyMatch(store -> storeId.equals(store.getStoreId()));
+        if (!ownsStore) {
+            throw new com.coffee.common.core.exception.ServiceException(403, "无权操作其他商家的店铺");
+        }
     }
 }

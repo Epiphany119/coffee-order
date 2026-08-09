@@ -36,6 +36,15 @@ public interface MembershipService {
     /** 用户卡券包（未使用在前） */
     List<VoucherDTO> listVouchers(Long userId);
 
+    /** 校验指定卡券归属、有效期和门槛；不改变卡券状态。 */
+    VoucherDTO validateVoucher(Long userId, String voucherNo, double amount);
+
+    /** 原子核销卡券；仅未使用券可核销。 */
+    void consumeVoucher(Long userId, String voucherNo);
+
+    /** 订单取消时返还此前核销的卡券。 */
+    void restoreVoucher(Long userId, String voucherNo);
+
     /**
      * 消费积分入账：订单完成时按实付金额加分（实付 1 元 = 1 分 × 等级倍率）
      * 倍率：REGULAR ×1.0 / VIP ×1.1 / SVIP ×1.2

@@ -33,4 +33,6 @@ public class MenuItemPO {
     private String imageUrl;
     private String temperature;
     private Boolean available;
+    /** 凑单标记：1=凑单推荐品（配料/小料/小饮品/试吃品，供购物袋凑单弹窗推荐） */
+    private Integer topup;
 }

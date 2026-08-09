@@ -14,4 +14,8 @@ public interface VoucherRepository {
 
     /** 批量发放（新增） */
     void saveAll(List<UserVoucher> vouchers);
+
+    UserVoucher findByUserIdAndVoucherNo(Long userId, String voucherNo);
+
+    boolean changeStatus(Long userId, String voucherNo, int expectedStatus, int targetStatus);
 }

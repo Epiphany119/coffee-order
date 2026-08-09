@@ -1,0 +1,35 @@
+server:
+  port: ${GATEWAY_PORT:8090}
+
+spring:
+  application:
+    name: coffee-gateway
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+    sentinel:
+      eager: true
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:}
+      scg:
+        fallback:
+          mode: response
+          response-status: 429
+          response-body: '{"code":429,"message":"当前点单人数较多，请稍后再试"}'
+    gateway:
+      routes:
+        - id: coffee-web-local
+          uri: ${COFFEE_WEB_URL:http://127.0.0.1:8088}
+          predicates:
+            - Path=/api/**,/actuator/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    health:
+      probes:
+        enabled: true

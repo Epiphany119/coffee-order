@@ -82,6 +82,13 @@ public class MenuItemRepositoryImpl implements MenuItemRepository {
                 .collect(Collectors.toList());
     }
 
+    @Override
+    public List<MenuItem> findTopupByStoreAvailable(Long storeId, double maxPrice) {
+        return productMapper.selectTopupByStoreAvailable(storeId, maxPrice).stream()
+                .map(this::toDomain)
+                .collect(Collectors.toList());
+    }
+
     private MenuItem toDomain(MenuItemPO po) {
         MenuItem product = new MenuItem();
         product.setId(po.getId());
@@ -98,6 +105,7 @@ public class MenuItemRepositoryImpl implements MenuItemRepository {
         product.setImageUrl(po.getImageUrl());
         product.setTemperature(po.getTemperature());
         product.setAvailable(po.getAvailable());
+        product.setTopup(po.getTopup());
         return product;
     }
 
@@ -117,6 +125,7 @@ public class MenuItemRepositoryImpl implements MenuItemRepository {
         po.setImageUrl(product.getImageUrl());
         po.setTemperature(product.getTemperature());
         po.setAvailable(product.getAvailable());
+        po.setTopup(product.getTopup());
         return po;
     }
 }

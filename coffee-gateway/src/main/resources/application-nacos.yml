@@ -1,0 +1,22 @@
+spring:
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${COFFEE_NACOS_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        group: FIKA_GROUP
+    gateway:
+      routes:
+        - id: coffee-web
+          uri: lb://coffee-web
+          predicates:
+            - Path=/api/**,/actuator/**
+        - id: coffee-marketing-service
+          uri: lb://coffee-marketing-service
+          predicates:
+            - Path=/internal/flash-sales/**
+        - id: coffee-order-service
+          uri: lb://coffee-order-service
+          predicates:
+            - Path=/internal/orders/**

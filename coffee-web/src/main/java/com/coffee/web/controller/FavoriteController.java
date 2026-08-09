@@ -2,6 +2,7 @@ package com.coffee.web.controller;
 
 import com.coffee.module.menu.api.FavoriteService;
 import com.coffee.module.menu.api.dto.MenuItemDTO;
+import com.coffee.web.security.AccessGuard;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -24,6 +25,7 @@ public class FavoriteController {
     @GetMapping
     public List<MenuItemDTO> getFavorites(@RequestParam(value = "userId", required = false) Long userId,
                                          @RequestParam(value = "guestId", required = false) String guestId) {
+        assertOwner(userId, guestId);
         return favoriteService.getFavorites(userId, guestId);
     }
 
@@ -32,6 +34,7 @@ public class FavoriteController {
     public Map<String, Object> addFavorite(@RequestBody Map<String, Object> body) {
         Long userId = body.get("userId") == null ? null : Long.valueOf(body.get("userId").toString());
         String guestId = body.get("guestId") == null ? null : body.get("guestId").toString();
+        assertOwner(userId, guestId);
         String productCode = body.get("productCode").toString();
         favoriteService.addFavorite(userId, guestId, productCode);
         return Map.of("success", true, "message", "已添加到收藏");
@@ -42,6 +45,7 @@ public class FavoriteController {
     public Map<String, Object> removeFavorite(@RequestParam(value = "userId", required = false) Long userId,
                                               @RequestParam(value = "guestId", required = false) String guestId,
                                               @RequestParam("productCode") String productCode) {
+        assertOwner(userId, guestId);
         favoriteService.removeFavorite(userId, guestId, productCode);
         return Map.of("success", true, "message", "已取消收藏");
     }
@@ -51,7 +55,14 @@ public class FavoriteController {
     public Map<String, Object> merge(@RequestBody Map<String, Object> body) {
         Long userId = Long.valueOf(body.get("userId").toString());
         String guestId = body.get("guestId").toString();
+        AccessGuard.requireUser(userId);
         favoriteService.mergeGuestToUser(userId, guestId);
         return Map.of("success", true, "message", "收藏已合并");
+    }
+
+    private void assertOwner(Long userId, String guestId) {
+        if (userId != null) AccessGuard.requireUser(userId);
+        else if (guestId != null && !guestId.isBlank()) AccessGuard.requireGuest(guestId);
+        else throw new com.coffee.common.core.exception.ServiceException(400, "缺少用户身份");
     }
 }

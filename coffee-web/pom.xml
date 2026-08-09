@@ -19,8 +19,32 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.coffee</groupId>
             <artifactId>coffee-module-order-biz</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.coffee</groupId>
+            <artifactId>coffee-module-inventory-biz</artifactId>
         </dependency>
         <dependency>
             <groupId>com.coffee</groupId>
@@ -40,11 +64,27 @@
         </dependency>
         <dependency>
             <groupId>com.coffee</groupId>
+            <artifactId>coffee-module-marketing-biz</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.coffee</groupId>
             <artifactId>coffee-module-seat-biz</artifactId>
         </dependency>
         <dependency>
             <groupId>com.coffee</groupId>
             <artifactId>coffee-module-store-biz</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.coffee</groupId>
+            <artifactId>coffee-module-after-sales-biz</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.coffee</groupId>
+            <artifactId>coffee-module-payment-biz</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.coffee</groupId>
+            <artifactId>coffee-module-location-biz</artifactId>
         </dependency>
         <dependency>
             <groupId>com.mysql</groupId>
@@ -54,6 +94,11 @@
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

@@ -38,6 +38,13 @@ public interface MenuService {
     List<MenuItemDTO> listByStore(Long storeId);
 
     /**
+     * 凑单推荐：该店可用凑单品（topup=1 且上架），最低可买价 ≤ maxPrice，按最低价升序
+     *
+     * @param maxPrice 还差金额（购物袋金额距最近满减门槛的差额），仅推价格不超过它的凑单品
+     */
+    List<MenuItemDTO> listTopupProducts(Long storeId, double maxPrice);
+
+    /**
      * 店铺可见类目：共享类目 + 该店自定义类目（仅本店可见）
      */
     List<MenuCategoryDTO> listCategories(Long storeId);

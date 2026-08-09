@@ -29,7 +29,7 @@ public class OrderDomainService {
         order.setOriginalPrice(originalPrice);
         order.setFinalPrice(finalPrice);
         order.setCategoryCode(categoryCode);
-        order.setStatus(Order.OrderStatus.PENDING);
+        order.setStatus(Order.OrderStatus.UNPAID);
         order.setCreatedAt(LocalDateTime.now());
         order.setEstimatedReadyTime(order.getCreatedAt().plusMinutes(DEFAULT_PREPARE_MINUTES));
         return order;
@@ -44,7 +44,7 @@ public class OrderDomainService {
         order.setOriginalPrice(originalPrice);
         order.setFinalPrice(finalPrice);
         order.setTotalCups(totalCups);
-        order.setStatus(Order.OrderStatus.PENDING);
+        order.setStatus(Order.OrderStatus.UNPAID);
         order.setCreatedAt(LocalDateTime.now());
         order.setEstimatedReadyTime(order.getCreatedAt().plusMinutes(DEFAULT_PREPARE_MINUTES));
         return order;
@@ -52,6 +52,8 @@ public class OrderDomainService {
 
     public Order.OrderStatus calculateNextStatus(String currentStatus, String action) {
         return switch (currentStatus) {
+            // 待支付订单：支付成功 → PENDING（支付模块 markPaid 处理），用户可取消
+            case "UNPAID" -> action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.UNPAID;
             case "PENDING" -> action.equals("start") ? Order.OrderStatus.PREPARING :
                              action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.PENDING;
             case "PREPARING" -> action.equals("complete") ? Order.OrderStatus.COMPLETED :

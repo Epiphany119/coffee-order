@@ -3,12 +3,37 @@ server:
 
 spring:
   application:
-    name: coffee-order-system
-  datasource:
-    url: jdbc:mysql://localhost:3306/coffee_order_pro?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: epiphany
-    password: 123456
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    name: coffee-web
+  profiles:
+    default: dev
+
+management:
+  tracing:
+    sampling:
+      probability: ${COFFEE_TRACE_SAMPLE_PROBABILITY:1.0}
+  health:
+    redis:
+      # 默认使用本地缓存，不启动 Redis 时无需产生连接失败告警。
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+  info:
+    env:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+info:
+  app:
+    name: FIKA coffee retail platform
+    architecture: modular-monolith
+    java: 17
 
 mybatis-plus:
   configuration:
@@ -19,20 +44,13 @@ mybatis-plus:
     db-config:
       id-type: auto
 
-# 座位模块配置
+# 仅包含与环境无关的业务配置；数据库、中间件、密钥等均见 application-dev/prod.yml。
 coffee:
-  seat:
-    # 二维码内容基础地址：必须填手机能访问到的地址！
-    # 手机扫码会打开这个地址 —— localhost 是手机自己，永远打不开。
-    # 开发环境填电脑局域网 IP（换 WiFi 后 IP 会变，需要同步改）；
-    # 生产环境填部署域名。
-    qr-base-url: http://192.168.31.42:5173
-    # 店名（座位编号前缀）
-    store-name: 静安店
-    # 分配后未落座的超时释放时长（分钟）
-    assign-timeout-minutes: 15
+  outbox:
+    dispatch-interval-ms: 3000
 
 logging:
+  pattern:
+    level: "%5p [trace=%X{traceId:-} span=%X{spanId:-}]"
   level:
-    # 默认 INFO：启动只输出关键日志；需要看 SQL 时临时改为 DEBUG
     com.coffee: INFO

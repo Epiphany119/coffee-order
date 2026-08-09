@@ -9,6 +9,11 @@ import com.coffee.module.order.api.dto.OrderResponse;
 import com.coffee.module.member.api.MemberService;
 import com.coffee.module.member.api.dto.MemberDTO;
 import com.coffee.module.member.api.dto.MemberLevelDTO;
+import com.coffee.module.payment.api.PaymentService;
+import com.coffee.module.payment.api.dto.PaymentResponse;
+import com.coffee.module.store.api.StoreService;
+import com.coffee.web.security.AccessGuard;
+import com.coffee.web.idempotency.OrderIdempotencyService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -22,10 +27,17 @@ public class OrderController {
 
     private final OrderService orderService;
     private final MemberService memberService;
+    private final PaymentService paymentService;
+    private final StoreService storeService;
+    private final OrderIdempotencyService orderIdempotencyService;
 
-    public OrderController(OrderService orderService, MemberService memberService) {
+    public OrderController(OrderService orderService, MemberService memberService, PaymentService paymentService,
+                           StoreService storeService, OrderIdempotencyService orderIdempotencyService) {
         this.orderService = orderService;
         this.memberService = memberService;
+        this.paymentService = paymentService;
+        this.storeService = storeService;
+        this.orderIdempotencyService = orderIdempotencyService;
     }
 
     @GetMapping("/menu")
@@ -34,27 +46,51 @@ public class OrderController {
     }
 
     @PostMapping("/order")
-    public Result<OrderResponse> createOrder(@RequestBody CreateOrderCommand command) {
-        return Result.success(orderService.createOrder(command));
+    public Result<OrderResponse> createOrder(
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody CreateOrderCommand command) {
+        assertOrderIdentity(command.getUserId(), command.getGuestId());
+        OrderResponse response = orderIdempotencyService.execute(idempotencyKey, command.getUserId(), command.getGuestId(), command, () -> {
+            OrderResponse created = orderService.createOrder(command);
+            // 下单即创建支付单，响应与支付单号一起缓存为幂等结果。
+            try {
+                PaymentResponse payment = paymentService.createForOrder(created.getOrderId());
+                created.setPaymentNo(payment.getPaymentNo());
+            } catch (Exception e) {
+                // 支付单创建失败不阻塞下单：订单保持 UNPAID，前端可经 POST /api/pay/create 补建
+            }
+            return created;
+        });
+        return Result.success(response);
     }
 
     @PostMapping("/order/user/{id}/action")
-    public Result<OrderResponse> updateUserOrder(@PathVariable Long id, @RequestParam String action) {
+    public Result<OrderResponse> updateUserOrder(@PathVariable Long id, @RequestParam String action,
+                                                 @RequestParam Long userId) {
+        AccessGuard.requireUser(userId);
+        if (!"cancel".equalsIgnoreCase(action)) throw new ServiceException(400, "用户仅可取消待支付订单");
+        if (!ownsOrder(id, userId, null)) throw new ServiceException(404, "订单不存在");
         return Result.success(orderService.updateOrderStatus(id, action, true));
     }
 
     @PostMapping("/order/guest/{id}/action")
-    public Result<OrderResponse> updateGuestOrder(@PathVariable Long id, @RequestParam String action) {
+    public Result<OrderResponse> updateGuestOrder(@PathVariable Long id, @RequestParam String action,
+                                                  @RequestParam String guestId) {
+        AccessGuard.requireGuest(guestId);
+        if (!"cancel".equalsIgnoreCase(action)) throw new ServiceException(400, "游客仅可取消待支付订单");
+        if (!ownsOrder(id, null, guestId)) throw new ServiceException(404, "订单不存在");
         return Result.success(orderService.updateOrderStatus(id, action, false));
     }
 
     @GetMapping("/orders/user/{userId}")
     public Result<List<Map<String, Object>>> getUserOrders(@PathVariable Long userId) {
+        AccessGuard.requireUser(userId);
         return Result.success(orderService.getUserOrders(userId));
     }
 
     @GetMapping("/orders/guest/{guestId}")
     public Result<List<Map<String, Object>>> getGuestOrders(@PathVariable String guestId) {
+        AccessGuard.requireGuest(guestId);
         return Result.success(orderService.getGuestOrders(guestId));
     }
 
@@ -63,9 +99,10 @@ public class OrderController {
             @RequestParam(value = "storeId", required = false) Long storeId,
             @RequestParam(value = "status", required = false) String status) {
         if (storeId != null) {
+            requireStoreOwner(storeId);
             return Result.success(orderService.getStoreOrders(storeId, status));
         }
-        return Result.success(orderService.getAllOrders());
+        throw new ServiceException(400, "请指定店铺");
     }
 
     /** 商家操作订单状态（接单 start / 完成 complete / 取消 cancel），校验订单归属店铺 */
@@ -73,11 +110,13 @@ public class OrderController {
     public Result<OrderResponse> merchantOrderAction(@PathVariable Long id,
                                                      @RequestParam String action,
                                                      @RequestParam Long storeId) {
+        requireStoreOwner(storeId);
         return Result.success(orderService.updateStoreOrderStatus(id, action, storeId));
     }
 
     @GetMapping("/member/{userId}/dashboard")
     public Result<Map<String, Object>> getMemberDashboard(@PathVariable Long userId) {
+        AccessGuard.requireUser(userId);
         MemberDTO member = null;
         try {
             member = memberService.getMember(userId);
@@ -117,5 +156,23 @@ public class OrderController {
         coupon.put("discount", discount);
         coupon.put("description", description);
         return coupon;
+    }
+
+    private void assertOrderIdentity(Long userId, String guestId) {
+        if (userId != null) AccessGuard.requireUser(userId);
+        else if (guestId != null && !guestId.isBlank()) AccessGuard.requireGuest(guestId);
+        else throw new ServiceException(400, "缺少下单身份");
+    }
+
+    private boolean ownsOrder(Long orderId, Long userId, String guestId) {
+        List<Map<String, Object>> orders = userId != null ? orderService.getUserOrders(userId) : orderService.getGuestOrders(guestId);
+        return orders.stream().anyMatch(order -> Objects.equals(Long.valueOf(String.valueOf(order.get("id"))), orderId));
+    }
+
+    private void requireStoreOwner(Long storeId) {
+        Long merchantId = AccessGuard.currentMerchantId();
+        boolean ownsStore = storeService.listByMerchant(merchantId).stream()
+                .anyMatch(store -> storeId.equals(store.getStoreId()));
+        if (!ownsStore) throw new ServiceException(403, "无权操作其他商家的订单");
     }
 }

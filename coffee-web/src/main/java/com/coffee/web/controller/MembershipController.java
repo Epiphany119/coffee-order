@@ -2,6 +2,7 @@ package com.coffee.web.controller;
 
 import com.coffee.module.membership.api.MembershipService;
 import com.coffee.module.membership.api.dto.*;
+import com.coffee.web.security.AccessGuard;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -23,6 +24,7 @@ public class MembershipController {
     /** 查询会员卡（未开卡返回 null） */
     @GetMapping("/card")
     public MemberCardDTO getCard(@RequestParam Long userId) {
+        AccessGuard.requireUser(userId);
         return membershipService.getCard(userId);
     }
 
@@ -30,12 +32,14 @@ public class MembershipController {
     @PostMapping("/card/init")
     public MemberCardDTO initCard(@RequestBody Map<String, Object> body) {
         Long userId = Long.valueOf(body.get("userId").toString());
+        AccessGuard.requireUser(userId);
         return membershipService.initCard(userId);
     }
 
     /** 会员权益列表（等级折扣 + 权益券） */
     @GetMapping("/benefits")
     public List<BenefitDTO> listBenefits(@RequestParam Long userId) {
+        AccessGuard.requireUser(userId);
         return membershipService.listBenefits(userId);
     }
 
@@ -55,6 +59,7 @@ public class MembershipController {
     @PostMapping("/points/redeem")
     public RedeemResultDTO redeemPoints(@RequestBody Map<String, Object> body) {
         Long userId = Long.valueOf(body.get("userId").toString());
+        AccessGuard.requireUser(userId);
         String itemCode = body.get("itemCode").toString();
         return membershipService.redeemPoints(userId, itemCode);
     }
@@ -62,6 +67,7 @@ public class MembershipController {
     /** 用户卡券包 */
     @GetMapping("/vouchers")
     public List<VoucherDTO> listVouchers(@RequestParam Long userId) {
+        AccessGuard.requireUser(userId);
         return membershipService.listVouchers(userId);
     }
 }

@@ -29,4 +29,6 @@ public class MenuItemRequest {
     private String temperature;
     /** 上架状态（更新时可用） */
     private Boolean available;
+    /** 凑单标记：1=标记为凑单推荐品（商家更新时可用） */
+    private Integer topup;
 }

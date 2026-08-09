@@ -43,9 +43,17 @@ public interface OrderService {
     java.util.List<java.util.Map<String, Object>> getStoreOrders(Long storeId, String status);
 
     /**
-     * 获取店铺统计（dashboard：今日营业额/订单数/待处理/近7天）
+     * 获取店铺统计（dashboard：今日营业额/订单数/待处理）
      */
     java.util.Map<String, Object> getStoreStats(Long storeId);
+
+    /**
+     * 获取店铺营业额柱状图序列（range：7d/14d/28d 按日、12w 按周；day=YYYYMMDD，缺日/周补 0）
+     */
+    java.util.List<java.util.Map<String, Object>> getSalesStats(Long storeId, String range);
+
+    /** 运营大屏热销榜（近 7 天已完成订单） */
+    java.util.List<java.util.Map<String, Object>> getHotProducts(Long storeId);
 
     /**
      * 获取菜单信息（按店铺）

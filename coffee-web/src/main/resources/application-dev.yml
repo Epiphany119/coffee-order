@@ -1,0 +1,41 @@
+# 本机开发环境：无需启动 Nacos、Redis、RocketMQ 即可运行。
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/coffee_order_pro?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: epiphany
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  cache:
+    type: simple
+  cloud:
+    service-registry:
+      auto-registration:
+        enabled: false
+    nacos:
+      discovery:
+        enabled: false
+        register-enabled: false
+
+management:
+  health:
+    redis:
+      enabled: false
+
+coffee:
+  auth:
+    token-secret: change-this-development-secret-before-production-2026
+    token-expires-seconds: 28800
+  payment:
+    callback-secret: change-this-callback-secret-before-production-2026
+  seat:
+    qr-base-url: http://192.168.31.42:5173
+    store-name: 静安店
+    assign-timeout-minutes: 15
+  inventory:
+    redis-cache-enabled: false
+  membership:
+    async-enabled: false
+  flash-sale:
+    # 本地仍由 MySQL 条件更新兜底；不开 Redis 也可联调。
+    redis-enabled: false
+    claim-expire-scan-ms: 30000

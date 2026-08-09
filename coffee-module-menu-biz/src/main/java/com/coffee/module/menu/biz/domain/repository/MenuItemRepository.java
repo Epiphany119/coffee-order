@@ -16,4 +16,6 @@ public interface MenuItemRepository {
     MenuItem update(MenuItem product);
     List<MenuItem> findByCategory(String categoryCode);
     List<MenuItem> findByCodeIn(List<String> codes);
+    /** 按店查可用凑单品（topup=1，最低可买价 ≤ maxPrice，按最低价升序） */
+    List<MenuItem> findTopupByStoreAvailable(Long storeId, double maxPrice);
 }

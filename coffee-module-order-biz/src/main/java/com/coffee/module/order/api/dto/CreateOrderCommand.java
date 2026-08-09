@@ -23,6 +23,8 @@ public class CreateOrderCommand {
     private List<String> condiments;
     private List<CartItemCommand> items;
     private String couponCode;
+    /** 秒杀资格码：仅限单件、活动指定商品，不可和券叠加。 */
+    private String flashSaleClaimNo;
 
     public boolean isBatch() {
         return items != null && !items.isEmpty();

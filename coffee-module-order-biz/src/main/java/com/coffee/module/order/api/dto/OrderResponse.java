@@ -10,11 +10,15 @@ import java.util.List;
 @Data
 public class OrderResponse {
     private Long orderId;
+    /** 详细订单号：YYMMDD-商家6位-类目3位-店铺当日顺序3位（如 260806-687257-007-001） */
+    private String orderNo;
     private String orderName;
     private Double originalPrice;
     private Double finalPrice;
     private String pricingStrategy;
     private String status;
+    /** 支付单号（下单时由支付模块创建，供前端拉起支付） */
+    private String paymentNo;
     private String message;
     private Double totalSpent;
     private String memberLevel;
@@ -37,6 +41,8 @@ public class OrderResponse {
         private String condiments;
         private Integer quantity;
         private Double unitPrice;
+        /** 单件原价（折前，划线展示用） */
+        private Double originalUnitPrice;
         private Double subtotal;
         private String estimatedReadyTime;
     }

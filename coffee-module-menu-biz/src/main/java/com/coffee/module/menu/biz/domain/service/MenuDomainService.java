@@ -11,6 +11,9 @@ import com.coffee.module.menu.api.dto.MenuItemRequest;
 import com.coffee.module.menu.biz.infra.persistence.MenuCategoryPO;
 import com.coffee.common.core.exception.ServiceException;
 import org.springframework.stereotype.Service;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 
 import java.util.List;
 
@@ -30,6 +33,7 @@ public class MenuDomainService implements MenuService {
     }
 
     @Override
+    @Cacheable(cacheNames = "menu:product", key = "#p0 + ':' + #p1", unless = "#result == null")
     public MenuItemDTO getProductByCode(Long storeId, String code) {
         MenuItem product = productRepository.findByCodeAndStore(storeId, code);
         if (product == null) {
@@ -39,6 +43,7 @@ public class MenuDomainService implements MenuService {
     }
 
     @Override
+    @Cacheable(cacheNames = "menu:available", key = "#p0 == null ? 'default' : #p0")
     public List<MenuItemDTO> getAllProducts(Long storeId) {
         return productRepository.findByStoreAvailable(storeId).stream()
                 .map(this::toDTO)
@@ -46,6 +51,7 @@ public class MenuDomainService implements MenuService {
     }
 
     @Override
+    @Cacheable(cacheNames = "menu:merchant", key = "#p0")
     public List<MenuItemDTO> listByStore(Long storeId) {
         return productRepository.findByStore(storeId).stream()
                 .map(this::toDTO)
@@ -53,6 +59,15 @@ public class MenuDomainService implements MenuService {
     }
 
     @Override
+    @Cacheable(cacheNames = "menu:topup", key = "#p0 + ':' + #p1")
+    public List<MenuItemDTO> listTopupProducts(Long storeId, double maxPrice) {
+        return productRepository.findTopupByStoreAvailable(storeId, maxPrice).stream()
+                .map(this::toDTO)
+                .toList();
+    }
+
+    @Override
+    @Cacheable(cacheNames = "menu:categories", key = "#p0 == null ? 'default' : #p0")
     public List<MenuCategoryDTO> listCategories(Long storeId) {
         return categoryRepository.listByStore(storeId).stream()
                 .map(this::toCategoryDTO)
@@ -60,6 +75,7 @@ public class MenuDomainService implements MenuService {
     }
 
     @Override
+    @CacheEvict(cacheNames = "menu:categories", allEntries = true)
     public MenuCategoryDTO createCategory(Long storeId, MenuCategoryRequest request) {
         if (request.getName() == null || request.getName().isBlank()) {
             throw new ServiceException(400, "类目名称不能为空");
@@ -77,6 +93,12 @@ public class MenuDomainService implements MenuService {
     }
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(cacheNames = "menu:available", allEntries = true),
+            @CacheEvict(cacheNames = "menu:merchant", allEntries = true),
+            @CacheEvict(cacheNames = "menu:product", allEntries = true),
+            @CacheEvict(cacheNames = "menu:topup", allEntries = true)
+    })
     public MenuItemDTO createForStore(Long storeId, MenuItemRequest request) {
         if (request.getCode() == null || request.getCode().isBlank()) {
             throw new ServiceException(400, "商品编码不能为空");
@@ -101,10 +123,17 @@ public class MenuDomainService implements MenuService {
         product.setImageUrl(request.getImageUrl());
         product.setTemperature(request.getTemperature());
         product.setAvailable(request.getAvailable() != null ? request.getAvailable() : true);
+        product.setTopup(request.getTopup() != null ? request.getTopup() : 0);
         return toDTO(productRepository.save(product));
     }
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(cacheNames = "menu:available", allEntries = true),
+            @CacheEvict(cacheNames = "menu:merchant", allEntries = true),
+            @CacheEvict(cacheNames = "menu:product", allEntries = true),
+            @CacheEvict(cacheNames = "menu:topup", allEntries = true)
+    })
     public MenuItemDTO updateProduct(Long storeId, Long productId, MenuItemRequest request) {
         MenuItem product = productRepository.findById(productId);
         if (product == null) {
@@ -126,6 +155,7 @@ public class MenuDomainService implements MenuService {
             copy.setImageUrl(product.getImageUrl());
             copy.setTemperature(product.getTemperature());
             copy.setAvailable(product.getAvailable());
+            copy.setTopup(product.getTopup());
             product = productRepository.save(copy);
         } else if (!storeId.equals(product.getStoreId())) {
             throw new ServiceException(404, "商品不存在: " + productId);
@@ -175,6 +205,9 @@ public class MenuDomainService implements MenuService {
         }
         if (request.getAvailable() != null) {
             product.setAvailable(request.getAvailable());
+        }
+        if (request.getTopup() != null) {
+            product.setTopup(request.getTopup());
         }
         return toDTO(productRepository.update(product));
     }
@@ -313,6 +346,7 @@ public class MenuDomainService implements MenuService {
         dto.setImageUrl(product.getImageUrl());
         dto.setTemperature(product.getTemperature());
         dto.setAvailable(product.getAvailable());
+        dto.setTopup(product.getTopup());
         return dto;
     }
 }

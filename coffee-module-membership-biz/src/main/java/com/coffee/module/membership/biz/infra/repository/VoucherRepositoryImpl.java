@@ -42,6 +42,18 @@ public class VoucherRepositoryImpl implements VoucherRepository {
         }
     }
 
+    @Override
+    public UserVoucher findByUserIdAndVoucherNo(Long userId, String voucherNo) {
+        UserVoucherPO po = userVoucherMapper.selectOne(new LambdaQueryWrapper<UserVoucherPO>()
+                .eq(UserVoucherPO::getUserId, userId).eq(UserVoucherPO::getVoucherNo, voucherNo).last("LIMIT 1"));
+        return po == null ? null : toDomain(po);
+    }
+
+    @Override
+    public boolean changeStatus(Long userId, String voucherNo, int expectedStatus, int targetStatus) {
+        return userVoucherMapper.updateStatus(userId, voucherNo, expectedStatus, targetStatus) == 1;
+    }
+
     private UserVoucher toDomain(UserVoucherPO po) {
         UserVoucher v = new UserVoucher();
         v.setId(po.getId());

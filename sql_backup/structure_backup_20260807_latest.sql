@@ -1,3 +1,8 @@
+-- MySQL dump 10.13  Distrib 8.0.43, for macos15 (arm64)
+--
+-- Host: localhost    Database: coffee_order_pro
+-- ------------------------------------------------------
+-- Server version	8.0.43
 
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
@@ -9,6 +14,34 @@
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+
+--
+-- Table structure for table `after_sale`
+--
+
+DROP TABLE IF EXISTS `after_sale`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `after_sale` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `order_id` bigint NOT NULL COMMENT '关联订单 id（user_order.id）',
+  `user_id` bigint NOT NULL COMMENT '售后用户（coffee_user.id）',
+  `type` varchar(20) NOT NULL COMMENT '售后类型：REFUND 退款/REMAKE 重做/EXCHANGE 换货/OTHER 其他',
+  `reason` varchar(500) NOT NULL COMMENT '问题说明',
+  `status` varchar(20) NOT NULL DEFAULT 'PENDING' COMMENT '状态：PENDING 待处理/PROCESSING 处理中/RESOLVED 已解决/REJECTED 已拒绝/CLOSED 已关闭',
+  `handler_note` varchar(500) DEFAULT NULL COMMENT '商家处理备注',
+  `created_at` datetime NOT NULL,
+  `updated_at` datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_after_sale_user` (`user_id`),
+  KEY `idx_after_sale_order` (`order_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='售后单';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `cart`
+--
+
 DROP TABLE IF EXISTS `cart`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -23,6 +56,11 @@ CREATE TABLE `cart` (
   CONSTRAINT `fk_cart_user` FOREIGN KEY (`user_id`) REFERENCES `coffee_user` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='购物车';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `cart_item`
+--
+
 DROP TABLE IF EXISTS `cart_item`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -44,6 +82,11 @@ CREATE TABLE `cart_item` (
   CONSTRAINT `fk_cart_item_product` FOREIGN KEY (`product_id`) REFERENCES `menu_item` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='购物车明细';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `coffee_beverage`
+--
+
 DROP TABLE IF EXISTS `coffee_beverage`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -56,6 +99,11 @@ CREATE TABLE `coffee_beverage` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='咖啡饮品表(历史遗留)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `coffee_user`
+--
+
 DROP TABLE IF EXISTS `coffee_user`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -77,8 +125,13 @@ CREATE TABLE `coffee_user` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `username` (`username`)
-) ENGINE=InnoDB AUTO_INCREMENT=14 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
+) ENGINE=InnoDB AUTO_INCREMENT=16 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `coupon`
+--
+
 DROP TABLE IF EXISTS `coupon`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -96,6 +149,11 @@ CREATE TABLE `coupon` (
   UNIQUE KEY `code` (`code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='优惠券';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `delivery_info`
+--
+
 DROP TABLE IF EXISTS `delivery_info`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -113,6 +171,33 @@ CREATE TABLE `delivery_info` (
   CONSTRAINT `fk_delivery_user` FOREIGN KEY (`user_id`) REFERENCES `coffee_user` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='配送信息';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `feedback`
+--
+
+DROP TABLE IF EXISTS `feedback`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `feedback` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `order_id` bigint NOT NULL COMMENT '关联订单 id（user_order.id）',
+  `product_id` bigint DEFAULT NULL COMMENT '反馈归属商品 id（订单第一个明细的商品）',
+  `user_id` bigint NOT NULL COMMENT '反馈用户（coffee_user.id）',
+  `content` varchar(500) NOT NULL COMMENT '建议内容',
+  `rating` tinyint DEFAULT NULL COMMENT '评分 1-5（可选）',
+  `created_at` datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_feedback_user` (`user_id`),
+  KEY `idx_feedback_order` (`order_id`),
+  KEY `idx_feedback_product` (`product_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单反馈';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `guest`
+--
+
 DROP TABLE IF EXISTS `guest`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -122,8 +207,13 @@ CREATE TABLE `guest` (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_guest_id` (`guest_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='游客会话表';
+) ENGINE=InnoDB AUTO_INCREMENT=13 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='游客会话表';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `guest_order`
+--
+
 DROP TABLE IF EXISTS `guest_order`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -143,6 +233,11 @@ CREATE TABLE `guest_order` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='游客订单';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `member_card`
+--
+
 DROP TABLE IF EXISTS `member_card`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -162,6 +257,11 @@ CREATE TABLE `member_card` (
   UNIQUE KEY `uk_card_no` (`card_no`)
 ) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='会员卡';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `member_points`
+--
+
 DROP TABLE IF EXISTS `member_points`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -176,6 +276,11 @@ CREATE TABLE `member_points` (
   CONSTRAINT `fk_points_user` FOREIGN KEY (`user_id`) REFERENCES `coffee_user` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会员积分表(历史遗留)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `menu_category`
+--
+
 DROP TABLE IF EXISTS `menu_category`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -190,6 +295,11 @@ CREATE TABLE `menu_category` (
   UNIQUE KEY `code` (`code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品分类';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `menu_item`
+--
+
 DROP TABLE IF EXISTS `menu_item`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -204,6 +314,7 @@ CREATE TABLE `menu_item` (
   `description` varchar(200) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '商品描述',
   `image_url` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '图片URL',
   `available` tinyint(1) NOT NULL DEFAULT '1' COMMENT '是否在售',
+  `topup` tinyint NOT NULL DEFAULT '0' COMMENT '凑单标记：1=凑单推荐品（配料/小料/小饮品/试吃品）',
   `temperature` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '温度(热/冰/常温)',
   `price_small` double DEFAULT NULL COMMENT '小份/基础款定价(空=回退base_price)',
   `price_medium` double DEFAULT NULL COMMENT '中份/中等款定价(空=回退base_price)',
@@ -212,8 +323,13 @@ CREATE TABLE `menu_item` (
   KEY `fk_product_category` (`category_id`),
   KEY `idx_product_store` (`store_id`),
   CONSTRAINT `fk_menu_item_category` FOREIGN KEY (`category_id`) REFERENCES `menu_category` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=1079 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品表';
+) ENGINE=InnoDB AUTO_INCREMENT=1088 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品表';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `merchant`
+--
+
 DROP TABLE IF EXISTS `merchant`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -233,6 +349,11 @@ CREATE TABLE `merchant` (
   UNIQUE KEY `uk_merchant_username` (`username`)
 ) ENGINE=InnoDB AUTO_INCREMENT=27 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='商家表';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `order_item`
+--
+
 DROP TABLE IF EXISTS `order_item`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -243,14 +364,20 @@ CREATE TABLE `order_item` (
   `product_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '商品名称',
   `quantity` int NOT NULL DEFAULT '1' COMMENT '数量',
   `unit_price` double NOT NULL COMMENT '单价',
+  `original_unit_price` decimal(10,2) DEFAULT NULL COMMENT '单件原价（折前，划线展示用）',
   `subtotal` double NOT NULL COMMENT '小计',
   PRIMARY KEY (`id`),
   KEY `fk_order_item_order` (`order_id`),
   KEY `fk_order_item_product` (`product_id`),
   CONSTRAINT `fk_order_item_order` FOREIGN KEY (`order_id`) REFERENCES `user_order` (`id`),
   CONSTRAINT `fk_order_item_product` FOREIGN KEY (`product_id`) REFERENCES `menu_item` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单明细';
+) ENGINE=InnoDB AUTO_INCREMENT=23 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单明细';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `password_reset_token`
+--
+
 DROP TABLE IF EXISTS `password_reset_token`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -267,6 +394,37 @@ CREATE TABLE `password_reset_token` (
   KEY `idx_token` (`token`)
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='密码重置令牌';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `payment`
+--
+
+DROP TABLE IF EXISTS `payment`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `payment` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `payment_no` varchar(32) NOT NULL COMMENT '支付单号（唯一）',
+  `order_id` bigint NOT NULL COMMENT '订单id',
+  `user_id` bigint DEFAULT NULL COMMENT '下单用户id（游客单为null）',
+  `channel` varchar(16) NOT NULL DEFAULT 'MOCK' COMMENT '支付渠道 WECHAT/ALIPAY/BANK/MOCK',
+  `amount` decimal(10,2) NOT NULL COMMENT '支付金额',
+  `status` varchar(16) NOT NULL DEFAULT 'PENDING' COMMENT '状态 PENDING/PAID/FAILED/CLOSED/REFUNDED',
+  `transaction_no` varchar(64) DEFAULT NULL COMMENT '渠道交易流水号',
+  `channel_response` text COMMENT '渠道原始响应',
+  `paid_at` datetime DEFAULT NULL COMMENT '支付成功时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_payment_no` (`payment_no`),
+  KEY `idx_order_id` (`order_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='支付单';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `review`
+--
+
 DROP TABLE IF EXISTS `review`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -285,6 +443,11 @@ CREATE TABLE `review` (
   CONSTRAINT `chk_rating` CHECK ((`rating` between 1 and 5))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品评价';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `seat`
+--
+
 DROP TABLE IF EXISTS `seat`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -303,6 +466,11 @@ CREATE TABLE `seat` (
   UNIQUE KEY `uk_seat_store_template` (`store_id`,`template_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=2080 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='座位表';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `seat_template`
+--
+
 DROP TABLE IF EXISTS `seat_template`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -316,6 +484,11 @@ CREATE TABLE `seat_template` (
   UNIQUE KEY `uk_template_seat_no` (`seat_no`)
 ) ENGINE=InnoDB AUTO_INCREMENT=128 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='座位定义模板（99桌，全店共用）';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `store`
+--
+
 DROP TABLE IF EXISTS `store`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -334,6 +507,11 @@ CREATE TABLE `store` (
   UNIQUE KEY `uk_store_code` (`code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='店铺表';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `user_favorite`
+--
+
 DROP TABLE IF EXISTS `user_favorite`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -346,11 +524,17 @@ CREATE TABLE `user_favorite` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=13 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户收藏';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `user_order`
+--
+
 DROP TABLE IF EXISTS `user_order`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `user_order` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `order_no` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '详细订单号 YYMMDD-商家6位-类目3位-店铺当日顺序3位',
   `user_id` bigint DEFAULT NULL COMMENT '登录用户id(游客为空)',
   `guest_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '游客标识',
   `store_id` bigint DEFAULT NULL COMMENT '下单店铺id',
@@ -369,12 +553,18 @@ CREATE TABLE `user_order` (
   `estimated_ready_time` datetime(6) DEFAULT NULL COMMENT '预计可取餐时间',
   `custom_size` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '定制尺寸(如 300ml/120g),仅CUSTOM规格',
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_order_no` (`order_no`),
   KEY `fk_user_order_user` (`user_id`),
   KEY `fk_user_order_delivery` (`delivery_info_id`),
   CONSTRAINT `fk_user_order_delivery` FOREIGN KEY (`delivery_info_id`) REFERENCES `delivery_info` (`id`),
   CONSTRAINT `fk_user_order_user` FOREIGN KEY (`user_id`) REFERENCES `coffee_user` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=38 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户订单';
+) ENGINE=InnoDB AUTO_INCREMENT=59 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户订单';
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `user_voucher`
+--
+
 DROP TABLE IF EXISTS `user_voucher`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -392,7 +582,7 @@ CREATE TABLE `user_voucher` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_voucher_no` (`voucher_no`),
   KEY `idx_user` (`user_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户卡券包';
+) ENGINE=InnoDB AUTO_INCREMENT=16 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户卡券包';
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
@@ -404,3 +594,4 @@ CREATE TABLE `user_voucher` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
+-- Dump completed on 2026-08-07 14:17:14

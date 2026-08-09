@@ -13,6 +13,8 @@ public class AuthResponse {
     private String nickname;
     private Double totalSpent;
     private String memberLevel;
+    /** Bearer 会话令牌；仅注册/登录成功时返回。 */
+    private String accessToken;
 
     public AuthResponse() {}
 
@@ -51,4 +53,6 @@ public class AuthResponse {
     public void setTotalSpent(Double totalSpent) { this.totalSpent = totalSpent; }
     public String getMemberLevel() { return memberLevel; }
     public void setMemberLevel(String memberLevel) { this.memberLevel = memberLevel; }
+    public String getAccessToken() { return accessToken; }
+    public void setAccessToken(String accessToken) { this.accessToken = accessToken; }
 }

@@ -9,6 +9,8 @@ import java.time.LocalDateTime;
 @Data
 public class Order {
     private Long id;
+    /** 详细订单号：YYMMDD-商家6位-类目3位-店铺当日顺序3位（如 260806-687257-007-001） */
+    private String orderNo;
     private Long userId;
     private String guestId;
     /** 下单店铺 id（用户端选店后绑定） */
@@ -33,10 +35,14 @@ public class Order {
     private Double memberDiscount;
     private String couponName;
     private Double couponDiscount;
+    /** 卡券包券码；固定权益券不落库，取消订单时据此返还兑换券。 */
+    private String voucherNo;
     private Integer totalCups;
     private String categoryCode;
-
+    /** 订单明细（order_item，1 订单 N 明细；批量订单一行 = 购物车行级） */
+    private java.util.List<OrderItem> items;
     public enum OrderStatus {
+        UNPAID("待支付"),
         PENDING("待处理"),
         PREPARING("制作中"),
         COMPLETED("已完成"),

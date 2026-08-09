@@ -28,6 +28,17 @@ public class MenuItem {
     private String imageUrl;
     private String temperature;
     private Boolean available;
+    /** 凑单标记：1=凑单推荐品 */
+    private Integer topup;
+
+    /** 凑单展示价：取三档规格价与基础价中的最小值（凑单推荐按最低可买价排序/过滤） */
+    public double getTopupPrice() {
+        double min = getBasePriceAsDouble();
+        for (Double p : new Double[]{priceSmall, priceMedium, priceLarge}) {
+            if (p != null && p < min) min = p;
+        }
+        return min;
+    }
 
     public double getBasePriceAsDouble() {
         return basePrice != null ? basePrice.doubleValue() : 0.0;

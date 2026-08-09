@@ -14,6 +14,8 @@ import java.time.LocalDateTime;
 public class OrderPO {
     @TableId(type = IdType.AUTO)
     private Long id;
+    /** 详细订单号：YYMMDD-商家6位-类目3位-店铺当日顺序3位（唯一） */
+    private String orderNo;
     private Long userId;
     private String guestId;
     /** 下单店铺 id（用户端选店后绑定） */
@@ -29,6 +31,7 @@ public class OrderPO {
     private String condiments;
     private Double originalPrice;
     private Double finalPrice;
+    private String voucherNo;
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime estimatedReadyTime;

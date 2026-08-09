@@ -14,6 +14,8 @@ public class MerchantResponse {
     /** 绑定的店名（入驻后非空） */
     private String storeName;
     private MerchantStatus status;
+    /** Bearer 会话令牌；仅注册/登录成功时返回。 */
+    private String accessToken;
 
     public MerchantResponse() {}
 
@@ -56,4 +58,6 @@ public class MerchantResponse {
     public void setStoreName(String storeName) { this.storeName = storeName; }
     public MerchantStatus getStatus() { return status; }
     public void setStatus(MerchantStatus status) { this.status = status; }
+    public String getAccessToken() { return accessToken; }
+    public void setAccessToken(String accessToken) { this.accessToken = accessToken; }
 }

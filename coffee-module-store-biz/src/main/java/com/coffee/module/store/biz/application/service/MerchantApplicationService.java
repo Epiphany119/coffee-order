@@ -7,6 +7,8 @@ import com.coffee.module.store.api.dto.MerchantLoginRequest;
 import com.coffee.module.store.api.dto.MerchantRegisterRequest;
 import com.coffee.module.store.api.dto.MerchantResponse;
 import com.coffee.module.store.api.dto.MerchantStatus;
+import com.coffee.module.store.api.dto.MerchantProfileUpdateRequest;
+import com.coffee.module.store.api.dto.MerchantPasswordChangeRequest;
 import com.coffee.module.store.api.dto.StoreStatus;
 import com.coffee.module.store.biz.domain.Merchant;
 import com.coffee.module.store.biz.domain.Store;
@@ -179,6 +181,44 @@ public class MerchantApplicationService implements MerchantService {
                 .orElseThrow(() -> new ServiceException(400, "商家不存在"));
         return MerchantResponse.ok(merchant.getId(), merchant.getMerchantNo(),
                 merchant.getNickname(), merchant.getPhone(), merchant.getStatus(), merchant.getStoreName());
+    }
+
+    @Override
+    @Transactional
+    public MerchantResponse updateProfile(Long merchantId, MerchantProfileUpdateRequest request) {
+        Merchant merchant = merchantRepository.findById(merchantId)
+                .orElseThrow(() -> new ServiceException(404, "商家不存在"));
+        String nickname = request == null || request.getNickname() == null ? "" : request.getNickname().trim();
+        String phone = request == null || request.getPhone() == null ? "" : request.getPhone().trim();
+        if (nickname.length() > 50) throw new ServiceException(400, "昵称不能超过 50 个字符");
+        if (phone.length() > 20) throw new ServiceException(400, "联系电话不能超过 20 个字符");
+        merchant.setNickname(nickname.isEmpty() ? null : nickname);
+        merchant.setPhone(phone.isEmpty() ? null : phone);
+        merchantRepository.save(merchant);
+        return MerchantResponse.ok(merchant.getId(), merchant.getMerchantNo(), merchant.getNickname(),
+                merchant.getPhone(), merchant.getStatus(), merchant.getStoreName());
+    }
+
+    @Override
+    @Transactional
+    public void changePassword(Long merchantId, MerchantPasswordChangeRequest request) {
+        if (request == null || request.getOldPassword() == null || request.getNewPassword() == null) {
+            throw new ServiceException(400, "请填写当前密码和新密码");
+        }
+        Merchant merchant = merchantRepository.findById(merchantId)
+                .orElseThrow(() -> new ServiceException(404, "商家不存在"));
+        if (!PasswordEncoder.matches(request.getOldPassword(), merchant.getPasswordHash())) {
+            throw new ServiceException(400, "当前密码不正确");
+        }
+        String next = request.getNewPassword();
+        if (next.length() < 8 || !next.matches(".*[A-Za-z].*") || !next.matches(".*\\d.*")) {
+            throw new ServiceException(400, "新密码至少 8 位，且须包含字母和数字");
+        }
+        if (PasswordEncoder.matches(next, merchant.getPasswordHash())) {
+            throw new ServiceException(400, "新密码不能与当前密码相同");
+        }
+        merchant.setPasswordHash(PasswordEncoder.encode(next));
+        merchantRepository.save(merchant);
     }
 
     /**

@@ -1,0 +1,65 @@
+# 生产环境：不提供敏感信息默认值；所有地址和密钥必须由部署环境注入。
+spring:
+  datasource:
+    url: ${COFFEE_DB_URL}
+    username: ${COFFEE_DB_USERNAME}
+    password: ${COFFEE_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${COFFEE_REDIS_HOST}
+      port: ${COFFEE_REDIS_PORT:6379}
+      password: ${COFFEE_REDIS_PASSWORD:}
+      timeout: 2s
+  cache:
+    type: redis
+    redis:
+      time-to-live: 10m
+      cache-null-values: false
+      key-prefix: "fika:"
+  cloud:
+    service-registry:
+      auto-registration:
+        enabled: true
+    nacos:
+      discovery:
+        enabled: true
+        register-enabled: true
+        server-addr: ${NACOS_SERVER_ADDR}
+        namespace: ${NACOS_NAMESPACE:}
+        group: FIKA_GROUP
+        service: coffee-web
+
+rocketmq:
+  name-server: ${COFFEE_ROCKETMQ_NAMESRV}
+  producer:
+    group: fika-order-producer
+    send-message-timeout: 3000
+
+management:
+  health:
+    redis:
+      enabled: true
+  otlp:
+    tracing:
+      endpoint: ${COFFEE_OTLP_TRACING_ENDPOINT}
+
+coffee:
+  auth:
+    token-secret: ${COFFEE_AUTH_TOKEN_SECRET}
+    token-expires-seconds: ${COFFEE_AUTH_TOKEN_EXPIRES_SECONDS:28800}
+  payment:
+    callback-secret: ${COFFEE_PAYMENT_CALLBACK_SECRET}
+  seat:
+    qr-base-url: ${COFFEE_QR_BASE_URL}
+    store-name: ${COFFEE_STORE_NAME:FIKA}
+    assign-timeout-minutes: ${COFFEE_SEAT_ASSIGN_TIMEOUT_MINUTES:15}
+  inventory:
+    redis-cache-enabled: true
+  membership:
+    async-enabled: true
+  rocketmq:
+    order-topic: fika-order-events
+  flash-sale:
+    redis-enabled: true
+    claim-expire-scan-ms: ${COFFEE_FLASH_SALE_CLAIM_EXPIRE_SCAN_MS:30000}

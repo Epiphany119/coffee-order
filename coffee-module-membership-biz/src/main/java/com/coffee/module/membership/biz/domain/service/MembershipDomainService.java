@@ -255,6 +255,39 @@ public class MembershipDomainService implements MembershipService {
     }
 
     @Override
+    public VoucherDTO validateVoucher(Long userId, String voucherNo, double amount) {
+        if (userId == null || userId <= 0 || voucherNo == null || voucherNo.isBlank()) {
+            throw new ServiceException(400, "无效的卡券信息");
+        }
+        UserVoucher voucher = voucherRepository.findByUserIdAndVoucherNo(userId, voucherNo.trim());
+        if (voucher == null) throw new ServiceException(404, "卡券不存在");
+        if (!Integer.valueOf(UserVoucher.STATUS_UNUSED).equals(voucher.getStatus())) {
+            throw new ServiceException(400, "卡券已使用或不可用");
+        }
+        if (voucher.getExpiresAt() != null && !voucher.getExpiresAt().isAfter(LocalDateTime.now())) {
+            throw new ServiceException(400, "卡券已过期");
+        }
+        if (amount + 1e-9 < (voucher.getMinimum() == null ? 0 : voucher.getMinimum())) {
+            throw new ServiceException(400, "订单金额未满足卡券使用门槛");
+        }
+        return toVoucherDTO(voucher);
+    }
+
+    @Override
+    public void consumeVoucher(Long userId, String voucherNo) {
+        validateVoucher(userId, voucherNo, Double.MAX_VALUE);
+        if (!voucherRepository.changeStatus(userId, voucherNo.trim(), UserVoucher.STATUS_UNUSED, UserVoucher.STATUS_USED)) {
+            throw new ServiceException(409, "卡券状态已变化，请刷新后重试");
+        }
+    }
+
+    @Override
+    public void restoreVoucher(Long userId, String voucherNo) {
+        if (userId == null || voucherNo == null || voucherNo.isBlank()) return;
+        voucherRepository.changeStatus(userId, voucherNo.trim(), UserVoucher.STATUS_USED, UserVoucher.STATUS_UNUSED);
+    }
+
+    @Override
     public void addConsumptionPoints(Long userId, double paidAmount) {
         if (userId == null || userId <= 0 || paidAmount <= 0) return;
         MemberCard card = membershipRepository.findByUserId(userId);

@@ -17,6 +17,8 @@ import java.util.List;
 @AllArgsConstructor
 public class OrderItem {
 
+    /** 商品 id（menu_item.id，落 order_item.product_id） */
+    private Long productId;
     private String productCode;
     private String beverageName;
     private String categoryCode;
@@ -24,6 +26,8 @@ public class OrderItem {
     private List<String> condiments;
     private Integer quantity;
     private Double unitPrice;
+    /** 单件原价（折前，划线展示用） */
+    private Double originalUnitPrice;
     private Double subtotal;
     private LocalDateTime estimatedReadyTime;
 

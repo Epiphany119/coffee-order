@@ -17,16 +17,25 @@
         <module>coffee-module-member-biz</module>
         <module>coffee-module-membership-biz</module>
         <module>coffee-module-menu-biz</module>
+        <module>coffee-module-marketing-biz</module>
+        <module>coffee-module-inventory-biz</module>
         <module>coffee-module-order-biz</module>
         <module>coffee-module-seat-biz</module>
         <module>coffee-module-store-biz</module>
+        <module>coffee-module-after-sales-biz</module>
+        <module>coffee-module-payment-biz</module>
+        <module>coffee-module-location-biz</module>
         <module>coffee-web</module>
+        <module>coffee-gateway</module>
+        <module>coffee-inventory-service</module>
+        <module>coffee-marketing-service</module>
+        <module>coffee-order-service</module>
     </modules>
 
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.2.0</version>
+        <version>3.2.4</version>
         <relativePath/>
     </parent>
 
@@ -34,11 +43,33 @@
         <java.version>17</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <mybatis-plus.version>3.5.5</mybatis-plus.version>
+        <rocketmq-spring.version>2.3.2</rocketmq-spring.version>
+        <spring-cloud.version>2023.0.1</spring-cloud.version>
+        <spring-cloud-alibaba.version>2023.0.1.0</spring-cloud-alibaba.version>
         <hutool.version>5.8.23</hutool.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.alibaba.cloud</groupId>
+                <artifactId>spring-cloud-alibaba-dependencies</artifactId>
+                <version>${spring-cloud-alibaba.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.coffee</groupId>
+                <artifactId>coffee-module-marketing-biz</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>com.coffee</groupId>
                 <artifactId>coffee-common</artifactId>
@@ -61,6 +92,11 @@
             </dependency>
             <dependency>
                 <groupId>com.coffee</groupId>
+                <artifactId>coffee-module-inventory-biz</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.coffee</groupId>
                 <artifactId>coffee-module-order-biz</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -77,6 +113,21 @@
             <dependency>
                 <groupId>com.coffee</groupId>
                 <artifactId>coffee-module-store-biz</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.coffee</groupId>
+                <artifactId>coffee-module-after-sales-biz</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.coffee</groupId>
+                <artifactId>coffee-module-payment-biz</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.coffee</groupId>
+                <artifactId>coffee-module-location-biz</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
