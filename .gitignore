@@ -17,3 +17,4 @@ target/
 
 # 本地配置（防止上传数据库密码）
 application-local.yml
+**/application-local.yml

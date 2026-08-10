@@ -3,6 +3,7 @@ package com.coffee.web.controller;
 import com.coffee.module.auth.api.AuthService;
 import com.coffee.module.auth.api.dto.*;
 import com.coffee.web.security.AccessGuard;
+import com.coffee.web.security.LoginChallengeService;
 import com.coffee.web.security.TokenService;
 import org.springframework.web.bind.annotation.*;
 
@@ -17,11 +18,16 @@ public class AuthController {
 
     private final AuthService authService;
     private final TokenService tokenService;
+    private final LoginChallengeService loginChallengeService;
 
-    public AuthController(AuthService authService, TokenService tokenService) {
+    public AuthController(AuthService authService, TokenService tokenService, LoginChallengeService loginChallengeService) {
         this.authService = authService;
         this.tokenService = tokenService;
+        this.loginChallengeService = loginChallengeService;
     }
+
+    @GetMapping("/login-challenge")
+    public LoginChallengeService.LoginChallenge loginChallenge() { return loginChallengeService.issue(); }
 
     @PostMapping("/register")
     public AuthResponse register(@RequestBody RegisterRequest request) {
@@ -30,6 +36,9 @@ public class AuthController {
 
     @PostMapping("/login")
     public AuthResponse login(@RequestBody LoginRequest request) {
+        if (!loginChallengeService.verify(request.getChallengeId(), request.getChallengeCode())) {
+            return AuthResponse.fail("验证码错误、已过期或已使用，请刷新后重试");
+        }
         return withToken(authService.login(request));
     }
 

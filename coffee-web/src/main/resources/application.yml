@@ -46,6 +46,24 @@ mybatis-plus:
 
 # 仅包含与环境无关的业务配置；数据库、中间件、密钥等均见 application-dev/prod.yml。
 coffee:
+  ai:
+    platform:
+      # 当前采用 GLM 路由 + 后端受控工具编排；未来接入 Spring AI Alibaba 时只替换适配器。
+      provider: ${COFFEE_AI_PLATFORM_PROVIDER:glm}
+    # 静安店为 Agent 样板门店；其他门店沿用通用 GLM 提示词与输出。
+    template-store-code: ${COFFEE_AI_TEMPLATE_STORE_CODE:jingan}
+    zhipu:
+      # 通过环境变量提供，切勿将真实密钥提交到仓库。
+      # 同时兼容智谱 SDK 常用的 ZAI_API_KEY。
+      api-key: ${ZHIPU_API_KEY:${ZAI_API_KEY:}}
+      endpoint: ${ZHIPU_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
+      model: ${ZHIPU_MODEL:glm-5.2}
+      embedding-endpoint: ${ZHIPU_EMBEDDING_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/embeddings}
+      embedding-model: ${ZHIPU_EMBEDDING_MODEL:embedding-3}
+      # 512 维兼顾中文菜单召回质量、MySQL 缓存体积和接口成本。
+      embedding-dimensions: ${ZHIPU_EMBEDDING_DIMENSIONS:512}
+      # 交互型 Agent 的时间预算；超时会立即回退到受控规则方案。
+      timeout-seconds: ${ZHIPU_TIMEOUT_SECONDS:5}
   outbox:
     dispatch-interval-ms: 3000
 

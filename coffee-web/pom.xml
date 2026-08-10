@@ -66,6 +66,8 @@
             <groupId>com.coffee</groupId>
             <artifactId>coffee-module-marketing-biz</artifactId>
         </dependency>
+        <dependency><groupId>com.coffee</groupId><artifactId>coffee-module-merchant-agent-biz</artifactId></dependency>
+        <dependency><groupId>com.coffee</groupId><artifactId>coffee-module-customer-agent-biz</artifactId></dependency>
         <dependency>
             <groupId>com.coffee</groupId>
             <artifactId>coffee-module-seat-biz</artifactId>

@@ -1,5 +1,8 @@
 # 本机开发环境：无需启动 Nacos、Redis、RocketMQ 即可运行。
 spring:
+  config:
+    # 仅本机私密配置（如第三方 API Key）；文件已被 Git 忽略。
+    import: optional:classpath:application-local.yml
   datasource:
     url: jdbc:mysql://localhost:3306/coffee_order_pro?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: epiphany

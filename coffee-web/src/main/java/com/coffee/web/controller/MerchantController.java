@@ -11,6 +11,7 @@ import com.coffee.module.store.api.dto.MerchantProfileUpdateRequest;
 import com.coffee.module.store.api.dto.MerchantPasswordChangeRequest;
 import com.coffee.module.store.api.dto.StoreResponse;
 import com.coffee.web.security.AccessGuard;
+import com.coffee.web.security.LoginChallengeService;
 import com.coffee.web.security.TokenService;
 import org.springframework.web.bind.annotation.*;
 
@@ -29,13 +30,15 @@ public class MerchantController {
     private final StoreService storeService;
     private final OrderService orderService;
     private final TokenService tokenService;
+    private final LoginChallengeService loginChallengeService;
 
     public MerchantController(MerchantService merchantService, StoreService storeService, OrderService orderService,
-                              TokenService tokenService) {
+                              TokenService tokenService, LoginChallengeService loginChallengeService) {
         this.merchantService = merchantService;
         this.storeService = storeService;
         this.orderService = orderService;
         this.tokenService = tokenService;
+        this.loginChallengeService = loginChallengeService;
     }
 
     /** 商家注册 */
@@ -47,6 +50,9 @@ public class MerchantController {
     /** 商家登录 */
     @PostMapping("/login")
     public MerchantResponse login(@RequestBody MerchantLoginRequest request) {
+        if (!loginChallengeService.verify(request.getChallengeId(), request.getChallengeCode())) {
+            return MerchantResponse.fail("验证码错误、已过期或已使用，请刷新后重试");
+        }
         return withToken(merchantService.login(request));
     }
 

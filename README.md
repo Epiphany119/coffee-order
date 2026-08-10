@@ -20,6 +20,9 @@ coffee-order-system-pro_back
 ├── coffee-module-member-biz/    # 会员中心：消费/等级/积分只读数据（旧会员中心）
 ├── coffee-module-membership-biz # 会员体系：会员卡/等级规则/权益/积分兑换/卡券包
 ├── coffee-module-menu-biz/      # 菜单：商品/分类/收藏/凑单标记/本地图片存储（核心业务）
+├── coffee-module-marketing-biz/ # 营销：秒杀资格、活动库存、消息触达
+├── coffee-module-merchant-agent-biz # 店长增长 Agent：经营诊断、营销审批与执行审计
+├── coffee-module-customer-agent-biz # 顾客点单 Agent：偏好/销量/反馈融合推荐与受控点单方案
 ├── coffee-module-order-biz/     # 订单：下单/订单号/列表/状态机/营业额统计/凑单进度
 ├── coffee-module-payment-biz/   # 支付：支付单/渠道策略（MOCK+微信/支付宝/银行骨架）
 ├── coffee-module-after-sales-biz# 售后：售后单/订单反馈
@@ -246,3 +249,4 @@ pnpm dev
 | `docs/ARCHITECTURE_DESIGN.md` | 详细架构设计：现状、微服务演进、中间件选型与实施清单 |
 | `docs/API.md` | 接口权威文档：全部 65 个接口的作用/参数/请求响应 JSON/错误码（新增接口必须同步更新） |
 | `docs/DATABASE.md` | 数据库设计文档（表结构总览 / 核心设计 / ER 关系） |
+| `docs/ADVANCED_ENVIRONMENT.md` | Redis、RocketMQ、Nacos、Gateway、Jaeger 的本地演示环境与真实完成边界 |

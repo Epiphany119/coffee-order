@@ -5,7 +5,7 @@
 
 ## 接口目录
 
-> 全部 65 个接口索引，点击跳转到对应章节；模块概览见 [三、接口总览](#三接口总览)。
+> 全部 76 个接口索引，点击跳转到对应章节；模块概览见 [三、接口总览](#三接口总览)。
 
 ### 四、认证模块（7 个）
 
@@ -137,11 +137,37 @@
 | 16.3 | [提交订单反馈](#163-提交订单反馈) | `POST /api/after-sale/feedback` |
 | 16.4 | [我的反馈列表](#164-我的反馈列表) | `GET /api/after-sale/feedback/user/{userId}` |
 
-### 十七、健康检查（1 个）
+### 十七、发现、秒杀与消息模块（6 个）
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
-| 17.1 | [服务健康检查](#171-服务健康检查) | `GET /health` |
+| 17.1 | [商品检索](#171-商品检索) | `GET /api/discovery/search` |
+| 17.2 | [为你推荐](#172-为你推荐) | `GET /api/discovery/recommendations` |
+| 17.3 | [当前/最近秒杀活动](#173-当前最近秒杀活动) | `GET /api/flash-sales/current` |
+| 17.4 | [我的抢购资格](#174-我的抢购资格) | `GET /api/flash-sales/claims` |
+| 17.5 | [抢购秒杀资格](#175-抢购秒杀资格) | `POST /api/flash-sales/{activityId}/claim` |
+| 17.6 | [用户通知](#176-用户通知) | `GET /api/notifications/user/{userId}` |
+
+### 十八、店长增长 Agent（4 个）
+
+| # | 接口 | 方法与路径 |
+|---|---|---|
+| 18.1 | [Agent 经营诊断](#181-agent-经营诊断) | `POST /api/merchant/{merchantId}/growth-agent/analyze` |
+| 18.2 | [创建待确认方案](#182-创建待确认方案) | `POST /api/merchant/{merchantId}/growth-agent/actions` |
+| 18.3 | [确认执行方案](#183-确认执行方案) | `POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute` |
+| 18.4 | [查询 Agent 审计记录](#184-查询-agent-审计记录) | `GET /api/merchant/{merchantId}/growth-agent/actions` |
+
+### 十九、顾客点单 Agent（1 个）
+
+| # | 接口 | 方法与路径 |
+|---|---|---|
+| 19.1 | [生成点单方案](#191-生成点单方案) | `POST /api/customer-agent/plan` |
+
+### 二十、健康检查（1 个）
+
+| # | 接口 | 方法与路径 |
+|---|---|---|
+| 20.1 | [服务健康检查](#201-服务健康检查) | `GET /health` |
 
 ### 附录
 
@@ -156,7 +182,7 @@
 | 系统名称 | 咖啡点单系统（coffee-order-system-pro） |
 | 基础路径 | `http://{host}:{port}`（开发默认 `8088`；前端开发环境经 Vite 代理转发） |
 | 数据格式 | JSON（UTF-8）；文件上传接口为 `multipart/form-data` |
-| 版本 | v1.8.0 |
+| 版本 | v1.11.0 |
 
 ## 二、通用约定
 
@@ -198,12 +224,17 @@
 
 ### 2.3 鉴权说明
 
-当前版本**无 Token/会话鉴权机制**：登录/注册接口成功后前端持有 `userId`（或游客 `guestId`）并随请求参数传递，服务端按 id 直接定位数据。身份维度：
+登录、注册及游客会话接口会返回 `accessToken`。访问需要身份校验的接口时，必须携带：
+
+```http
+Authorization: Bearer {accessToken}
+```
+
+令牌为带过期时间的 HMAC 无状态令牌；缺失、格式错误、无效或过期时返回 `401`。用户、游客和商家身份分别隔离，且路径或参数中的 `userId`、`guestId`、`merchantId` 必须与令牌身份一致，否则返回 `403`。
 
 - `userId`：登录用户 id（`coffee_user.id`）
 - `guestId`：游客标识（`g-` 前缀，由 `POST /api/guest/session` 签发）
-
-用户单与游客单数据按身份隔离入库，接口按各自 id 查询。
+- `merchantId`：商家 id（商家登录后取得）
 
 ### 2.4 时间格式
 
@@ -211,7 +242,7 @@
 
 ## 三、接口总览
 
-共 65 个接口（含健康检查），按模块分组：
+共 76 个接口（含健康检查），按模块分组：
 
 | # | 模块 | 接口数 | 响应格式 | 章节 |
 |---|---|---|---|---|
@@ -228,7 +259,10 @@
 | 11 | 支付 | 5 | A | [十四](#十四支付模块) |
 | 12 | 凑单 | 2 | A | [十五](#十五凑单模块) |
 | 13 | 售后 | 4 | A | [十六](#十六售后模块) |
-| 14 | 健康检查 | 1 | 纯文本 | [十七](#十七健康检查) |
+| 14 | 发现、秒杀与消息 | 6 | B / A | [十七](#十七发现秒杀与消息模块) |
+| 15 | 店长增长 Agent | 4 | A | [十八](#十八店长增长-agent) |
+| 16 | 顾客点单 Agent | 1 | A | [十九](#十九顾客点单-agent) |
+| 17 | 健康检查 | 1 | 纯文本 | [二十](#二十健康检查) |
 
 ## 四、认证模块
 
@@ -1161,6 +1195,7 @@
 | condiments | string[] | ❌ | 加料列表 |
 | items | array | 批量必填 | 批量明细（见下） |
 | couponCode | string | ❌ | 优惠券编码（FIKA8/SWEET12/BEAN15，仅会员有效） |
+| flashSaleClaimNo | string | ❌ | 秒杀资格码；仅支持活动指定的单件商品，不能与优惠券叠加 |
 
 批量明细项（`CartItemCommand`）：
 
@@ -1243,7 +1278,7 @@
 | 404 | 产品不存在: xxx | productCode 无效或该店无此商品 |
 | 400 | 商品数量必须大于 0 | 批量明细 quantity ≤ 0 |
 
-> 说明：下单接口不强制校验身份（userId/guestId 均可空落库）；定制规格（CUSTOM）量非法时按基准量 1.0 比例兜底计价。
+> 说明：下单必须提供 `userId` 或 `guestId`，并携带与该身份匹配的 Bearer Token；定制规格（CUSTOM）量非法时按基准量 1.0 比例兜底计价。秒杀下单请提交单品参数（不要传 `items`），并传入未过期的 `flashSaleClaimNo`；服务端会原子核销资格，已核销或已过期的资格返回 `409`。
 >
 > 批量模型说明：批量订单为单条 `user_order` + 多条 `order_item` 明细；`beverageName` 拼接为「名称×数量」顿号连接，`size` 记为 `MIXED`（实际以明细为准）；会员折扣/优惠券按订单总额计算后按各商品行原价比例分摊到明细（尾差归最后一行），明细小计合计 = 实付总额。
 
@@ -1941,9 +1976,289 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 成功响应（200）：`Result<FeedbackResponse[]>`。
 
-## 十七、健康检查
+## 十七、发现、秒杀与消息模块
 
-### 17.1 服务健康检查
+### 17.1 商品检索
+
+**`GET /api/discovery/search`**
+
+作用：按商品名称、描述或类目在指定店铺内检索商品。无需登录。
+
+查询参数：`storeId`（必填）、`keyword`（必填）、`limit`（可选，默认 12，范围 1-30）。
+
+成功响应（200）：`MenuItemDTO[]`（扁平数组）。关键词为空时返回空数组。
+
+### 17.2 为你推荐
+
+**`GET /api/discovery/recommendations`**
+
+作用：基于用户或游客的收藏类目推荐当前店铺商品；未收藏时默认优先推荐咖啡类。
+
+查询参数：`storeId`（必填）、`userId` / `guestId`（二选一）、`limit`（可选，默认 8，范围 1-12）。携带身份参数时必须同时携带匹配身份的 Bearer Token。
+
+成功响应（200）：`MenuItemDTO[]`（扁平数组）。
+
+### 17.3 当前/最近秒杀活动
+
+**`GET /api/flash-sales/current`**
+
+作用：查询店铺已经开始的最近三场秒杀活动。售罄或结束的活动不会从列表中消失，而是保留并以灰态展示，提示用户下次提前准备。
+
+查询参数：`storeId`（必填）。无需登录。
+
+成功响应（200，扁平数组）：
+
+```json
+[
+  {
+    "id": 1,
+    "productCode": "latte",
+    "title": "经典拿铁 · 限时尝鲜",
+    "flashPrice": 16.9,
+    "availableStock": 29,
+    "startAt": "2026-08-09T17:00:00",
+    "endAt": "2026-08-09T17:30:00",
+    "claimable": true,
+    "closeReason": null
+  }
+]
+```
+
+`closeReason` 为 `SOLD_OUT` 表示已售罄，为 `ENDED` 表示活动结束；此时 `claimable=false`。
+
+### 17.4 我的抢购资格
+
+**`GET /api/flash-sales/claims`**
+
+作用：查询用户或游客的抢购记录（最多 50 条）。
+
+查询参数：`userId` / `guestId` 二选一，并携带对应身份的 Bearer Token。
+
+成功响应（200，扁平数组）：
+
+```json
+[
+  {
+    "claimNo": "FS9DD110E72E6444A8",
+    "status": "CLAIMED",
+    "claimedAt": "2026-08-09T17:17:00",
+    "expiresAt": "2026-08-09T17:27:00",
+    "productCode": "latte",
+    "title": "经典拿铁 · 限时尝鲜",
+    "flashPrice": 16.9
+  }
+]
+```
+
+状态说明：`CLAIMED` 待下单核销、`USED` 已核销、`EXPIRED` 已过期。资格自抢到起保留 10 分钟；过期记录前端应灰显并对抢购码加删除线。
+
+### 17.5 抢购秒杀资格
+
+**`POST /api/flash-sales/{activityId}/claim`**
+
+作用：抢占一份秒杀资格。每个用户/游客对同一活动限购一份；返回的 `claimNo` 应保存并用于创建秒杀订单。
+
+请求头：`Authorization: Bearer {accessToken}`。
+
+请求体：
+
+```json
+{ "userId": 1 }
+```
+
+或游客：
+
+```json
+{ "guestId": "g-xxx" }
+```
+
+成功响应（200，扁平对象）：
+
+```json
+{
+  "id": 1,
+  "productCode": "latte",
+  "title": "经典拿铁 · 限时尝鲜",
+  "flashPrice": 16.9,
+  "availableStock": 30,
+  "claimNo": "FS9DD110E72E6444A8",
+  "message": "抢购成功，抢购资格已保存"
+}
+```
+
+失败时：`409` 表示已售罄或重复抢购；`404` 表示活动不存在或已结束。
+
+> 抢购成功后，登录用户会收到一条 `FLASH_SALE_CLAIM` 通知。资格在 10 分钟内未下单核销时，30 秒轮询会以条件更新将它置为 `EXPIRED` 并归还库存；核销和过期并发时仅允许其中一次状态流转成功。
+
+### 17.6 用户通知
+
+**`GET /api/notifications/user/{userId}`**
+
+作用：获取用户最近 50 条站内消息（包括秒杀抢购成功提醒）。
+
+请求头：`Authorization: Bearer {accessToken}`，路径中的 `userId` 必须与令牌身份一致。
+
+成功响应（200，格式 A）：
+
+```json
+{
+  "code": 200,
+  "message": "操作成功",
+  "data": [
+    {
+      "id": 1,
+      "type": "FLASH_SALE_CLAIM",
+      "title": "抢购成功 · 资格已保存",
+      "content": "你已抢到「经典拿铁 · 限时尝鲜」，抢购码：FS9DD110E72E6444A8。可在会员中心的“我的抢购”中查看。",
+      "readStatus": 0,
+      "createdAt": "2026-08-09T17:17:00"
+    }
+  ]
+}
+```
+
+## 十八、店长增长 Agent
+
+> 响应格式：**A**。所有接口需要商家 Bearer Token，且 `merchantId` 必须与 Token 身份一致。执行营销动作前必须先创建待确认方案，再调用执行接口，不能由 Agent 直接写入业务数据。
+
+### 18.1 Agent 经营诊断
+
+**`POST /api/merchant/{merchantId}/growth-agent/analyze`**
+
+作用：读取今日订单、已完成营业额、履约队列和秒杀库存，返回诊断证据以及一个可控的营销建议；该接口只读，不会发券或触达用户。
+
+请求体：
+
+```json
+{ "message": "为什么今天营业额不高？给我一个不打扰顾客的增长方案。" }
+```
+
+成功响应的 `data` 包含：
+
+| 字段 | 说明 |
+|---|---|
+| answer | Agent 对本次工具调用的说明 |
+| signals | 经营信号数组（订单、营业额、履约、秒杀库存） |
+| snapshot | 原始统计快照：`todayOrders`、`todayRevenue`、`pendingOrders`、`weekRevenue`、`flashSaleStock` |
+| suggestedAction | 待确认动作：`actionType`、`title`、`summary`、`reason`、`proposal` |
+| engine | 当前执行引擎标识：`FIKA Growth Agent · rule-tools` |
+
+`actionType` 当前只允许 `NOTIFY_MEMBERS`（站内通知）和 `CREATE_VOUCHERS`（发券并通知）。规则引擎可替换为 LLM Function Calling，但 LLM 只能选择受控工具，不能获得直接写库权限。
+
+### 18.2 创建待确认方案
+
+**`POST /api/merchant/{merchantId}/growth-agent/actions`**
+
+作用：将 Agent 建议写入 `growth_agent_action`，状态为 `PENDING`。必须由商家进一步确认后才执行。
+
+请求体：
+
+```json
+{
+  "actionType": "CREATE_VOUCHERS",
+  "title": "老客唤醒 · 满48减8限时券",
+  "proposal": {
+    "discount": 8,
+    "minimum": 48,
+    "targetDays": 30,
+    "expiresDays": 3,
+    "message": "FIKA 为你留了一张满 ¥48 减 ¥8 的限时心意券，3 天内可用。"
+  }
+}
+```
+
+### 18.3 确认执行方案
+
+**`POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute`**
+
+作用：以状态条件更新锁定 `PENDING` 方案并执行。`NOTIFY_MEMBERS` 向近期开单用户写入站内通知；`CREATE_VOUCHERS` 发放卡券并写入通知。重复执行返回 `409`。
+
+成功响应：`data.affectedUsers` 为本次实际触达的用户数，执行状态会写入审计表。
+
+### 18.4 查询 Agent 审计记录
+
+**`GET /api/merchant/{merchantId}/growth-agent/actions?limit=20`**
+
+作用：查询最近的 Agent 方案与执行记录。`limit` 范围 1-50，默认 20。
+
+成功响应：`data` 为数组，包含 `id`、`actionType`、`title`、`status`、`createdAt`、`executedAt`。
+
+> 使用前先执行 [V20260809_10_growth_agent.sql](../sql/migrations/V20260809_10_growth_agent.sql) 创建审计表。
+
+## 十九、顾客点单 Agent
+
+> 响应格式：**A**。该接口只输出当前菜单中的受控商品方案，绝不直接创建订单；顾客确认后仍由前端调用 `POST /api/order`，因此身份校验、订单幂等、库存、服务端计价和支付流程保持不变。
+
+### 19.1 生成点单方案
+
+**`POST /api/customer-agent/plan`**
+
+作用：将顾客的自然语言需求转换为 1-2 个可直接下单的商品搭配。推荐会综合当前店铺菜单、个人收藏、近期开单热度、单品反馈评分和冷热/品类/预算关键词；没有偏好或反馈数据时自动降级为菜单需求匹配与随机探索。
+
+请求头：`Authorization: Bearer {accessToken}`。
+
+请求体：
+
+```json
+{
+  "storeId": 5,
+  "userId": 1,
+  "message": "下午有点困，想喝清爽一点、别太苦的，顺便配个小甜点。"
+}
+```
+
+游客将 `userId` 替换为 `guestId`，并携带游客 Token。
+
+成功响应的 `data` 示例：
+
+```json
+{
+  "reply": "我推荐「经典拿铁」，再搭配「芝士蛋糕」。它与你这次描述的口味最接近；确认后我会直接带你去支付。",
+  "items": [
+    {
+      "productCode": "latte",
+      "name": "经典拿铁",
+      "temperature": "BOTH",
+      "size": "MEDIUM",
+      "quantity": 1,
+      "estimatedPrice": 24.0,
+      "reason": "近期销量表现突出"
+    }
+  ],
+  "signals": [
+    { "label": "你的偏好", "value": "已参考 2 个收藏", "used": true },
+    { "label": "门店销量", "value": "本周热销", "used": true }
+  ],
+  "note": "确认后会直接创建待支付订单并进入收银台；最终价格、库存和优惠以服务端结算为准。"
+}
+```
+
+前端确认方案时应使用返回的 `planToken` 调用下方确认接口；不要把 Agent 返回的估算金额当作最终应付金额，也不要在浏览器重新提交商品行。
+
+### 19.2 确认 Agent 方案并创建待支付订单
+
+**`POST /api/customer-agent/plans/confirm`**
+
+作用：顾客确认后，直接由服务端消费 `planToken` 中绑定的方案快照并创建 `UNPAID` 订单，响应携带 `paymentNo`，前端应立即打开付款窗口。浏览器**不得**再次提交商品、价格或数量。
+
+请求头：`Authorization: Bearer {accessToken}`、`Idempotency-Key: {16-128 位随机键}`。
+
+请求体：
+
+```json
+{
+  "planToken": "Agent 返回的一次性令牌",
+  "storeId": 5,
+  "userId": 1,
+  "fulfillmentType": "PICKUP"
+}
+```
+
+安全规则：令牌绑定用户/游客身份与门店，5 分钟过期，只能绑定一枚幂等键；换身份、换门店、修改商品行或用另一枚幂等键重复确认均会被拒绝。价格、库存、优惠与支付单均由正式订单链路处理。
+
+## 二十、健康检查
+
+### 20.1 服务健康检查
 
 **`GET /health`**
 

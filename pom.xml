@@ -18,6 +18,8 @@
         <module>coffee-module-membership-biz</module>
         <module>coffee-module-menu-biz</module>
         <module>coffee-module-marketing-biz</module>
+        <module>coffee-module-merchant-agent-biz</module>
+        <module>coffee-module-customer-agent-biz</module>
         <module>coffee-module-inventory-biz</module>
         <module>coffee-module-order-biz</module>
         <module>coffee-module-seat-biz</module>
@@ -70,6 +72,8 @@
                 <artifactId>coffee-module-marketing-biz</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency><groupId>com.coffee</groupId><artifactId>coffee-module-merchant-agent-biz</artifactId><version>${project.version}</version></dependency>
+            <dependency><groupId>com.coffee</groupId><artifactId>coffee-module-customer-agent-biz</artifactId><version>${project.version}</version></dependency>
             <dependency>
                 <groupId>com.coffee</groupId>
                 <artifactId>coffee-common</artifactId>

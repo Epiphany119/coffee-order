@@ -212,7 +212,10 @@ public class OrderApplicationService implements OrderService {
         }
 
         double afterMember = MoneyUtils.round2(totalOriginal - memberDiscount);
-        CouponResult coupon = applyCoupon(command.getCouponCode(), afterMember, userId);
+        // Agent 的满减以商品原价判断门槛，再从会员价中减免；避免“原价刚好满48、VIP 折后不满48”时权益消失。
+        CouponResult coupon = "AGENT_FIKA8".equalsIgnoreCase(command.getCouponCode())
+                ? agentFikaCoupon(totalOriginal, afterMember, userId)
+                : applyCoupon(command.getCouponCode(), afterMember, userId);
         double finalTotal = coupon.finalPrice;
         double totalDiscount = MoneyUtils.round2(totalOriginal - finalTotal);
 
@@ -588,6 +591,11 @@ public class OrderApplicationService implements OrderService {
             case "BEAN15" -> fixedCoupon(amount, 88, 15, "咖啡满 ¥88 减 ¥15");
             default -> voucherCoupon(userId, code.trim(), amount);
         };
+    }
+
+    private CouponResult agentFikaCoupon(double originalAmount, double memberAmount, Long userId) {
+        if (userId == null || userId <= 0 || originalAmount + 1e-9 < 48) return new CouponResult(memberAmount, 0, "", null);
+        return new CouponResult(MoneyUtils.round2(Math.max(0, memberAmount - 8)), 8, "Agent 满 ¥48 减 ¥8", null);
     }
 
     private CouponResult fixedCoupon(double amount, double minimum, double discount, String name) {
