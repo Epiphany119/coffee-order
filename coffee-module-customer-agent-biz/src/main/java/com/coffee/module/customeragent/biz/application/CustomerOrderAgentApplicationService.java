@@ -52,7 +52,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         // 搭配从全菜单中挑，但不得把用户已明确指定的主品类换成别的品类。
         List<Scored> pairingRanked = products.stream().filter(p -> !intent.excludedCategories().contains(safe(p.getCategoryCode())))
                 .map(p -> new Scored(p, score(p, text, favCodes, favCats, hotNames, ratings, semanticScores, intent))).sorted(Comparator.comparingInt(Scored::score).reversed().thenComparing(x -> x.product().getId())).toList();
-        MenuItemDTO pairing = pairing(pairingRanked, main, intent, storeId);
+        MenuItemDTO pairing = explicitMentionedPair(pairingRanked, main, text, intent, storeId);
         List<Map<String,Object>> items = new ArrayList<>(); items.add(item(storeId, main, text, favCodes, hotNames, ratings));
         if (pairing != null) items.add(item(storeId, pairing, text, favCodes, hotNames, ratings));
         List<Map<String,Object>> signals = new ArrayList<>();
@@ -74,7 +74,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         // 候选不再机械取前三名：先跳过预算外方案，再去掉同一组合仅顺序不同的重复方案。
         for (Scored choice : ranked) {
             MenuItemDTO optionMain = choice.product();
-            MenuItemDTO optionPairing = pairing(pairingRanked, optionMain, intent, storeId);
+            MenuItemDTO optionPairing = explicitMentionedPair(pairingRanked, optionMain, text, intent, storeId);
             List<Map<String,Object>> optionItems = new ArrayList<>(); optionItems.add(item(storeId, optionMain, text, favCodes, hotNames, ratings));
             if (optionPairing != null) optionItems.add(item(storeId, optionPairing, text, favCodes, hotNames, ratings));
             double optionTotal = optionItems.stream().mapToDouble(i -> ((Number) i.get("estimatedPrice")).doubleValue() * ((Number) i.get("quantity")).intValue()).sum();
@@ -104,6 +104,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     private int score(MenuItemDTO p,String t,Set<String> codes,Set<String> cats,Set<String> hot,Map<Long,Double> ratings,Map<String,Double> semanticScores, CustomerOrderIntentParser.Intent intent){
         int s=10+Math.floorMod((p.getCode()+t).hashCode(),7); String c=safe(p.getCategoryCode()), temp=safe(p.getTemperature());
         if(codes.contains(p.getCode()))s+=36;if(cats.contains(c))s+=15;if(hot.contains(p.getName()))s+=13;if(ratings.getOrDefault(p.getId(),0d)>=4.2)s+=10;
+        if (directlyMentioned(t, p)) s += 90;
         if(has(t,"咖啡","提神","熬夜","困","苦")&&"coffee".equals(c))s+=21;if(has(t,"茶","清爽","轻","低糖","不苦")&&"tea".equals(c))s+=22;if(has(t,"甜","蛋糕","下午茶")&&"dessert".equals(c))s+=19;if(has(t,"饿","午餐","咸","轻食")&&"food".equals(c))s+=21;
         // 语义相似度只参与排序，绝不覆盖上层的品类、预算、排除词安全约束。
         s += Math.max(0, (int)Math.round(semanticScores.getOrDefault(p.getCode(), 0d) * 28));
@@ -124,6 +125,23 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         for(Scored x:items)if(!x.product().getCode().equals(main.getCode())&&complement(main.getCategoryCode(),x.product().getCategoryCode())&&totalWithinBudget(storeId, main, x.product(), intent.budget()))return x.product();
         return null;
     }
+    /** 用户明确说出两种商品（如“汉堡和薯条”）时，第二种商品直接进入订单方案。 */
+    private MenuItemDTO explicitMentionedPair(List<Scored> items, MenuItemDTO main, String text, CustomerOrderIntentParser.Intent intent, Long storeId) {
+        for (Scored item : items) {
+            if (!item.product().getCode().equals(main.getCode()) && directlyMentioned(text, item.product())
+                    && totalWithinBudget(storeId, main, item.product(), intent.budget())) return item.product();
+        }
+        return pairing(items, main, intent, storeId);
+    }
+    private boolean directlyMentioned(String text, MenuItemDTO product) {
+        String query = normalizeProductText(text);
+        String name = normalizeProductText(product.getName());
+        String code = normalizeProductText(product.getCode());
+        if ((!name.isBlank() && query.contains(name)) || (!code.isBlank() && query.contains(code))) return true;
+        return (name.contains("汉堡") && query.contains("汉堡")) || (name.contains("薯条") && query.contains("薯条"))
+                || (name.contains("健达") && (query.contains("健达") || query.contains("奇趣蛋")));
+    }
+    private String normalizeProductText(String value) { return safe(value).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\u4e00-\\u9fa5]", ""); }
     private Scored primaryCategoryFirst(List<Scored> ranked, List<String> categories) {
         if (!categories.isEmpty()) for (Scored item : ranked) if (categories.get(0).equals(safe(item.product().getCategoryCode()))) return item;
         return ranked.get(0);

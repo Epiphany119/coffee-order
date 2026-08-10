@@ -39,6 +39,13 @@ public class BusinessAgentController {
         return Result.success(Map.of("accepted", true, "message", "知识文档已保存，检索立即可用；向量索引将由异步任务增量同步"));
     }
 
+    @PostMapping("/knowledge/bootstrap/menu")
+    public Result<Map<String, Object>> bootstrapMenuKnowledge(@RequestBody KnowledgeBootstrapRequest request) {
+        if (request == null || request.storeId == null) throw new ServiceException(400, "请选择要初始化的门店");
+        int count = orchestrator.bootstrapMenuKnowledge(AccessGuard.currentIdentity(), request.storeId);
+        return Result.success(Map.of("accepted", true, "count", count, "message", "当前有效菜单已批量向量化"));
+    }
+
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestBody AskRequest request) {
         RequestIdentity identity = AccessGuard.currentIdentity();
@@ -88,4 +95,5 @@ public class BusinessAgentController {
         public String content;
         public String source;
     }
+    public static class KnowledgeBootstrapRequest { public Long storeId; }
 }

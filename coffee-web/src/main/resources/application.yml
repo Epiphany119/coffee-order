@@ -57,13 +57,21 @@ coffee:
       # 同时兼容智谱 SDK 常用的 ZAI_API_KEY。
       api-key: ${ZHIPU_API_KEY:${ZAI_API_KEY:}}
       endpoint: ${ZHIPU_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
-      model: ${ZHIPU_MODEL:glm-5.2}
+      model: ${ZHIPU_MODEL:glm-4.5-air}
       embedding-endpoint: ${ZHIPU_EMBEDDING_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/embeddings}
       embedding-model: ${ZHIPU_EMBEDDING_MODEL:embedding-3}
       # 512 维兼顾中文菜单召回质量、MySQL 缓存体积和接口成本。
       embedding-dimensions: ${ZHIPU_EMBEDDING_DIMENSIONS:512}
       # 交互型 Agent 的时间预算；超时会立即回退到受控规则方案。
       timeout-seconds: ${ZHIPU_TIMEOUT_SECONDS:5}
+    milvus:
+      # Docker 默认暴露的 gRPC 端口；关闭开关时自动回退 MySQL 关键词检索。
+      enabled: ${MILVUS_ENABLED:true}
+      host: ${MILVUS_HOST:localhost}
+      port: ${MILVUS_PORT:19530}
+      collection: ${MILVUS_COLLECTION:agent_knowledge_vector}
+      token: ${MILVUS_TOKEN:}
+      connect-timeout-seconds: ${MILVUS_CONNECT_TIMEOUT_SECONDS:5}
   outbox:
     dispatch-interval-ms: 3000
 

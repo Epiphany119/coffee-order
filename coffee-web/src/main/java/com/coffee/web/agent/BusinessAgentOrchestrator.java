@@ -19,13 +19,15 @@ import java.util.Map;
 public class BusinessAgentOrchestrator {
     private final AgentKnowledgeService knowledge;
     private final AgentConversationService conversations;
+    private final MenuKnowledgeBootstrapService menuKnowledgeBootstrap;
     private final JdbcTemplate jdbc;
     private final ZhipuChatClient chat;
 
     public BusinessAgentOrchestrator(AgentKnowledgeService knowledge, AgentConversationService conversations,
-                                     JdbcTemplate jdbc, ZhipuChatClient chat) {
+                                     MenuKnowledgeBootstrapService menuKnowledgeBootstrap, JdbcTemplate jdbc, ZhipuChatClient chat) {
         this.knowledge = knowledge;
         this.conversations = conversations;
+        this.menuKnowledgeBootstrap = menuKnowledgeBootstrap;
         this.jdbc = jdbc;
         this.chat = chat;
     }
@@ -63,6 +65,12 @@ public class BusinessAgentOrchestrator {
         knowledge.upsert(storeId, title, content, source == null || source.isBlank() ? "merchant-manual" : source);
     }
 
+    public int bootstrapMenuKnowledge(RequestIdentity identity, Long storeId) {
+        if (identity.kind() != RequestIdentity.Kind.MERCHANT) throw new IllegalArgumentException("只有商家可初始化门店知识");
+        assertMerchantOwnsStore(identity, storeId);
+        return menuKnowledgeBootstrap.bootstrap(storeId);
+    }
+
     /**
      * 使用 GLM 做“意图 → 只读工具”选择；解析不到时退回确定性计划。
      * 模型只能从白名单中选择名称，不能传 SQL、URL、类名或写操作。
@@ -79,6 +87,12 @@ public class BusinessAgentOrchestrator {
                 "场景：" + scene + "\n用户问题：" + input).orElse("");
         List<String> selected = allowed.stream().filter(decision::contains).toList();
         if (selected.isEmpty()) selected = fallback;
+        // 知识库是 Agent 的事实来源。即使路由模型只判断为“经营指标”，也必须先做一次
+        // RAG 召回，避免营业时间、服务规则等门店事实被指标工具错误覆盖。
+        if (!selected.contains("knowledge_retrieve")) {
+            selected = new ArrayList<>(selected);
+            selected.add(0, "knowledge_retrieve");
+        }
         List<String> steps = plan(scene, input, selected);
         return new ToolPlan(selected, steps, decision.isBlank() ? "FIKA Agent · rule-tools" : "FIKA Agent · GLM tool-router");
     }
