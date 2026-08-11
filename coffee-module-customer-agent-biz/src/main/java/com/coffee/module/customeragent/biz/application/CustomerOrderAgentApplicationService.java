@@ -22,9 +22,9 @@ import java.util.stream.Collectors;
 @Service
 public class CustomerOrderAgentApplicationService implements CustomerOrderAgentService {
     private final MenuService menuService; private final FavoriteService favoriteService;
-    private final OrderService orderService; private final JdbcTemplate jdbcTemplate; private final ZhipuChatClient chatClient; private final CustomerAgentPlanRegistry planRegistry; private final CustomerSemanticMenuRetriever semanticRetriever; private final String templateStoreCode; private final CustomerOrderIntentParser intentParser = new CustomerOrderIntentParser();
-    public CustomerOrderAgentApplicationService(MenuService menuService, FavoriteService favoriteService, OrderService orderService, JdbcTemplate jdbcTemplate, ZhipuChatClient chatClient, CustomerAgentPlanRegistry planRegistry, CustomerSemanticMenuRetriever semanticRetriever, @Value("${coffee.ai.template-store-code:jingan}") String templateStoreCode) {
-        this.menuService = menuService; this.favoriteService = favoriteService; this.orderService = orderService; this.jdbcTemplate = jdbcTemplate; this.chatClient = chatClient; this.planRegistry = planRegistry; this.semanticRetriever = semanticRetriever; this.templateStoreCode = templateStoreCode;
+    private final OrderService orderService; private final JdbcTemplate jdbcTemplate; private final ZhipuChatClient chatClient; private final CustomerAgentPlanRegistry planRegistry; private final CustomerSemanticMenuRetriever semanticRetriever; private final MenuPriceSelectionTool priceSelectionTool; private final String templateStoreCode; private final CustomerOrderIntentParser intentParser = new CustomerOrderIntentParser();
+    public CustomerOrderAgentApplicationService(MenuService menuService, FavoriteService favoriteService, OrderService orderService, JdbcTemplate jdbcTemplate, ZhipuChatClient chatClient, CustomerAgentPlanRegistry planRegistry, CustomerSemanticMenuRetriever semanticRetriever, MenuPriceSelectionTool priceSelectionTool, @Value("${coffee.ai.template-store-code:jingan}") String templateStoreCode) {
+        this.menuService = menuService; this.favoriteService = favoriteService; this.orderService = orderService; this.jdbcTemplate = jdbcTemplate; this.chatClient = chatClient; this.planRegistry = planRegistry; this.semanticRetriever = semanticRetriever; this.priceSelectionTool = priceSelectionTool; this.templateStoreCode = templateStoreCode;
     }
     @Override public Map<String, Object> plan(Long storeId, Long userId, String guestId, String message) {
         if (message == null || message.trim().isEmpty()) throw new ServiceException(400, "告诉我你的口味、预算或饮用场景吧");
@@ -43,30 +43,45 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         List<MenuItemDTO> candidates = products.stream()
                 .filter(p -> !intent.excludedCategories().contains(safe(p.getCategoryCode())))
                 .filter(p -> !matchesExcludedProduct(p, intent.excludedProducts()))
-                .filter(p -> intent.requiredCategories().isEmpty() || intent.requiredCategories().contains(safe(p.getCategoryCode())))
+                .filter(p -> intent.itemCount() < 3 || !isFillerOnly(p))
+                .filter(p -> intent.requiredCategories().isEmpty() || intent.requiredCategories().stream().anyMatch(category -> matchesCategory(p, category)))
                 .filter(p -> intent.budget() == null || affordable(storeId, p, intent.budget()))
                 .toList();
         if (candidates.isEmpty()) throw new ServiceException(404, "当前门店没有同时满足“" + intent.summary() + "”的商品；可以放宽预算或让我推荐");
-        List<Scored> ranked = candidates.stream().map(p -> new Scored(p, score(p, text, favCodes, favCats, hotNames, ratings, semanticScores, intent))).sorted(Comparator.comparingInt(Scored::score).reversed().thenComparing(x -> x.product().getId())).toList();
+        List<MenuItemDTO> priceOrdered = priceSelectionTool.sort(storeId, candidates, intent.pricePreference());
+        Map<String, Integer> priceRank = new HashMap<>();
+        for (int index = 0; index < priceOrdered.size(); index++) priceRank.put(priceOrdered.get(index).getCode(), index);
+        List<Scored> ranked = candidates.stream().map(p -> new Scored(p, score(p, text, favCodes, favCats, hotNames, ratings, semanticScores, intent))).sorted(Comparator.comparingInt((Scored item) -> priceRank.getOrDefault(item.product().getCode(), Integer.MAX_VALUE)).thenComparing(Comparator.comparingInt(Scored::score).reversed()).thenComparing(x -> x.product().getId())).toList();
         MenuItemDTO main = primaryCategoryFirst(ranked, intent.requiredCategories()).product();
         // 搭配从全菜单中挑，但不得把用户已明确指定的主品类换成别的品类。
         List<Scored> pairingRanked = products.stream().filter(p -> !intent.excludedCategories().contains(safe(p.getCategoryCode())))
                 .map(p -> new Scored(p, score(p, text, favCodes, favCats, hotNames, ratings, semanticScores, intent))).sorted(Comparator.comparingInt(Scored::score).reversed().thenComparing(x -> x.product().getId())).toList();
         MenuItemDTO pairing = explicitMentionedPair(pairingRanked, main, text, intent, storeId);
-        List<Map<String,Object>> items = new ArrayList<>(); items.add(item(storeId, main, text, favCodes, hotNames, ratings));
-        if (pairing != null) items.add(item(storeId, pairing, text, favCodes, hotNames, ratings));
+        List<MenuItemDTO> selectedProducts = intent.itemCount() >= 3
+                ? bestBundle(ranked, intent.itemCount(), storeId, intent.budget())
+                : new ArrayList<>(List.of(main));
+        if (intent.itemCount() >= 3 && selectedProducts.size() < intent.itemCount()) {
+            throw new ServiceException(404, "当前门店没有不超过预算的 " + intent.itemCount() + " 件可独立食用商品组合；可提高预算或减少件数");
+        }
+        if (intent.itemCount() < 3 && pairing != null) selectedProducts.add(pairing);
+        main = selectedProducts.get(0);
+        pairing = selectedProducts.size() > 1 ? selectedProducts.get(1) : null;
+        List<Map<String,Object>> items = planItems(storeId, selectedProducts, text, favCodes, hotNames, ratings, intent);
         List<Map<String,Object>> signals = new ArrayList<>();
         signals.add(Map.of("label", "需求理解", "value", intent.summary(), "used", true));
         signals.add(Map.of("label", "你的偏好", "value", favorites.isEmpty() ? "首次探索模式" : "已参考 " + favorites.size() + " 个收藏", "used", true));
         signals.add(Map.of("label", "门店销量", "value", hotNames.contains(main.getName()) ? "本周热销" : "菜单匹配", "used", true));
         if (ratings.containsKey(main.getId())) signals.add(Map.of("label", "用户反馈", "value", String.format(Locale.ROOT, "%.1f / 5", ratings.get(main.getId())), "used", true));
         String evidence = favCodes.contains(main.getCode()) ? "沿用了你常点的口味" : hotNames.contains(main.getName()) ? "它也是门店近期热选" : "它与你这次描述的口味最接近";
-        String fallback = "如果是我这会儿来点，我会先选「" + main.getName() + "」" + (pairing == null ? "。" : "，再配一份「" + pairing.getName() + "」。") + evidence + "。你愿意的话，我可以把这套搭配放进购物袋。";
+        String chosenNames = selectedProducts.stream().map(product -> "「" + product.getName() + "」").collect(Collectors.joining(" + "));
+        String fallback = "如果是我这会儿来点，我会选 " + chosenNames + "。" + evidence + "。你愿意的话，我可以把这套搭配放进购物袋。";
         String menu = ranked.stream().limit(8).map(x -> x.product().getName()).collect(Collectors.joining("、"));
         Map<String,Object> store = storeMeta(storeId); boolean template = templateStoreCode.equalsIgnoreCase(String.valueOf(store.get("code")));
         String role = template ? "你是 FIKA・静安店的点单顾问。静安店是品牌表达的参考，但不要套用固定文案；像熟悉咖啡的店员一样，根据顾客当下的情绪、口味和场景自然交流。" : "你是 FIKA「" + store.get("name") + "」的点单顾问。根据这家门店当前的菜单和顾客当下的需求，自然交流，像一位了解菜单的店员而不是机器人。";
         String categoryConstraint = "系统已经解析出不可改变的需求约束：" + intent.summary() + "。主推荐和搭配只能来自系统给出的商品，不能用别的品类替代，也不能忽略排除项或预算。";
-        String reply = chatClient.chat(role + " 用 2-4 句有温度的中文说明推荐，可以给出饮用感受或搭配理由，也可以自然地追问一个口味偏好。只能围绕系统确定的商品搭配表达，不能更改商品、数量、规格、价格或承诺优惠；不要声称已经下单。" + categoryConstraint,
+        String reply = intent.budget() != null || intent.pricePreference() != CustomerOrderIntentParser.PricePreference.NONE
+                ? (intent.budget() != null ? "已按总预算不高于 ¥" + intent.budget() + " 为你筛选。" : "已按当前门店真实菜单价格完成排序。") + fallback
+                : chatClient.chat(role + " 用 2-4 句有温度的中文说明推荐，可以给出饮用感受或搭配理由，也可以自然地追问一个口味偏好。只能围绕系统确定的商品搭配表达，不能更改商品、数量、规格、价格、配料或承诺优惠；不要声称已经下单。" + categoryConstraint,
                 "顾客需求：" + message.trim() + "\n系统推荐：" + fallback + "\n可选菜单参考：" + menu).orElse(fallback);
         String engine = reply.equals(fallback) ? "FIKA Customer Agent · rule-tools" : template ? "FIKA Customer Agent · 静安样板 GLM" : "FIKA Customer Agent · 通用 GLM";
         List<Map<String,Object>> options = new ArrayList<>();
@@ -75,8 +90,9 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         for (Scored choice : ranked) {
             MenuItemDTO optionMain = choice.product();
             MenuItemDTO optionPairing = explicitMentionedPair(pairingRanked, optionMain, text, intent, storeId);
-            List<Map<String,Object>> optionItems = new ArrayList<>(); optionItems.add(item(storeId, optionMain, text, favCodes, hotNames, ratings));
-            if (optionPairing != null) optionItems.add(item(storeId, optionPairing, text, favCodes, hotNames, ratings));
+            List<MenuItemDTO> optionProducts = new ArrayList<>(List.of(optionMain));
+            if (optionPairing != null) optionProducts.add(optionPairing);
+            List<Map<String,Object>> optionItems = planItems(storeId, optionProducts, text, favCodes, hotNames, ratings, intent);
             double optionTotal = optionItems.stream().mapToDouble(i -> ((Number) i.get("estimatedPrice")).doubleValue() * ((Number) i.get("quantity")).intValue()).sum();
             if (intent.budget() != null && optionTotal > intent.budget() + 0.0001) continue;
             String signature = optionItems.stream().map(i -> String.valueOf(i.get("productCode"))).sorted().collect(Collectors.joining("|"));
@@ -92,6 +108,15 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
             if (options.size() == 3) break;
         }
         if (options.isEmpty()) throw new ServiceException(404, "当前门店没有不超过 ¥" + intent.budget() + " 的可用搭配；可提高预算或改为单品推荐");
+        if (intent.itemCount() >= 3) {
+            options.clear();
+            List<Map<String,Object>> bundleItems = planItems(storeId, selectedProducts, text, favCodes, hotNames, ratings, intent);
+            Map<String,Object> bundlePromotion = new LinkedHashMap<>(promotionHint(storeId, bundleItems, products, intent));
+            List<AgentOrderLine> bundleLines = bundleItems.stream().map(i -> new AgentOrderLine(String.valueOf(i.get("productCode")), String.valueOf(i.get("size")), ((Number)i.get("quantity")).intValue())).toList();
+            bundlePromotion.put("canAddOn", false);
+            String bundleToken = planRegistry.issue(new AgentOrderPlan(storeId, userId, guestId, bundleLines, List.of(), "Agent 点单：" + message.trim().substring(0, Math.min(100, message.trim().length()))));
+            options.add(Map.of("title", "方案 1 · " + intent.itemCount() + " 件餐食组合", "items", bundleItems, "planToken", bundleToken, "promotion", bundlePromotion));
+        }
         Map<String,Object> selected = options.get(0);
         @SuppressWarnings("unchecked") List<Map<String,Object>> selectedItems = (List<Map<String,Object>>) selected.get("items");
         @SuppressWarnings("unchecked") Map<String,Object> promotion = (Map<String,Object>) selected.get("promotion");
@@ -105,13 +130,12 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         int s=10+Math.floorMod((p.getCode()+t).hashCode(),7); String c=safe(p.getCategoryCode()), temp=safe(p.getTemperature());
         if(codes.contains(p.getCode()))s+=36;if(cats.contains(c))s+=15;if(hot.contains(p.getName()))s+=13;if(ratings.getOrDefault(p.getId(),0d)>=4.2)s+=10;
         if (directlyMentioned(t, p)) s += 90;
-        if(has(t,"咖啡","提神","熬夜","困","苦")&&"coffee".equals(c))s+=21;if(has(t,"茶","清爽","轻","低糖","不苦")&&"tea".equals(c))s+=22;if(has(t,"甜","蛋糕","下午茶")&&"dessert".equals(c))s+=19;if(has(t,"饿","午餐","咸","轻食")&&"food".equals(c))s+=21;
+        if(has(t,"咖啡","提神","熬夜","困","苦")&&"coffee".equals(c))s+=21;if(has(t,"茶","清爽","轻","低糖","不苦")&&"tea".equals(c))s+=22;if(has(t,"甜","蛋糕","下午茶")&&"dessert".equals(c))s+=19;if(has(t,"饿","午餐","咸","轻食","吃的","吃点","正餐","小吃")&&matchesCategory(p,"food"))s+=28;
         // 语义相似度只参与排序，绝不覆盖上层的品类、预算、排除词安全约束。
         s += Math.max(0, (int)Math.round(semanticScores.getOrDefault(p.getCode(), 0d) * 28));
         if(intent.temperature()==CustomerOrderIntentParser.Temperature.COLD)s+=("COLD".equals(temp)||"BOTH".equals(temp))?20:-18;if(intent.temperature()==CustomerOrderIntentParser.Temperature.HOT)s+=("HOT".equals(temp)||"BOTH".equals(temp))?20:-18;return s;
     }
     private boolean complement(String a,String b){return Set.of("coffee","tea","ice").contains(a)?Set.of("dessert","food").contains(b):Set.of("coffee","tea","ice").contains(b);}
-    private Map<String,Object> item(Long storeId,MenuItemDTO p,String t,Set<String> codes,Set<String> hot,Map<Long,Double> ratings){String size=has(t,"大杯","大份","加大")?"LARGE":has(t,"小杯","小份")?"SMALL":"MEDIUM";Double r=ratings.get(p.getId());String reason=codes.contains(p.getCode())?"根据你的收藏偏好":r!=null&&r>=4.2?"用户反馈评分较高":hot.contains(p.getName())?"近期销量表现突出":"匹配本次口味需求";return Map.of("productCode",p.getCode(),"name",p.getName(),"description",safe(p.getDescription()),"imageUrl",safe(p.getImageUrl()),"categoryCode",p.getCategoryCode(),"temperature",p.getTemperature(),"size",size,"quantity",1,"estimatedPrice",menuService.calculatePrice(storeId,p.getCode(),size,null,List.of()),"reason",reason);}
     private Map<Long,Double> ratings(List<MenuItemDTO> ps){Map<Long,Double> out=new HashMap<>();for(MenuItemDTO p:ps)try{BigDecimal r=jdbcTemplate.queryForObject("SELECT AVG(rating) FROM feedback WHERE product_id = ? AND rating IS NOT NULL",BigDecimal.class,p.getId());if(r!=null)out.put(p.getId(),r.doubleValue());}catch(Exception ignored){}return out;}
     private Map<String,Object> storeMeta(Long storeId){try{return jdbcTemplate.queryForMap("SELECT code,name FROM store WHERE id=?",storeId);}catch(Exception ignored){return Map.of("code","","name","当前门店");}}
     private MenuItemDTO pairing(List<Scored> items, MenuItemDTO main, CustomerOrderIntentParser.Intent intent, Long storeId) {
@@ -119,7 +143,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         // “咖啡配甜点”这类明确双品类需求优先满足第二品类，再按分数排序。
         for (String category : intent.requiredCategories()) {
             if (!category.equals(safe(main.getCategoryCode()))) {
-                for (Scored item : items) if (category.equals(safe(item.product().getCategoryCode())) && !item.product().getCode().equals(main.getCode()) && totalWithinBudget(storeId, main, item.product(), intent.budget())) return item.product();
+                for (Scored item : items) if (matchesCategory(item.product(), category) && !item.product().getCode().equals(main.getCode()) && totalWithinBudget(storeId, main, item.product(), intent.budget())) return item.product();
             }
         }
         for(Scored x:items)if(!x.product().getCode().equals(main.getCode())&&complement(main.getCategoryCode(),x.product().getCategoryCode())&&totalWithinBudget(storeId, main, x.product(), intent.budget()))return x.product();
@@ -143,10 +167,10 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     }
     private String normalizeProductText(String value) { return safe(value).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\u4e00-\\u9fa5]", ""); }
     private Scored primaryCategoryFirst(List<Scored> ranked, List<String> categories) {
-        if (!categories.isEmpty()) for (Scored item : ranked) if (categories.get(0).equals(safe(item.product().getCategoryCode()))) return item;
+        if (!categories.isEmpty()) for (Scored item : ranked) if (matchesCategory(item.product(), categories.get(0))) return item;
         return ranked.get(0);
     }
-    private boolean affordable(Long storeId, MenuItemDTO product, int budget) { return menuService.calculatePrice(storeId, product.getCode(), "MEDIUM", null, List.of()) <= budget; }
+    private boolean affordable(Long storeId, MenuItemDTO product, int budget) { return minimumPrice(storeId, product) <= budget; }
     private boolean matchesExcludedProduct(MenuItemDTO product, Set<String> excludedTerms) { String name = safe(product.getName()).toLowerCase(Locale.ROOT); return excludedTerms.stream().map(term -> term.toLowerCase(Locale.ROOT)).anyMatch(term -> name.contains(term) || term.contains(name)); }
     private Map<String,Object> promotionHint(Long storeId, List<Map<String,Object>> selectedItems, List<MenuItemDTO> products, CustomerOrderIntentParser.Intent intent) {
         double total = selectedItems.stream().mapToDouble(i -> ((Number)i.get("estimatedPrice")).doubleValue() * ((Number)i.get("quantity")).intValue()).sum();
@@ -155,7 +179,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         if (gap > 12) return Map.of("type", "NONE", "text", "", "threshold", 48, "amount", total);
         List<MenuItemDTO> fillers = bestTopUp(storeId, products, intent, gap);
         if (fillers.isEmpty()) return Map.of("type", "NEAR", "text", "还差 ¥" + money(gap) + " 可享满 ¥48 减 ¥8。", "threshold", 48, "amount", total);
-        List<Map<String,Object>> suggestedItems = fillers.stream().map(p -> item(storeId, p, "", Set.of(), Set.of(), Map.of())).toList();
+        List<Map<String,Object>> suggestedItems = fillers.stream().map(p -> item(storeId, p, "MEDIUM", Set.of(), Set.of(), Map.of())).toList();
         double added = suggestedItems.stream().mapToDouble(i -> ((Number)i.get("estimatedPrice")).doubleValue()).sum();
         String names = fillers.stream().map(MenuItemDTO::getName).collect(Collectors.joining(" + "));
         return Map.of("type", "NEAR", "text", "还差 ¥" + money(gap) + "，加入「" + names + "」后合计 ¥" + money(total + added) + "，即可享满 ¥48 减 ¥8。", "threshold", 48, "amount", total, "suggestedItems", suggestedItems);
@@ -181,6 +205,58 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         return best;
     }
     private String money(double value) { return String.format(Locale.ROOT, "%.2f", value); }
-    private boolean totalWithinBudget(Long storeId, MenuItemDTO main, MenuItemDTO pairing, Integer budget) { return budget == null || menuService.calculatePrice(storeId, main.getCode(), "MEDIUM", null, List.of()) + menuService.calculatePrice(storeId, pairing.getCode(), "MEDIUM", null, List.of()) <= budget; }
+    /** 未指定规格时，组合可自动降为基础规格以满足总预算；用户指定规格时绝不擅自更改。 */
+    private boolean totalWithinBudget(Long storeId, MenuItemDTO main, MenuItemDTO pairing, Integer budget) {
+        return budget == null || minimumPrice(storeId, main) + minimumPrice(storeId, pairing) <= budget;
+    }
+    private double minimumPrice(Long storeId, MenuItemDTO product) {
+        return menuService.calculatePrice(storeId, product.getCode(), "SMALL", null, List.of());
+    }
+    private List<Map<String,Object>> planItems(Long storeId, List<MenuItemDTO> products, String text, Set<String> codes, Set<String> hot,
+                                               Map<Long,Double> ratings, CustomerOrderIntentParser.Intent intent) {
+        String requestedSize = has(text, "大杯", "大份", "加大") ? "LARGE" : has(text, "小杯", "小份") ? "SMALL" : null;
+        String size = requestedSize == null ? "MEDIUM" : requestedSize;
+        final String initialSize = size;
+        double total = products.stream().mapToDouble(product -> menuService.calculatePrice(storeId, product.getCode(), initialSize, null, List.of())).sum();
+        // 用户没有指定规格、且默认规格超预算时，整体切换为基础规格；不会部分降级造成解释困难。
+        if (requestedSize == null && intent.budget() != null && total > intent.budget()) size = "SMALL";
+        final String resolvedSize = size;
+        return products.stream().map(product -> item(storeId, product, resolvedSize, codes, hot, ratings)).toList();
+    }
+    private Map<String,Object> item(Long storeId, MenuItemDTO p, String size, Set<String> codes, Set<String> hot, Map<Long,Double> ratings) {
+        Double r=ratings.get(p.getId());String reason=codes.contains(p.getCode())?"根据你的收藏偏好":r!=null&&r>=4.2?"用户反馈评分较高":hot.contains(p.getName())?"近期销量表现突出":"匹配本次口味需求";
+        return Map.of("productCode",p.getCode(),"name",p.getName(),"description",safe(p.getDescription()),"imageUrl",safe(p.getImageUrl()),"categoryCode",p.getCategoryCode(),"temperature",p.getTemperature(),"size",size,"quantity",1,"estimatedPrice",menuService.calculatePrice(storeId,p.getCode(),size,null,List.of()),"reason",reason);
+    }
+    private boolean matchesCategory(MenuItemDTO product, String category) {
+        if (category.equals(safe(product.getCategoryCode()))) return true;
+        String text = normalizeProductText(product.getName() + " " + product.getCode() + " " + product.getDescription());
+        return switch (category) {
+            case "food" -> has(text, "汉堡", "薯条", "三明治", "沙拉", "贝果", "炸鸡", "炸物", "小吃", "鸡翅", "可颂", "曲奇", "蛋挞", "芝士", "蛋糕");
+            case "coffee" -> has(text, "咖啡", "拿铁", "美式", "摩卡", "浓缩", "冷萃", "卡布奇诺");
+            case "dessert" -> has(text, "蛋糕", "甜点", "甜品", "曲奇", "可颂");
+            case "tea" -> has(text, "奶茶", "果茶", "茶饮");
+            case "ice" -> has(text, "冰淇淋", "冰激凌", "冰沙", "沙冰", "思慕雪");
+            default -> false;
+        };
+    }
+    /** 迷你曲奇/可颂虽标记为凑单，也能独立食用；仅排除珍珠、椰果等纯配料型凑单品。 */
+    private boolean isFillerOnly(MenuItemDTO product) {
+        if (product.getTopup() == null || product.getTopup() != 1) return false;
+        String text = normalizeProductText(product.getName() + " " + product.getCode() + " " + product.getDescription());
+        return has(text, "小料", "珍珠", "椰果", "芋圆", "矿泉水", "气泡水");
+    }
+    /** 枚举至多三件不同的可独立食用商品，优先需求匹配度，次选更充分利用预算的组合。 */
+    private List<MenuItemDTO> bestBundle(List<Scored> ranked, int count, Long storeId, Integer budget) {
+        List<Scored> candidates = ranked.stream().filter(item -> !isFillerOnly(item.product())).limit(24).toList();
+        List<MenuItemDTO> best = List.of(); int bestScore = Integer.MIN_VALUE; double bestTotal = -1;
+        for (int a = 0; a < candidates.size(); a++) for (int b = a + 1; b < candidates.size(); b++) for (int c = b + 1; c < candidates.size(); c++) {
+            List<MenuItemDTO> bundle = List.of(candidates.get(a).product(), candidates.get(b).product(), candidates.get(c).product());
+            double total = bundle.stream().mapToDouble(product -> minimumPrice(storeId, product)).sum();
+            if (budget != null && total > budget + 0.0001) continue;
+            int score = candidates.get(a).score() + candidates.get(b).score() + candidates.get(c).score();
+            if (score > bestScore || (score == bestScore && total > bestTotal)) { best = bundle; bestScore = score; bestTotal = total; }
+        }
+        return best;
+    }
     private boolean has(String t,String... words){for(String w:words)if(t.contains(w))return true;return false;} private String safe(String s){return s==null?"":s;} private record Scored(MenuItemDTO product,int score){}
 }
