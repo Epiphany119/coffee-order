@@ -68,7 +68,7 @@ public class OrderController {
     public Result<OrderResponse> updateUserOrder(@PathVariable Long id, @RequestParam String action,
                                                  @RequestParam Long userId) {
         AccessGuard.requireUser(userId);
-        if (!"cancel".equalsIgnoreCase(action)) throw new ServiceException(400, "用户仅可取消待支付订单");
+        if (!"cancel".equalsIgnoreCase(action)) throw new ServiceException(400, "用户仅可取消未完成订单");
         if (!ownsOrder(id, userId, null)) throw new ServiceException(404, "订单不存在");
         return Result.success(orderService.updateOrderStatus(id, action, true));
     }

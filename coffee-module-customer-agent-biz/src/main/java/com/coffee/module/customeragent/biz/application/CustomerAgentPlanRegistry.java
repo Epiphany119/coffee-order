@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class CustomerAgentPlanRegistry {
     private static final Duration TTL = Duration.ofMinutes(5);
     /** 原方案最多两项，凑单后允许追加一项；仍限制在小型、安全的点单方案范围内。 */
-    private static final int MAX_PLAN_LINES = 5;
+    private static final int MAX_PLAN_LINES = 10;
     private final ConcurrentHashMap<String, Entry> plans = new ConcurrentHashMap<>();
 
     public String issue(AgentOrderPlan plan) {

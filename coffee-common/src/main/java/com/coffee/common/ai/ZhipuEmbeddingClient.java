@@ -29,7 +29,7 @@ public class ZhipuEmbeddingClient {
     private final String apiKey, endpoint, model;
     private final int dimensions;
     private final Duration timeout;
-    private final Semaphore permit = new Semaphore(1);
+    private final Semaphore permit = new Semaphore(2);
 
     public ZhipuEmbeddingClient(ObjectMapper json,
                                 @Value("${coffee.ai.zhipu.api-key:}") String apiKey,

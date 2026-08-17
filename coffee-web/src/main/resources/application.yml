@@ -4,8 +4,15 @@ server:
 spring:
   application:
     name: coffee-web
+  # ============================================================
+  # 配置切换说明：
+  #   local  - 本地开发（使用 application-local.yml 的本地配置）
+  #   dev    - 线上开发（使用 application-dev.yml 的线上数据库配置）
+  # 只需修改下一行的 active 值即可切换环境
+  # ============================================================
   profiles:
-    default: dev
+    active: local
+    # active: dev  # 线上开发时取消注释，注释掉上面的 local
 
 management:
   tracing:
@@ -63,7 +70,9 @@ coffee:
       # 512 维兼顾中文菜单召回质量、MySQL 缓存体积和接口成本。
       embedding-dimensions: ${ZHIPU_EMBEDDING_DIMENSIONS:512}
       # 交互型 Agent 的时间预算；超时会立即回退到受控规则方案。
-      timeout-seconds: ${ZHIPU_TIMEOUT_SECONDS:5}
+      timeout-seconds: ${ZHIPU_TIMEOUT_SECONDS:15}
+      # Chat 模型首包延迟更长，独立给 25 秒预算；流式响应在生成完成后立即释放连接。
+      chat-timeout-seconds: ${ZHIPU_CHAT_TIMEOUT_SECONDS:25}
     milvus:
       # Docker 默认暴露的 gRPC 端口；关闭开关时自动回退 MySQL 关键词检索。
       enabled: ${MILVUS_ENABLED:true}

@@ -325,8 +325,9 @@ public class OrderApplicationService implements OrderService {
         // 用户端/游客端仅允许取消尚未支付的订单；已支付订单必须通过商家售后流程处理，
         // 避免客户端绕过退款、积分与库存等后续业务。
         if (isUserOrder && (action == null || !"cancel".equalsIgnoreCase(action)
-                || order.getStatus() != Order.OrderStatus.UNPAID)) {
-            throw new ServiceException(400, "仅待支付订单可以由用户取消");
+                || order.getStatus() == Order.OrderStatus.COMPLETED
+                || order.getStatus() == Order.OrderStatus.CANCELED)) {
+            throw new ServiceException(400, "仅未完成订单可由用户取消");
         }
         Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(order.getStatus().name(), action);
         orderRepository.updateStatus(orderId, newStatus);

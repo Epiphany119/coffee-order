@@ -65,10 +65,10 @@ public class BusinessAgentOrchestrator {
         knowledge.upsert(storeId, title, content, source == null || source.isBlank() ? "merchant-manual" : source);
     }
 
-    public int bootstrapMenuKnowledge(RequestIdentity identity, Long storeId) {
+    public void bootstrapMenuKnowledge(RequestIdentity identity, Long storeId) {
         if (identity.kind() != RequestIdentity.Kind.MERCHANT) throw new IllegalArgumentException("只有商家可初始化门店知识");
         assertMerchantOwnsStore(identity, storeId);
-        return menuKnowledgeBootstrap.bootstrap(storeId);
+        menuKnowledgeBootstrap.bootstrapAsync(storeId);
     }
 
     /**

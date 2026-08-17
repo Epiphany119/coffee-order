@@ -2,12 +2,16 @@ package com.coffee.web.security;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-/** 解析 Authorization: Bearer &lt;token&gt;，将经校验的身份放入请求上下文。 */
+/** 解析 Authorization: Bearer <token>，将经校验的身份放入请求上下文。 */
 @Component
 public class TokenAuthenticationInterceptor implements HandlerInterceptor {
+    private static final Logger log = LoggerFactory.getLogger(TokenAuthenticationInterceptor.class);
+
     private final TokenService tokenService;
 
     public TokenAuthenticationInterceptor(TokenService tokenService) { this.tokenService = tokenService; }
@@ -23,9 +27,16 @@ public class TokenAuthenticationInterceptor implements HandlerInterceptor {
         String authorization = request.getHeader("Authorization");
         if (authorization != null && !authorization.isBlank()) {
             if (!authorization.startsWith("Bearer ")) {
-                throw new com.coffee.common.core.exception.ServiceException(401, "登录凭证格式错误");
+                log.warn("Invalid Authorization header format: {}", request.getRequestURI());
+                return true;
             }
-            RequestIdentityHolder.set(tokenService.verify(authorization.substring(7).trim()));
+            try {
+                RequestIdentityHolder.set(tokenService.verify(authorization.substring(7).trim()));
+            } catch (Exception e) {
+                // Token 无效或过期时不阻断请求：公开接口（如店铺列表、菜单）
+                // 仍需正常访问，受保护接口会在业务层校验身份。
+                log.debug("Token verification failed for {}: {}", request.getRequestURI(), e.getMessage());
+            }
         }
         return true;
     }

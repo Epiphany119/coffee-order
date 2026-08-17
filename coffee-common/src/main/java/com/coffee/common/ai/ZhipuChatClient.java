@@ -40,7 +40,7 @@ public class ZhipuChatClient {
                            @Value("${coffee.ai.zhipu.api-key:}") String apiKey,
                            @Value("${coffee.ai.zhipu.endpoint:https://open.bigmodel.cn/api/paas/v4/chat/completions}") String endpoint,
                            @Value("${coffee.ai.zhipu.model:glm-5.2}") String model,
-                           @Value("${coffee.ai.zhipu.timeout-seconds:12}") int timeoutSeconds) {
+                           @Value("${coffee.ai.zhipu.chat-timeout-seconds:25}") int timeoutSeconds) {
         this.json = json;
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.endpoint = endpoint;
@@ -78,7 +78,7 @@ public class ZhipuChatClient {
             if (response.statusCode() / 100 != 2) {
                 if (response.statusCode() == 429) {
                     long retrySeconds = response.headers().firstValue("Retry-After")
-                            .flatMap(this::positiveLong).orElse(30L);
+                            .flatMap(this::positiveLong).orElse(10L);
                     rateLimitedUntilMillis = System.currentTimeMillis() + retrySeconds * 1000;
                     log.warn("Zhipu rate limited; pausing model calls for {} seconds", retrySeconds);
                 } else {
@@ -104,16 +104,84 @@ public class ZhipuChatClient {
             if (!content.isEmpty()) return Optional.of(content.toString().trim());
             log.warn("Zhipu stream completed without displayable content");
         } catch (Exception e) {
-            // Agent 能力必须可降级，不能因第三方模型故障影响下单或营销流程。
             if (e instanceof HttpTimeoutException) {
-                rateLimitedUntilMillis = System.currentTimeMillis() + 30_000;
-                log.warn("Zhipu request timed out; pausing model calls for 30 seconds");
+                log.warn("Zhipu chat request timed out; will retry on next call");
             }
             log.warn("Zhipu chat request failed: {}", e.getClass().getSimpleName());
         } finally {
             requestPermit.release();
         }
         return Optional.empty();
+    }
+
+    /** 非流式、完整返回模型生成的 JSON 文本；用于结构化意图解析 / 组合方案生成。 */
+    public Optional<String> callJson(String systemPrompt, String userPrompt, int maxTokens) {
+        if (apiKey.isBlank() || System.currentTimeMillis() < rateLimitedUntilMillis) return Optional.empty();
+        if (!requestPermit.tryAcquire()) return Optional.empty();
+        try {
+            String body = json.writeValueAsString(Map.of(
+                    "model", model,
+                    "temperature", 0.1,
+                    "stream", false,
+                    "thinking", Map.of("type", "disabled"),
+                    "max_tokens", Math.max(200, maxTokens),
+                    "messages", List.of(
+                            Map.of("role", "system", "content", systemPrompt),
+                            Map.of("role", "user", "content", userPrompt)
+                    )
+            ));
+            HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
+                    .timeout(timeout)
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() / 100 != 2) {
+                if (response.statusCode() == 429) {
+                    long retrySeconds = response.headers().firstValue("Retry-After")
+                            .flatMap(this::positiveLong).orElse(10L);
+                    rateLimitedUntilMillis = System.currentTimeMillis() + retrySeconds * 1000;
+                    log.warn("Zhipu rate limited; pausing model calls for {} seconds", retrySeconds);
+                } else {
+                    log.warn("Zhipu callJson failed with HTTP status {}", response.statusCode());
+                }
+                return Optional.empty();
+            }
+            JsonNode root = json.readTree(response.body());
+            JsonNode contentNode = root.at("/choices/0/message/content");
+            if (contentNode.isTextual()) {
+                String text = contentNode.asText().trim();
+                log.debug("Zhipu callJson raw: {}", text.length() > 500 ? text.substring(0, 500) + "..." : text);
+                return Optional.of(text);
+            }
+            log.warn("Zhipu callJson returned non-text content node");
+        } catch (Exception e) {
+            if (e instanceof HttpTimeoutException) {
+                log.warn("Zhipu callJson timed out");
+            } else {
+                log.warn("Zhipu callJson failed: {}", e.getClass().getSimpleName(), e);
+            }
+        } finally {
+            requestPermit.release();
+        }
+        return Optional.empty();
+    }
+
+    /** 从 LLM 返回文本中提取纯 JSON（去除可能的 markdown 包裹 / 解释文字）。 */
+    public String extractJson(String raw) {
+        if (raw == null || raw.isBlank()) return "{}";
+        String text = raw.trim();
+        if (text.startsWith("```")) {
+            int firstNewline = text.indexOf('\n');
+            if (firstNewline > 0) text = text.substring(firstNewline + 1);
+            int lastFence = text.lastIndexOf("```");
+            if (lastFence >= 0) text = text.substring(0, lastFence);
+        }
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        if (start >= 0 && end > start) text = text.substring(start, end + 1);
+        return text.trim();
     }
 
     private boolean endsSentence(StringBuilder text) {

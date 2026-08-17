@@ -42,8 +42,8 @@ public class BusinessAgentController {
     @PostMapping("/knowledge/bootstrap/menu")
     public Result<Map<String, Object>> bootstrapMenuKnowledge(@RequestBody KnowledgeBootstrapRequest request) {
         if (request == null || request.storeId == null) throw new ServiceException(400, "请选择要初始化的门店");
-        int count = orchestrator.bootstrapMenuKnowledge(AccessGuard.currentIdentity(), request.storeId);
-        return Result.success(Map.of("accepted", true, "count", count, "message", "当前有效菜单已批量向量化"));
+        orchestrator.bootstrapMenuKnowledge(AccessGuard.currentIdentity(), request.storeId);
+        return Result.success(Map.of("accepted", true, "message", "菜单知识正在后台异步初始化，稍等片刻即可生效"));
     }
 
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
