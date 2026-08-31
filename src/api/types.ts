@@ -356,7 +356,7 @@ export interface DeliveryAddress {
   updatedAt?: string | number[]
 }
 
-export type DeliveryOrderStatus = 'OPEN' | 'CLAIMED' | 'PICKED_UP' | 'DELIVERING' | 'DELIVERED' | 'CANCELED'
+export type DeliveryOrderStatus = 'WAITING_MERCHANT' | 'OPEN' | 'CLAIMED' | 'PICKED_UP' | 'DELIVERING' | 'DELIVERED' | 'CANCELED'
 
 export interface DeliveryOrder {
   id: number
@@ -571,8 +571,13 @@ export const CATEGORY_META: Record<string, [string, string]> = {
 
 export const STATUS_LABELS: Record<string, string> = {
   UNPAID:    '待支付',
-  PENDING:   '待制作',
-  PREPARING:  '制作中',
+  PENDING:   '等待商家接单',
+  ACCEPTED:  '商家已接单，等待制作',
+  PREPARING: '商家制作中',
+  READY_FOR_DELIVERY: '商家制作完毕，待骑手接单',
+  RIDER_ASSIGNED: '骑手已接单',
+  DELIVERING: '骑手配送中',
+  DELIVERED:  '骑手已送达，请取餐',
   COMPLETED:  '已完成',
   CANCELED:   '已取消'
 }

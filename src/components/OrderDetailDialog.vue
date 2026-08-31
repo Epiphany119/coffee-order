@@ -91,7 +91,7 @@ async function copyOrderNo() {
         <el-tag
           v-if="order"
           size="small"
-          :type="order.status === 'COMPLETED' ? 'success' : order.status === 'CANCELED' ? 'danger' : order.status === 'PREPARING' ? '' : 'warning'"
+          :type="['COMPLETED', 'DELIVERED'].includes(order.status) ? 'success' : order.status === 'CANCELED' ? 'danger' : order.status === 'PREPARING' ? '' : 'warning'"
         >
           {{ STATUS_LABELS[order.status] || order.status }}
         </el-tag>

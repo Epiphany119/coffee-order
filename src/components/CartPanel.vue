@@ -178,7 +178,7 @@ const emit = defineEmits<{
     >
       {{ cartCount ? '确认这一单' : '选一杯再出发' }}
     </button>
-    <p class="secure-note">🔒 安全结算 · 下单即开始制作</p>
+    <p class="secure-note">🔒 安全结算 · 下单后按门店履约流程制作</p>
   </aside>
 </template>
 

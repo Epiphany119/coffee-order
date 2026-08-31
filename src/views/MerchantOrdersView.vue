@@ -13,10 +13,12 @@ const storeId = computed(() => mstore.joinedStore?.storeId)
 const templateMode = computed(() => isTemplateStore(storeId.value))
 
 const STATUS_TEXT: Record<string, string> = {
-  PENDING: '待接单', PREPARING: '制作中', COMPLETED: '已完成', CANCELED: '已取消'
+  PENDING: '待接单', ACCEPTED: '已接单待制作', PREPARING: '制作中',
+  READY_FOR_DELIVERY: '待骑手接单', RIDER_ASSIGNED: '骑手已接单',
+  DELIVERING: '配送中', DELIVERED: '已送达', COMPLETED: '已完成', CANCELED: '已取消'
 }
 
-const STATUS_KEYS = ['PENDING', 'PREPARING', 'COMPLETED', 'CANCELED']
+const STATUS_KEYS = ['PENDING', 'ACCEPTED', 'PREPARING', 'READY_FOR_DELIVERY', 'RIDER_ASSIGNED', 'DELIVERING', 'DELIVERED', 'COMPLETED', 'CANCELED']
 
 const tabs = ref<{ key: string; count: number }[]>([])
 const activeTab = ref('全部')
@@ -31,8 +33,9 @@ const filtered = computed(() =>
 )
 const orderPulse = computed(() => ({
   pending: orders.value.filter(o => o.status === 'PENDING').length,
+  accepted: orders.value.filter(o => o.status === 'ACCEPTED').length,
   making: orders.value.filter(o => o.status === 'PREPARING').length,
-  completed: orders.value.filter(o => o.status === 'COMPLETED').length
+  completed: orders.value.filter(o => ['COMPLETED', 'DELIVERED'].includes(o.status)).length
 }))
 
 function rebuildTabs() {
@@ -105,7 +108,7 @@ function fbTime(v?: string) {
   return v ? String(v).replace('T', ' ').slice(0, 16) : '-'
 }
 
-async function doAction(o: OrderRecord, action: 'start' | 'complete' | 'cancel', tip: string) {
+async function doAction(o: OrderRecord, action: 'accept' | 'start' | 'complete' | 'cancel', tip: string) {
   if (storeId.value == null) return
   try {
     await orderApi.merchantAction(o.id, action, storeId.value)
@@ -118,11 +121,15 @@ async function doAction(o: OrderRecord, action: 'start' | 'complete' | 'cancel',
 }
 
 function accept(o: OrderRecord) {
-  doAction(o, 'start', '已接单')
+  doAction(o, 'accept', '已接单，等待制作')
+}
+
+function startMaking(o: OrderRecord) {
+  doAction(o, 'start', '已开始制作')
 }
 
 function finish(o: OrderRecord) {
-  doAction(o, 'complete', '已完成')
+  doAction(o, 'complete', o.fulfillmentType === 'DELIVERY' ? '已完成制作，配送任务已发布' : '已完成出餐')
 }
 
 function cancelOrder(o: OrderRecord) {
@@ -130,8 +137,9 @@ function cancelOrder(o: OrderRecord) {
 }
 
 function badgeClass(s: string) {
-  if (s === 'PENDING') return 'pending'
+  if (s === 'PENDING' || s === 'ACCEPTED') return 'pending'
   if (s === 'PREPARING') return 'making'
+  if (['READY_FOR_DELIVERY', 'RIDER_ASSIGNED', 'DELIVERING'].includes(s)) return 'delivery'
   if (s === 'CANCELED') return 'cancel'
   return 'done'
 }
@@ -164,7 +172,7 @@ async function copyOrderNo(no: string) {
   <div class="m-orders">
     <section class="orders-hero">
       <div><p>ORDER FLOW · LIVE</p><h2>把每一份期待，<em>准时交到顾客手里。</em></h2><small>点击订单查看完整明细、备注和顾客反馈。</small></div>
-      <div class="pulse-stats"><span><b>{{ orderPulse.pending }}</b> 待接单</span><span><b>{{ orderPulse.making }}</b> 制作中</span><span><b>{{ orderPulse.completed }}</b> 已完成</span></div>
+      <div class="pulse-stats"><span><b>{{ orderPulse.pending }}</b> 待接单</span><span><b>{{ orderPulse.accepted }}</b> 待制作</span><span><b>{{ orderPulse.making }}</b> 制作中</span><span><b>{{ orderPulse.completed }}</b> 已完成</span></div>
     </section>
     <!-- 状态筛选 -->
     <div class="tabs">
@@ -205,10 +213,15 @@ async function copyOrderNo(no: string) {
             @click.stop="accept(o)"
           >接单</button>
           <button
+            v-else-if="!templateMode && o.status === 'ACCEPTED'"
+            class="act-btn primary"
+            @click.stop="startMaking(o)"
+          >开始制作</button>
+          <button
             v-else-if="!templateMode && o.status === 'PREPARING'"
             class="act-btn"
             @click.stop="finish(o)"
-          >完成出餐</button>
+          >{{ o.fulfillmentType === 'DELIVERY' ? '完成制作并发布' : '完成出餐' }}</button>
         </div>
       </div>
       <div v-if="filtered.length === 0" class="empty">该状态下暂无订单</div>
@@ -273,8 +286,8 @@ async function copyOrderNo(no: string) {
         </div>
         <div class="drawer-actions">
           <button v-if="!templateMode && current.status === 'PENDING'" class="drawer-btn primary" @click="accept(current); drawerOpen = false">确认接单</button>
-          <button v-if="!templateMode && current.status === 'PENDING'" class="drawer-btn danger" @click="cancelOrder(current)">取消订单</button>
-          <button v-else-if="!templateMode && current.status === 'PREPARING'" class="drawer-btn" @click="finish(current); drawerOpen = false">完成出餐</button>
+          <button v-else-if="!templateMode && current.status === 'ACCEPTED'" class="drawer-btn primary" @click="startMaking(current); drawerOpen = false">开始制作</button>
+          <button v-else-if="!templateMode && current.status === 'PREPARING'" class="drawer-btn" @click="finish(current); drawerOpen = false">{{ current.fulfillmentType === 'DELIVERY' ? '完成制作并发布' : '完成出餐' }}</button>
         </div>
       </template>
     </el-drawer>
@@ -396,6 +409,7 @@ async function copyOrderNo(no: string) {
 
   &.pending { background: #fdf1e7; color: #b78325; }
   &.making { background: var(--soft-orange); color: #b3561e; }
+  &.delivery { background: #edf3f8; color: #55718d; }
   &.done { background: #e4f3e6; color: #2e7d32; }
   &.cancel { background: #f1efea; color: #9a948a; }
 }

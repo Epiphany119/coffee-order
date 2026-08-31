@@ -41,11 +41,15 @@ const recentOrders = ref<OrderRecord[]>([])
 const hotProducts = ref<{ name: string; quantity: number; amount: number }[]>([])
 
 const STATUS_TEXT: Record<string, string> = {
-  PENDING: '待接单', PREPARING: '制作中', COMPLETED: '已完成', CANCELED: '已取消'
+  PENDING: '待接单', ACCEPTED: '已接单待制作', PREPARING: '制作中',
+  READY_FOR_DELIVERY: '待骑手接单', RIDER_ASSIGNED: '骑手已接单',
+  DELIVERING: '配送中', DELIVERED: '已送达', COMPLETED: '已完成', CANCELED: '已取消'
 }
 
 const statusClass = (s: string) =>
-  s === 'PREPARING' ? 'making' : s === 'PENDING' ? 'pending' : s === 'CANCELED' ? 'cancel' : 'done'
+  s === 'PREPARING' ? 'making' : ['PENDING', 'ACCEPTED'].includes(s) ? 'pending'
+    : ['READY_FOR_DELIVERY', 'RIDER_ASSIGNED', 'DELIVERING'].includes(s) ? 'delivery'
+      : s === 'CANCELED' ? 'cancel' : 'done'
 
 const maxSales = computed(() => Math.max(1, ...sales.value.map(w => w.amount)))
 const totalSeats = computed(() => seatOverview.value.reduce((sum, s) => sum + s.count, 0))
@@ -456,6 +460,7 @@ onMounted(loadDashboard)
 
   &.making { background: var(--soft-orange); color: #b3561e; }
   &.pending { background: #fdf1e7; color: #b78325; }
+  &.delivery { background: #edf3f8; color: #55718d; }
   &.done { background: #e4f3e6; color: #2e7d32; }
   &.cancel { background: #f5f0ea; color: #9a9083; }
 }

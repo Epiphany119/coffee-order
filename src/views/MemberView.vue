@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 import { orderApi, favoriteApi, membershipApi, afterSaleApi, notificationApi, flashSaleApi, memberApi } from '@/api'
@@ -20,6 +20,7 @@ const emit = defineEmits<{
 const activeTab = ref<'orders' | 'favorites' | 'points' | 'notifications' | 'flashClaims'>('orders')
 const notifications = ref<any[]>([])
 const flashClaims = ref<FlashSaleClaimRecord[]>([])
+let refreshTimer: number | undefined
 
 function changeTab(tab: typeof activeTab.value) {
   activeTab.value = tab
@@ -35,7 +36,17 @@ onMounted(async () => {
     await loadFeedbacks()
     await loadNotifications()
     await loadFlashClaims()
+    refreshTimer = window.setInterval(() => {
+      if (store.isLoggedIn && store.currentUser?.id) {
+        void loadOrders()
+        void loadNotifications()
+      }
+    }, 8000)
   }
+})
+
+onUnmounted(() => {
+  if (refreshTimer != null) window.clearInterval(refreshTimer)
 })
 async function loadNotifications() { if (store.currentUser?.id) notifications.value = await notificationApi.getUserNotifications(store.currentUser.id) || [] }
 async function loadFlashClaims() {
@@ -128,7 +139,7 @@ function openDetail(o: any) {
   detailVisible.value = true
 }
 
-/** 反馈建议弹窗（仅已完成订单） */
+/** 反馈建议弹窗（仅已完成/骑手已送达订单） */
 const feedbackVisible = ref(false)
 const feedbackOrder = ref<any>(null)
 
@@ -167,7 +178,7 @@ function openFeedbackRecord(o: any) {
   recordVisible.value = true
 }
 
-/** 售后申请弹窗（仅已完成订单） */
+/** 售后申请弹窗（仅已完成/骑手已送达订单） */
 const afterSaleVisible = ref(false)
 const afterSaleOrder = ref<any>(null)
 
@@ -191,7 +202,7 @@ function openPay(o: any) {
   payVisible.value = true
 }
 
-/** 支付成功：刷新订单列表（UNPAID → PENDING） */
+/** 支付成功：刷新订单列表（UNPAID → PENDING，等待商家接单） */
 async function onPaid() {
   await loadOrders()
 }
@@ -262,12 +273,12 @@ function formatTime(value: string | number[]) {
 
 const m = computed(() => store.memberDashboard)
 
-/** 总共已省金额：优先用后端 dashboard 的 totalSaved，接口未返回时从订单列表兜底计算（已完成订单 原价-实付 之和） */
+/** 总共已省金额：优先用后端 dashboard 的 totalSaved，接口未返回时从订单列表兜底计算 */
 const totalSaved = computed(() => {
   const fromApi = store.memberDashboard?.totalSaved
   if (fromApi != null && fromApi > 0) return fromApi
   return Math.round(orders.value
-    .filter(o => o.status === 'COMPLETED')
+    .filter(o => ['COMPLETED', 'DELIVERED'].includes(o.status))
     .reduce((s, o) => s + Math.max(0, (o.originalPrice || 0) - (o.finalPrice || 0)), 0) * 100) / 100
 })
 
@@ -387,7 +398,7 @@ function handleLogout() {
       <div class="orders-inner">
         <div class="filter-row">
           <el-tag
-            v-for="f in ['all', 'UNPAID', 'PENDING', 'PREPARING', 'COMPLETED', 'CANCELED']"
+            v-for="f in ['all', 'UNPAID', 'PENDING', 'ACCEPTED', 'PREPARING', 'READY_FOR_DELIVERY', 'RIDER_ASSIGNED', 'DELIVERING', 'DELIVERED', 'COMPLETED', 'CANCELED']"
             :key="f"
             :type="orderFilter === f ? 'dark' : 'info'"
             class="filter-chip"
@@ -401,7 +412,7 @@ function handleLogout() {
           <div v-for="o in filteredOrders" :key="o.id" class="order-card" :class="{ canceled: o.status === 'CANCELED' }" @click="openDetail(o)">
             <div class="order-card-top">
               <span>#{{ o.id }}</span>
-              <el-tag size="small" :type="o.status === 'COMPLETED' ? 'success' : o.status === 'CANCELED' ? 'danger' : o.status === 'UNPAID' ? 'danger' : o.status === 'PREPARING' ? '' : 'warning'">
+              <el-tag size="small" :type="['COMPLETED', 'DELIVERED'].includes(o.status) ? 'success' : o.status === 'CANCELED' ? 'danger' : o.status === 'UNPAID' ? 'danger' : o.status === 'PREPARING' ? '' : 'warning'">
                 {{ STATUS_LABELS[o.status] || o.status }}
               </el-tag>
             </div>
@@ -438,13 +449,13 @@ function handleLogout() {
                 @click.stop="openPay(o)"
               >去支付</el-button>
               <el-button
-                v-if="o.status === 'UNPAID' || o.status === 'PENDING'"
+                v-if="o.status === 'UNPAID'"
                 text
                 type="danger"
                 size="small"
                 @click.stop="cancelOrder(o.id)"
               >取消订单</el-button>
-              <template v-if="o.status === 'COMPLETED'">
+              <template v-if="['COMPLETED', 'DELIVERED'].includes(o.status)">
                 <el-button text size="small" @click.stop="openFeedback(o)">反馈建议</el-button>
                 <el-button text size="small" @click.stop="openAfterSale(o)">售后</el-button>
               </template>

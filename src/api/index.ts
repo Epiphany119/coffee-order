@@ -494,7 +494,7 @@ export const orderApi = {
   getStoreOrders: (storeId: number, status?: string) =>
     request.get<any, OrderRecord[]>('/orders', { params: { storeId, status } }),
 
-  /** 商家端：订单状态操作（start 接单 / complete 完成 / cancel 取消） */
+  /** 商家端：订单状态操作（accept 接单 / start 开始制作 / complete 完成制作） */
   merchantAction: (orderId: number, action: string, storeId: number) =>
     request.post<any, OrderResponse>(`/orders/${orderId}/action?action=${action}&storeId=${storeId}`)
 }

@@ -191,7 +191,7 @@ function statusClass(status: string) {
 }
 
 function displayStatus(order: DeliveryOrder) {
-  return order.statusLabel || ({ OPEN: '待抢单', CLAIMED: '已抢单', PICKED_UP: '已取餐', DELIVERING: '配送中', DELIVERED: '已送达', CANCELED: '已取消' }[order.status] || order.status)
+  return order.statusLabel || ({ WAITING_MERCHANT: '等待商家完成制作', OPEN: '待抢单', CLAIMED: '已抢单', PICKED_UP: '已取餐', DELIVERING: '配送中', DELIVERED: '已送达', CANCELED: '已取消' }[order.status] || order.status)
 }
 
 function formatTime(value: string | number[] | null | undefined) {
@@ -221,13 +221,13 @@ function formatTime(value: string | number[] | null | undefined) {
       <section class="auth-intro">
         <p class="eyebrow">FIKA DELIVERY · C-SIDE</p>
         <h1>把每一杯咖啡，<em>准时送到。</em></h1>
-        <p class="intro-copy">这里是 FIKA 的外卖配送窗口。顾客完成外卖下单并支付后，订单会自动进入待抢列表，你可以自由选择想接的单。</p>
+        <p class="intro-copy">这里是 FIKA 的外卖配送窗口。顾客完成下单并支付后，订单会先等待商家接单和制作；商家完成制作发布任务后，你才可以自由选择想接的单。</p>
         <div class="flow-line">
           <div><b>01</b><span>顾客下单并支付</span></div>
           <i>→</i>
-          <div><b>02</b><span>配送员抢单</span></div>
+          <div><b>02</b><span>商家制作并发布</span></div>
           <i>→</i>
-          <div><b>03</b><span>取餐并送达</span></div>
+          <div><b>03</b><span>配送员抢单送达</span></div>
         </div>
         <div class="intro-card">
           <span>✦</span>
@@ -275,7 +275,7 @@ function formatTime(value: string | number[] | null | undefined) {
       </section>
 
       <section class="stats-grid">
-        <div class="stat-card accent"><span class="stat-icon">⚡</span><div><small>当前待抢</small><b>{{ availableOrders.length }}</b><em>支付完成后进入</em></div></div>
+        <div class="stat-card accent"><span class="stat-icon">⚡</span><div><small>当前待抢</small><b>{{ availableOrders.length }}</b><em>商家完成制作后进入</em></div></div>
         <div class="stat-card"><span class="stat-icon">▣</span><div><small>配送中</small><b>{{ activeOrders }}</b><em>我的进行中订单</em></div></div>
         <div class="stat-card"><span class="stat-icon">✓</span><div><small>已完成</small><b>{{ deliveredOrders }}</b><em>本窗口累计</em></div></div>
         <div class="integration-card"><p>ORDER SOURCE</p><b>FIKA 自有订单</b><small>第三方平台接入位已预留</small></div>
@@ -294,7 +294,7 @@ function formatTime(value: string | number[] | null | undefined) {
         <div v-else-if="!currentOrders.length" class="empty-state">
           <span class="empty-symbol">☕</span>
           <b>{{ orderTab === 'available' ? '暂时没有待抢订单' : '还没有你的配送订单' }}</b>
-          <p>{{ orderTab === 'available' ? '顾客完成支付后，订单会自动出现在这里。' : '抢到订单后，它会出现在这里。' }}</p>
+          <p>{{ orderTab === 'available' ? '商家完成制作并发布任务后，订单会出现在这里。' : '抢到订单后，它会出现在这里。' }}</p>
           <button v-if="orderTab === 'available'" class="outline-btn" @click="loadOrders()">再查一次</button>
         </div>
         <div v-else class="order-list">
@@ -310,7 +310,7 @@ function formatTime(value: string | number[] | null | undefined) {
             </div>
             <div v-if="order.note" class="order-note">备注：{{ order.note }}</div>
             <div class="order-card-bottom">
-              <small v-if="orderTab === 'available'">付款已确认 · 可立即抢单</small>
+              <small v-if="orderTab === 'available'">商家已完成制作 · 可立即抢单</small>
               <small v-else-if="order.riderName">配送员：{{ order.riderName }}</small>
               <span></span>
               <template v-if="orderTab === 'available'">
@@ -371,7 +371,7 @@ function formatTime(value: string | number[] | null | undefined) {
 .order-card-top { justify-content: space-between; padding-bottom: 13px; border-bottom: 1px solid #f0ede6; time { color: #9ca49e; font-size: 10px; } }
 .order-ident { display: flex; align-items: center; gap: 7px; min-width: 0; b { color: #3a5144; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
 .order-flash { color: #ee7545; font-size: 10px; font-weight: 800; }
-.status-pill { flex: none; padding: 4px 7px; border-radius: 6px; font-size: 10px; font-weight: 700; &.status-open { color: #bd652e; background: #fff0e2; } &.status-claimed { color: #466f55; background: #e9f4eb; } &.status-picked_up, &.status-delivering { color: #55718d; background: #edf3f8; } &.status-delivered { color: #6f7c75; background: #eef0ed; } }
+.status-pill { flex: none; padding: 4px 7px; border-radius: 6px; font-size: 10px; font-weight: 700; &.status-waiting_merchant { color: #8f7254; background: #fff5e9; } &.status-open { color: #bd652e; background: #fff0e2; } &.status-claimed { color: #466f55; background: #e9f4eb; } &.status-picked_up, &.status-delivering { color: #55718d; background: #edf3f8; } &.status-delivered { color: #6f7c75; background: #eef0ed; } }
 .order-content { display: grid; grid-template-columns: 1.05fr 1.35fr auto; align-items: center; gap: 12px; padding: 17px 0 13px; }
 .order-shop, .order-address { display: flex; align-items: flex-start; gap: 8px; min-width: 0; .shop-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; color: #fff; background: #193f32; font-family: Georgia, serif; font-size: 17px; flex: none; } b, small { display: block; } b { color: #32493d; font-size: 12px; } small { margin-top: 4px; color: #8b968f; font-size: 10px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
 .order-address { .shop-icon { display: none; } > span { color: #ed7548; font-size: 19px; line-height: 1; } b { color: #586b60; font-size: 11px; line-height: 1.5; white-space: normal; } }

@@ -33,7 +33,7 @@ const emit = defineEmits<{ 'cancel': [id: number] }>()
       </div>
       <div class="order-filters">
         <el-tag
-          v-for="f in ['all', 'PENDING', 'PREPARING', 'COMPLETED']"
+          v-for="f in ['all', 'UNPAID', 'PENDING', 'ACCEPTED', 'PREPARING', 'READY_FOR_DELIVERY', 'RIDER_ASSIGNED', 'DELIVERING', 'DELIVERED', 'COMPLETED', 'CANCELED']"
           :key="f"
           :type="store.orderFilter === f ? 'dark' : 'info'"
           class="filter-chip"
@@ -48,7 +48,7 @@ const emit = defineEmits<{ 'cancel': [id: number] }>()
       <div v-for="o in filteredOrders" :key="o.id" class="order-card">
         <div class="order-card-top">
           <span>#{{ o.id }}</span>
-          <el-tag size="small" :type="o.status === 'COMPLETED' ? 'success' : o.status === 'CANCELED' ? 'danger' : o.status === 'PREPARING' ? '' : 'warning'">
+          <el-tag size="small" :type="['COMPLETED', 'DELIVERED'].includes(o.status) ? 'success' : o.status === 'CANCELED' ? 'danger' : o.status === 'PREPARING' ? '' : 'warning'">
             {{ STATUS_LABELS[o.status] || o.status }}
           </el-tag>
         </div>
@@ -60,7 +60,7 @@ const emit = defineEmits<{ 'cancel': [id: number] }>()
         <div class="order-card-bottom">
           <b>{{ fmtMoney(o.finalPrice) }}</b>
           <el-button
-            v-if="o.status === 'PENDING'"
+            v-if="o.status === 'UNPAID'"
             text
             type="danger"
             size="small"
