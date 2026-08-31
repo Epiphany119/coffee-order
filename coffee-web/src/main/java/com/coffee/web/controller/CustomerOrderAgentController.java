@@ -92,8 +92,9 @@ public class CustomerOrderAgentController {
                 emitter.complete();
             } catch (Exception e) {
                 try {
-                    emitter.send(SseEmitter.event().name("error").data(Map.of(
-                            "message", e.getMessage() != null ? e.getMessage() : "Agent 服务暂时不可用",
+                emitter.send(SseEmitter.event().name("error").data(Map.of(
+                            "message", e instanceof ServiceException && e.getMessage() != null
+                                    ? e.getMessage() : "Agent 服务暂时不可用，请稍后重试",
                             "step", "failed")));
                 } catch (IOException ignored) { }
                 emitter.completeWithError(e);
@@ -104,7 +105,12 @@ public class CustomerOrderAgentController {
 
     @PostMapping("/plans/confirm")
     public Result<OrderResponse> confirm(@RequestHeader("Idempotency-Key") String idempotencyKey, @RequestBody ConfirmPlanRequest request) {
-        if (request == null || request.storeId == null) throw new ServiceException(400, "缺少 Agent 方案确认信息");
+        if (request == null || request.storeId == null || request.planToken == null || request.planToken.isBlank()) {
+            throw new ServiceException(400, "缺少 Agent 方案确认信息");
+        }
+        if ("DELIVERY".equalsIgnoreCase(request.fulfillmentType)) {
+            throw new ServiceException(400, "外卖配送请从购物袋确认收货地址后下单");
+        }
         Identity identity = currentCustomerIdentity();
         AgentOrderPlan plan = customerOrderAgentService.confirm(request.planToken, idempotencyKey, request.storeId, identity.userId(), identity.guestId(), request.includeAddOn);
         CreateOrderCommand command = new CreateOrderCommand();

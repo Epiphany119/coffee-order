@@ -46,8 +46,8 @@ public class SeatRepositoryImpl implements SeatRepository {
     }
 
     @Override
-    public boolean leave(Long seatId) {
-        return seatMapper.updateLeave(seatId) > 0;
+    public boolean leave(Long seatId, Long userId, String guestId) {
+        return seatMapper.updateLeave(seatId, userId, guestId) > 0;
     }
 
     @Override

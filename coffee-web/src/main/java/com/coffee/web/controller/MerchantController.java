@@ -44,12 +44,14 @@ public class MerchantController {
     /** 商家注册 */
     @PostMapping("/register")
     public MerchantResponse register(@RequestBody MerchantRegisterRequest request) {
+        if (request == null) throw new ServiceException(400, "请求不能为空");
         return withToken(merchantService.register(request));
     }
 
     /** 商家登录 */
     @PostMapping("/login")
     public MerchantResponse login(@RequestBody MerchantLoginRequest request) {
+        if (request == null) throw new ServiceException(400, "请求不能为空");
         if (!loginChallengeService.verify(request.getChallengeId(), request.getChallengeCode())) {
             return MerchantResponse.fail("验证码错误、已过期或已使用，请刷新后重试");
         }

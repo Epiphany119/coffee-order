@@ -27,6 +27,7 @@ public class FlashSaleController {
     @GetMapping("/claims")
     public List<Map<String, Object>> claims(@RequestParam(required = false) Long userId,
                                              @RequestParam(required = false) String guestId) {
+        requireOneIdentity(userId, guestId);
         if (userId != null) AccessGuard.requireUser(userId);
         if (guestId != null && !guestId.isBlank()) AccessGuard.requireGuest(guestId);
         return flashSaleService.listClaims(userId, guestId);
@@ -34,9 +35,18 @@ public class FlashSaleController {
 
     @PostMapping("/{activityId}/claim")
     public Map<String, Object> claim(@PathVariable Long activityId, @RequestBody ClaimRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        requireOneIdentity(request.userId, request.guestId);
         if (request.userId != null) AccessGuard.requireUser(request.userId);
         if (request.guestId != null && !request.guestId.isBlank()) AccessGuard.requireGuest(request.guestId);
         return flashSaleService.claim(activityId, request.userId, request.guestId);
+    }
+
+    private void requireOneIdentity(Long userId, String guestId) {
+        boolean hasGuest = guestId != null && !guestId.isBlank();
+        if ((userId == null) == !hasGuest) {
+            throw new com.coffee.common.core.exception.ServiceException(400, "请提供一种有效的用户或游客身份");
+        }
     }
 
     public static class ClaimRequest { public Long userId; public String guestId; }

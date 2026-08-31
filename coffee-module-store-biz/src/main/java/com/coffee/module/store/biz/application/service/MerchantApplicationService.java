@@ -51,6 +51,7 @@ public class MerchantApplicationService implements MerchantService {
     @Override
     @Transactional
     public MerchantResponse register(MerchantRegisterRequest request) {
+        if (request == null) return MerchantResponse.fail("请求不能为空");
         String username = request.getUsername();
         String rawPassword = request.getPassword();
 
@@ -153,6 +154,7 @@ public class MerchantApplicationService implements MerchantService {
 
     @Override
     public MerchantResponse login(MerchantLoginRequest request) {
+        if (request == null) return MerchantResponse.fail("商家编号或密码错误");
         if (request.getMerchantNo() == null || request.getPassword() == null) {
             return MerchantResponse.fail("商家编号或密码错误");
         }

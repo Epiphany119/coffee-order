@@ -7,6 +7,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
+import java.util.Locale;
 
 /**
  * 订单领域服务
@@ -51,17 +52,28 @@ public class OrderDomainService {
     }
 
     public Order.OrderStatus calculateNextStatus(String currentStatus, String action) {
+        if (currentStatus == null || action == null || action.isBlank()) {
+            throw new IllegalArgumentException("订单状态或操作不能为空");
+        }
+        String normalized = action.trim().toLowerCase(Locale.ROOT);
         return switch (currentStatus) {
-            // 待支付订单：支付成功 → PENDING（支付模块 markPaid 处理），用户可取消
-            case "UNPAID" -> action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.UNPAID;
-            case "PENDING" -> action.equals("start") ? Order.OrderStatus.PREPARING :
-                             action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.PENDING;
-            case "PREPARING" -> action.equals("complete") ? Order.OrderStatus.COMPLETED :
-                               action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.PREPARING;
-            // 已完成订单允许取消（退款语义）：消费累计/积分在应用层回滚
-            case "COMPLETED" -> action.equals("cancel") ? Order.OrderStatus.CANCELED : Order.OrderStatus.COMPLETED;
-            default -> Order.OrderStatus.valueOf(currentStatus);
+            // 已支付订单不能直接取消，必须接入退款流程后再改变状态。
+            case "UNPAID" -> "cancel".equals(normalized)
+                    ? Order.OrderStatus.CANCELED
+                    : invalidTransition(currentStatus, action);
+            case "PENDING" -> "start".equals(normalized)
+                    ? Order.OrderStatus.PREPARING
+                    : invalidTransition(currentStatus, action);
+            case "PREPARING" -> "complete".equals(normalized)
+                    ? Order.OrderStatus.COMPLETED
+                    : invalidTransition(currentStatus, action);
+            case "COMPLETED", "CANCELED" -> invalidTransition(currentStatus, action);
+            default -> throw new IllegalArgumentException("未知订单状态: " + currentStatus);
         };
+    }
+
+    private Order.OrderStatus invalidTransition(String currentStatus, String action) {
+        throw new IllegalArgumentException("订单状态 " + currentStatus + " 不允许执行 " + action);
     }
 
     public int calculateEarnedPoints(double paidAmount) {

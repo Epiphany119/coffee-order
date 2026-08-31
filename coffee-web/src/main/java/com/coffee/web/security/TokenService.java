@@ -19,10 +19,13 @@ public class TokenService {
     private final byte[] secret;
     private final long expiresSeconds;
 
-    public TokenService(@Value("${coffee.auth.token-secret:change-this-development-secret-before-production-2026}") String secret,
+    public TokenService(@Value("${coffee.auth.token-secret:}") String secret,
                         @Value("${coffee.auth.token-expires-seconds:28800}") long expiresSeconds) {
-        if (secret == null || secret.length() < 32) {
+        if (secret == null || secret.length() < 32 || isKnownDevelopmentSecret(secret)) {
             throw new IllegalArgumentException("coffee.auth.token-secret 至少需要 32 个字符");
+        }
+        if (expiresSeconds <= 0) {
+            throw new IllegalArgumentException("coffee.auth.token-expires-seconds 必须大于 0");
         }
         this.secret = secret.getBytes(StandardCharsets.UTF_8);
         this.expiresSeconds = expiresSeconds;
@@ -30,6 +33,7 @@ public class TokenService {
 
     public String issueUser(Long userId) { return issue(RequestIdentity.Kind.USER, userId, null); }
     public String issueMerchant(Long merchantId) { return issue(RequestIdentity.Kind.MERCHANT, merchantId, null); }
+    public String issueRider(Long riderId) { return issue(RequestIdentity.Kind.RIDER, riderId, null); }
     public String issueGuest(String guestId) { return issue(RequestIdentity.Kind.GUEST, null, guestId); }
 
     private String issue(RequestIdentity.Kind kind, Long id, String guestId) {
@@ -69,4 +73,8 @@ public class TokenService {
     }
 
     private ServiceException invalid() { return new ServiceException(401, "无效的登录凭证"); }
+
+    private boolean isKnownDevelopmentSecret(String value) {
+        return "change-this-development-secret-before-production-2026".equals(value);
+    }
 }

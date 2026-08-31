@@ -7,5 +7,5 @@ package com.coffee.web.security;
  * 当作授权依据。</p>
  */
 public record RequestIdentity(Kind kind, Long id, String guestId) {
-    public enum Kind { USER, MERCHANT, GUEST }
+    public enum Kind { USER, MERCHANT, RIDER, GUEST }
 }

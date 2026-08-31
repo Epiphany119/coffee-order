@@ -28,6 +28,21 @@ public final class AccessGuard {
         return identity.id();
     }
 
+    public static void requireRider(Long riderId) {
+        RequestIdentity identity = requireIdentity();
+        if (identity.kind() != RequestIdentity.Kind.RIDER || !identity.id().equals(riderId)) {
+            throw new ServiceException(403, "无权访问其他配送员的数据");
+        }
+    }
+
+    public static Long currentRiderId() {
+        RequestIdentity identity = requireIdentity();
+        if (identity.kind() != RequestIdentity.Kind.RIDER) {
+            throw new ServiceException(403, "需要配送员身份");
+        }
+        return identity.id();
+    }
+
     public static RequestIdentity currentIdentity() {
         return requireIdentity();
     }

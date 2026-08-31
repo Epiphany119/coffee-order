@@ -50,6 +50,7 @@ coffee:
     token-expires-seconds: ${COFFEE_AUTH_TOKEN_EXPIRES_SECONDS:28800}
   payment:
     callback-secret: ${COFFEE_PAYMENT_CALLBACK_SECRET}
+    mock-callback-enabled: ${COFFEE_PAYMENT_MOCK_CALLBACK_ENABLED:false}
   seat:
     qr-base-url: ${COFFEE_QR_BASE_URL}
     store-name: ${COFFEE_STORE_NAME:FIKA}

@@ -38,6 +38,7 @@ public class AfterSaleServiceImpl implements AfterSaleService {
     @Override
     @Transactional
     public AfterSaleResponse createAfterSale(AfterSaleRequest request) {
+        if (request == null) throw new ServiceException(400, "请求不能为空");
         if (request.getUserId() == null || request.getUserId() <= 0) {
             throw new ServiceException(400, "请先登录后再申请售后");
         }
@@ -115,6 +116,7 @@ public class AfterSaleServiceImpl implements AfterSaleService {
     @Override
     @Transactional
     public FeedbackResponse createFeedback(FeedbackRequest request) {
+        if (request == null) throw new ServiceException(400, "请求不能为空");
         if (request.getUserId() == null || request.getUserId() <= 0) {
             throw new ServiceException(400, "请先登录后再提交反馈");
         }
@@ -163,7 +165,7 @@ public class AfterSaleServiceImpl implements AfterSaleService {
             return List.of();
         }
         return afterSaleRepository.findFeedbackVOByOrderId(orderId).stream()
-                .map(this::toFeedbackResponseFromVO)
+                .map(vo -> toFeedbackResponseFromVO(vo, true))
                 .toList();
     }
 
@@ -173,7 +175,7 @@ public class AfterSaleServiceImpl implements AfterSaleService {
             return List.of();
         }
         return afterSaleRepository.findFeedbackVOByProductId(productId).stream()
-                .map(this::toFeedbackResponseFromVO)
+                .map(vo -> toFeedbackResponseFromVO(vo, false))
                 .toList();
     }
 
@@ -209,14 +211,15 @@ public class AfterSaleServiceImpl implements AfterSaleService {
         return r;
     }
 
-    private FeedbackResponse toFeedbackResponseFromVO(com.coffee.module.aftersales.biz.infra.persistence.FeedbackVO vo) {
+    private FeedbackResponse toFeedbackResponseFromVO(
+            com.coffee.module.aftersales.biz.infra.persistence.FeedbackVO vo, boolean includeUsername) {
         FeedbackResponse r = new FeedbackResponse();
         r.setId(vo.getId());
         r.setOrderId(vo.getOrderId());
         r.setProductId(vo.getProductId());
         r.setOrderNo(vo.getOrderNo());
         r.setOrderName(vo.getBeverageName());
-        r.setUsername(vo.getUsername());
+        r.setUsername(includeUsername ? vo.getUsername() : null);
         r.setContent(vo.getContent());
         r.setRating(vo.getRating());
         r.setCreatedAt(vo.getCreatedAt());

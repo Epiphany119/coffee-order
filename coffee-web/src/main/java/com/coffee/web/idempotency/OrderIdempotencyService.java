@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -39,6 +40,7 @@ public class OrderIdempotencyService {
         this.objectMapper = objectMapper;
     }
 
+    @Transactional
     public OrderResponse execute(String idempotencyKey, Long userId, String guestId,
                                  CreateOrderCommand command, Supplier<OrderResponse> creator) {
         if (!isValidKey(idempotencyKey)) {

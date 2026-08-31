@@ -15,6 +15,7 @@ FIKA 是面向连锁咖啡门店的全链路点单与经营平台。它覆盖顾
 | 游客 | 不注册也能快速下单 | 游客会话、店铺与菜单浏览、购物袋、下单、座位占用 |
 | 会员 | 更快完成复购并获得权益 | 账号认证、收藏、会员等级、积分、优惠券、订单与售后 |
 | 门店商家 | 高效履约并经营门店 | 入驻登录、订单状态流转、菜单/图片/类目、座位、门店设置、看板 |
+| 配送员 | 接单并完成外卖履约 | 独立配送员账号、待抢订单、抢单、取餐/配送/送达状态流转 |
 | 平台运营（规划） | 管理活动与洞察经营数据 | 营销活动、实时运营看板、搜索与推荐 |
 
 ## 3. 核心业务闭环
@@ -49,6 +50,7 @@ flowchart LR
 | 支付 | 支付单与渠道适配 | Mock 支付、渠道策略骨架、幂等回调、待支付隔离 |
 | 会员与营销 | 消费权益 | 会员卡、等级折扣、积分、积分兑换券、满减凑单 |
 | 座位 | 堂食履约 | 自动分配、二维码落座、超时释放、门店座位图 |
+| 外卖配送 | 配送履约 | 顾客地址簿、外卖配送单、配送员抢单与状态机；第三方平台适配预留 |
 | 售后 | 服务闭环 | 退款/重做/换货申请、商家处理、订单反馈 |
 | 门店与商家 | 多店经营 | 一商一店、门店状态、菜单/座位管理、经营看板 |
 
@@ -76,8 +78,8 @@ flowchart LR
 
 ## 7. 本地运行
 
-1. 创建 MySQL 数据库 `coffee_order_pro`，导入现有结构与种子数据，并按 `sql/migrations/` 的版本顺序执行迁移。
-2. 在 `coffee-web/src/main/resources/application.yml` 配置数据源和二维码基础地址。
+1. 创建 MySQL 数据库 `coffee_order_pro`，导入现有结构与种子数据，并按 `sql/migrations/` 的版本顺序执行迁移；外卖模块执行 `V20260831_13_delivery_module.sql`。
+2. 设置 `COFFEE_DB_USERNAME`、`COFFEE_DB_PASSWORD`；开发/生产环境还必须设置 `COFFEE_AUTH_TOKEN_SECRET`（至少 32 个字符）。本地 profile 在未提供 Token 密钥时仅使用每次启动随机生成的临时密钥，重启后旧 Token 会失效；可选设置 `COFFEE_DB_URL` 和 `COFFEE_QR_BASE_URL`。公共配置已提供安全占位值。
 3. 后端运行：`mvn -pl coffee-web -am spring-boot:run`。
 4. 前端进入相邻仓库 `../coffee-order-system-pro_front`，执行 `pnpm install && pnpm dev`。
 
@@ -85,6 +87,6 @@ flowchart LR
 
 ## 8. 基础设施启用说明
 
-- 执行 `sql/migrations/V20260809_02_order_idempotency.sql` 与 `V20260809_03_event_outbox.sql` 后，数据库具备下单幂等与可靠事件表。
+- 执行 `sql/migrations/V20260831_12_runtime_consistency.sql` 后，数据库具备下单幂等、可靠事件、库存、定位、秒杀、Agent 知识/会话、审计和站内通知所需的运行时表及唯一约束。
 - Redis 可执行 `docker compose -f docker-compose.redis.yml up -d` 启动；后端增加 `--spring.profiles.active=redis` 后切换到共享缓存。
 - 健康与指标端点：`/actuator/health`、`/actuator/info`、`/actuator/metrics`；Outbox 指标为 `fika.outbox.pending`、`fika.outbox.published`、`fika.outbox.failed`。

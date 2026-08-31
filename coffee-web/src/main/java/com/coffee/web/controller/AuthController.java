@@ -5,8 +5,10 @@ import com.coffee.module.auth.api.dto.*;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.security.LoginChallengeService;
 import com.coffee.web.security.TokenService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -19,11 +21,14 @@ public class AuthController {
     private final AuthService authService;
     private final TokenService tokenService;
     private final LoginChallengeService loginChallengeService;
+    private final boolean exposeResetToken;
 
-    public AuthController(AuthService authService, TokenService tokenService, LoginChallengeService loginChallengeService) {
+    public AuthController(AuthService authService, TokenService tokenService, LoginChallengeService loginChallengeService,
+                          @Value("${coffee.auth.expose-reset-token:false}") boolean exposeResetToken) {
         this.authService = authService;
         this.tokenService = tokenService;
         this.loginChallengeService = loginChallengeService;
+        this.exposeResetToken = exposeResetToken;
     }
 
     @GetMapping("/login-challenge")
@@ -31,11 +36,13 @@ public class AuthController {
 
     @PostMapping("/register")
     public AuthResponse register(@RequestBody RegisterRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         return withToken(authService.register(request));
     }
 
     @PostMapping("/login")
     public AuthResponse login(@RequestBody LoginRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         if (!loginChallengeService.verify(request.getChallengeId(), request.getChallengeCode())) {
             return AuthResponse.fail("验证码错误、已过期或已使用，请刷新后重试");
         }
@@ -44,12 +51,22 @@ public class AuthController {
 
     @PostMapping("/forgot-password")
     public Map<String, Object> forgotPassword(@RequestBody ForgotPasswordRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         String token = authService.forgotPassword(request);
-        return Map.of("success", true, "message", "重置令牌已生成", "token", token);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("message", "如果账号存在，重置流程已提交，请通过已配置的找回渠道获取令牌");
+        // 只允许本地显式打开，绝不能因为方便联调而默认把高价值凭证返回给匿名调用方。
+        if (exposeResetToken && token != null && !token.isBlank()) {
+            response.put("message", "开发环境：重置令牌已生成");
+            response.put("token", token);
+        }
+        return response;
     }
 
     @PostMapping("/reset-password")
     public AuthResponse resetPassword(@RequestBody ResetPasswordRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         return authService.resetPassword(request);
     }
 
@@ -70,6 +87,7 @@ public class AuthController {
     @PutMapping("/user/{id}/preference")
     public Map<String, Object> updatePreference(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         AccessGuard.requireUser(id);
+        if (body == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         Long storeId = body.get("storeId") == null ? null : Long.valueOf(body.get("storeId").toString());
         authService.updateLastStore(id, storeId);
         return Map.of("success", true, "message", "偏好已保存");

@@ -3,6 +3,7 @@ package com.coffee.web.controller;
 import com.coffee.module.menu.api.FavoriteService;
 import com.coffee.module.menu.api.MenuService;
 import com.coffee.module.menu.api.dto.MenuItemDTO;
+import com.coffee.common.core.exception.ServiceException;
 import com.coffee.web.security.AccessGuard;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,8 +44,13 @@ public class DiscoveryController {
                                               @RequestParam(required = false) Long userId,
                                               @RequestParam(required = false) String guestId,
                                               @RequestParam(defaultValue = "8") int limit) {
-        if (userId != null) AccessGuard.requireUser(userId);
-        if (guestId != null && !guestId.isBlank()) AccessGuard.requireGuest(guestId);
+        boolean hasUser = userId != null;
+        boolean hasGuest = guestId != null && !guestId.isBlank();
+        if (hasUser == hasGuest) {
+            throw new ServiceException(400, "请提供一种有效的用户或游客身份");
+        }
+        if (hasUser) AccessGuard.requireUser(userId);
+        else AccessGuard.requireGuest(guestId);
         List<MenuItemDTO> favorites = favoriteService.getFavorites(userId, guestId);
         Set<String> favoriteCategories = favorites.stream()
                 .map(MenuItemDTO::getCategoryCode)

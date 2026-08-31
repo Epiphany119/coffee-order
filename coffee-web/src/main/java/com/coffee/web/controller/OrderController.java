@@ -12,6 +12,10 @@ import com.coffee.module.member.api.dto.MemberLevelDTO;
 import com.coffee.module.payment.api.PaymentService;
 import com.coffee.module.payment.api.dto.PaymentResponse;
 import com.coffee.module.store.api.StoreService;
+import com.coffee.module.store.api.dto.StoreResponse;
+import com.coffee.module.delivery.api.DeliveryService;
+import com.coffee.module.delivery.api.dto.DeliveryOrderCreateRequest;
+import com.coffee.module.delivery.api.dto.DeliveryOrderResponse;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.idempotency.OrderIdempotencyService;
 import org.springframework.web.bind.annotation.*;
@@ -29,14 +33,17 @@ public class OrderController {
     private final MemberService memberService;
     private final PaymentService paymentService;
     private final StoreService storeService;
+    private final DeliveryService deliveryService;
     private final OrderIdempotencyService orderIdempotencyService;
 
     public OrderController(OrderService orderService, MemberService memberService, PaymentService paymentService,
-                           StoreService storeService, OrderIdempotencyService orderIdempotencyService) {
+                           StoreService storeService, DeliveryService deliveryService,
+                           OrderIdempotencyService orderIdempotencyService) {
         this.orderService = orderService;
         this.memberService = memberService;
         this.paymentService = paymentService;
         this.storeService = storeService;
+        this.deliveryService = deliveryService;
         this.orderIdempotencyService = orderIdempotencyService;
     }
 
@@ -47,18 +54,31 @@ public class OrderController {
 
     @PostMapping("/order")
     public Result<OrderResponse> createOrder(
-            @RequestHeader("Idempotency-Key") String idempotencyKey,
+        @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody CreateOrderCommand command) {
+        if (command == null) throw new ServiceException(400, "请求不能为空");
+        normalizeFulfillment(command);
         assertOrderIdentity(command.getUserId(), command.getGuestId());
         OrderResponse response = orderIdempotencyService.execute(idempotencyKey, command.getUserId(), command.getGuestId(), command, () -> {
             OrderResponse created = orderService.createOrder(command);
-            // 下单即创建支付单，响应与支付单号一起缓存为幂等结果。
-            try {
-                PaymentResponse payment = paymentService.createForOrder(created.getOrderId());
-                created.setPaymentNo(payment.getPaymentNo());
-            } catch (Exception e) {
-                // 支付单创建失败不阻塞下单：订单保持 UNPAID，前端可经 POST /api/pay/create 补建
+            if ("DELIVERY".equals(command.getFulfillmentType())) {
+                StoreResponse store = storeService.getStore(command.getStoreId());
+                DeliveryOrderCreateRequest deliveryRequest = new DeliveryOrderCreateRequest();
+                deliveryRequest.setOrderId(created.getOrderId());
+                deliveryRequest.setOrderNo(created.getOrderNo());
+                deliveryRequest.setUserId(command.getUserId());
+                deliveryRequest.setStoreId(command.getStoreId());
+                deliveryRequest.setStoreName(store.getName());
+                deliveryRequest.setAmount(created.getFinalPrice());
+                deliveryRequest.setItemSummary(created.getOrderName());
+                deliveryRequest.setAddressId(command.getDeliveryAddressId());
+                deliveryRequest.setNote(command.getNote());
+                DeliveryOrderResponse delivery = deliveryService.createDeliveryOrder(deliveryRequest);
+                created.setDeliveryOrderId(delivery.getDeliveryOrderId());
             }
+            // 下单即创建支付单，响应与支付单号一起缓存为幂等结果。
+            PaymentResponse payment = paymentService.createForOrder(created.getOrderId());
+            created.setPaymentNo(payment.getPaymentNo());
             return created;
         });
         return Result.success(response);
@@ -159,9 +179,33 @@ public class OrderController {
     }
 
     private void assertOrderIdentity(Long userId, String guestId) {
+        if (userId != null && guestId != null && !guestId.isBlank()) {
+            throw new ServiceException(400, "下单身份只能是用户或游客其中一种");
+        }
         if (userId != null) AccessGuard.requireUser(userId);
         else if (guestId != null && !guestId.isBlank()) AccessGuard.requireGuest(guestId);
         else throw new ServiceException(400, "缺少下单身份");
+    }
+
+    private void normalizeFulfillment(CreateOrderCommand command) {
+        String fulfillment = command.getFulfillmentType();
+        fulfillment = fulfillment == null || fulfillment.isBlank()
+                ? "PICKUP" : fulfillment.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("PICKUP", "DINE_IN", "DELIVERY").contains(fulfillment)) {
+            throw new ServiceException(400, "不支持的取餐方式");
+        }
+        command.setFulfillmentType(fulfillment);
+        if ("DELIVERY".equals(fulfillment)) {
+            if (command.getUserId() == null || command.getUserId() <= 0
+                    || (command.getGuestId() != null && !command.getGuestId().isBlank())) {
+                throw new ServiceException(400, "外卖配送需要先登录顾客账号");
+            }
+            if (command.getDeliveryAddressId() == null || command.getDeliveryAddressId() <= 0) {
+                throw new ServiceException(400, "外卖配送请选择收货地址");
+            }
+        } else {
+            command.setDeliveryAddressId(null);
+        }
     }
 
     private boolean ownsOrder(Long orderId, Long userId, String guestId) {

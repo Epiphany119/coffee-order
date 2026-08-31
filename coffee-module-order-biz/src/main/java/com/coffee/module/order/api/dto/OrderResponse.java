@@ -19,6 +19,8 @@ public class OrderResponse {
     private String status;
     /** 支付单号（下单时由支付模块创建，供前端拉起支付） */
     private String paymentNo;
+    /** 外卖配送单 id；非外卖订单为空。 */
+    private Long deliveryOrderId;
     private String message;
     private Double totalSpent;
     private String memberLevel;

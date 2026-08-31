@@ -1,8 +1,10 @@
 # FIKA 咖啡点单系统 — 数据库设计
 
-> 数据库：`coffee_order_pro`（MySQL 8.0，utf8mb4 / utf8mb4_unicode_ci）。本文档描述当前线上结构（2026-08-07），结构变更后请同步更新本文档并重新导出 `sql_backup/` 备份。
+> 数据库：`coffee_order_pro`（MySQL 8.0，utf8mb4 / utf8mb4_unicode_ci）。本文档描述当前线上结构（2026-08-31），结构变更后请同步更新本文档并重新导出 `sql_backup/` 备份。
 
-## 一、表总览（25 张）
+> 除下方基础业务表外，订单幂等、Outbox、库存、定位、秒杀、Agent、站内通知和外卖配送等运行时表由 `sql/migrations/` 中的版本迁移统一创建；不要依赖应用启动时临时建表。外卖模块新增表由 `V20260831_13_delivery_module.sql` 创建。
+
+## 一、基础业务表总览（25 张）
 
 按业务域分组：
 
@@ -17,7 +19,8 @@
 | 菜单 | `user_favorite` | 收藏（user_id / guest_id 双轨） |
 | 订单 | `user_order` | 订单主表（用户/游客下单统一入此表） |
 | 订单 | `order_item` | 订单明细（多商品批量下单） |
-| 订单 | `delivery_info` | 配送信息（预留） |
+| 外卖 | `delivery_address` / `delivery_order` | 顾客地址快照、配送单与配送状态 |
+| 外卖 | `delivery_rider` | 配送员账号与抢单身份 |
 | 订单 | `review` | 评价（预留） |
 | 售后 | `after_sale` | 售后单（用户提交，待商家处理；2026-08-07 新建） |
 | 售后 | `feedback` | 订单反馈（评分+建议；2026-08-07 新建） |
@@ -95,7 +98,13 @@
 
 ### 2.5 user_order / order_item — 订单
 
-`user_order`：`id / order_no(详细订单号，唯一索引 uk_order_no) / user_id / guest_id(二选一) / store_id(下单店铺) / fulfillment_type(PICKUP|DINE_IN) / note / beverage_name(商品名快照) / size / condiments / original_price / final_price / voucher_no(核销的卡券包券码，可空) / status(PENDING|PREPARING|COMPLETED|CANCELED) / delivery_info_id / created_at / completed_at / started_at / estimated_ready_time / custom_size(定制规格如 300ml，仅 CUSTOM)`。用户与游客订单统一入此表，按店隔离（商家只能操作本店订单）。接口返回的 `orderType`（user/guest）为根据 `user_id`/`guest_id` 计算的展示字段，非数据库列。
+`user_order`：`id / order_no(详细订单号，唯一索引 uk_order_no) / user_id / guest_id(二选一) / store_id(下单店铺) / fulfillment_type(PICKUP|DINE_IN|DELIVERY) / note / beverage_name(商品名快照) / size / condiments / original_price / final_price / voucher_no(核销的卡券包券码，可空) / status(UNPAID|PENDING|PREPARING|COMPLETED|CANCELED) / delivery_info_id / created_at / completed_at / started_at / estimated_ready_time / custom_size(定制规格如 300ml，仅 CUSTOM)`。用户与游客订单统一入此表，按店隔离（商家只能操作本店订单）。`DELIVERY` 仅允许登录用户并必须携带 `deliveryAddressId`，不会分配座位；地址快照与抢单状态落在 `delivery_order`。接口返回的 `orderType`（user/guest）为根据 `user_id`/`guest_id` 计算的展示字段，非数据库列。
+
+### 2.9 delivery_address / delivery_rider / delivery_order — 外卖模块
+
+- `delivery_address`：顾客可维护多条 `label / receiver_name / receiver_phone / detail_address`，可设置默认地址；地址按 `user_id` 隔离。
+- `delivery_rider`：配送员独立账号，密码使用 BCrypt；当前支持 `ACTIVE / DISABLED`，登录后令牌身份为 `RIDER`。
+- `delivery_order`：由 `DELIVERY` 主订单自动生成，创建时复制收货地址快照，状态为 `OPEN`。支付成功后才进入 C 端待抢列表；配送员通过数据库条件更新完成 `OPEN → CLAIMED → PICKED_UP → DELIVERING → DELIVERED`，抢单使用 CAS 保证同一订单只能被一人抢到。当前不计算配送费。
 
 `order_no` 规则（2026-08-07）：`YYMMDD-{商家6位}-{类目3位}-{顺序3位}`，商家段 = `merchant_no` 去 `sj-` 前缀（无商家回退店铺 id），类目段 = 商品类目 id 左补 0（批量订单取首行商品类目），顺序段 = **店铺当日单号**（跨分类连续）。唯一索引保证并发下不重号，冲突由服务端重算重试。
 
@@ -113,11 +122,11 @@
 
 `after_sale`：`id / order_id(FK→user_order.id) / user_id(FK→coffee_user.id) / type(REFUND 退款|REMAKE 重做|EXCHANGE 换货|OTHER 其他) / reason(问题说明) / status(PENDING 待处理|PROCESSING 处理中|RESOLVED 已解决|REJECTED 已拒绝|CLOSED 已关闭) / handler_note(商家处理备注) / created_at / updated_at`。业务规则：仅已完成（COMPLETED）订单可申请、订单必须属于本人、同订单防重复（`uk_after_sale_user_order` 唯一约束）；商家只能按自己店铺查询并推进状态，完成/拒绝/关闭必须写处理说明。
 
-`feedback`：`id / order_id / user_id / content(建议内容) / rating(TINYINT 1-5，可空) / created_at`。仅已完成订单可提交，同订单可多次反馈。
+`feedback`：`id / order_id / product_id(订单首个商品) / user_id / content(建议内容) / rating(TINYINT 1-5，可空) / created_at`。仅已完成订单可提交，同订单可多次反馈；商品评价查询不返回用户账号名。
 
 ### 2.8 payment — 支付单（2026-08-07 新建）
 
-`payment`：`id / payment_no(VARCHAR(32)，唯一索引 uk_payment_no) / order_id(索引 idx_order_id，关联 user_order.id) / user_id(游客单为 null) / channel(WECHAT 微信|ALIPAY 支付宝|BANK 银行|MOCK 模拟，默认 MOCK) / amount(DECIMAL(10,2)，= 订单实付) / status(PENDING 待支付|PAID 已支付|FAILED 支付失败|CLOSED 已关闭|REFUNDED 已退款，默认 PENDING) / transaction_no(渠道交易流水号) / channel_response(渠道原始响应) / paid_at(支付成功时间) / created_at / updated_at`。
+`payment`：`id / payment_no(VARCHAR(32)，唯一索引 uk_payment_no) / order_id(唯一索引 uk_payment_order，关联 user_order.id) / user_id(游客单为 null) / channel(WECHAT 微信|ALIPAY 支付宝|BANK 银行|MOCK 模拟，默认 MOCK) / amount(DECIMAL(10,2)，= 订单实付) / status(PENDING 待支付|PROCESSING 处理中|PAID 已支付|FAILED 支付失败|CLOSED 已关闭|REFUNDED 已退款，默认 PENDING) / transaction_no(渠道交易流水号) / channel_response(渠道原始响应) / paid_at(支付成功时间) / created_at / updated_at`。
 
 业务规则：下单接口内部幂等创建（同订单仅一条有效支付单）；`MOCK` 渠道发起即成功；真实渠道（微信/支付宝/银行）为骨架占位（返回 501 未接入）；支付成功回写订单 `UNPAID → PENDING`，未支付订单不进入商家订单列表与今日统计。
 
@@ -133,6 +142,10 @@
 
 `store_id + product_id` 唯一；`available_stock` 为可售库存，`locked_stock` 为待支付订单预扣数量，`version` 用于后续 Redis/Lua 与乐观锁扩展。首次售卖某门店商品初始化 100 份。创建订单以 `available_stock >= quantity` 为条件原子扣减，库存不足返回 409；取消待支付订单时按订单明细释放预扣库存。
 
+### 2.12 其他运行时表
+
+`user_location` 保存登录用户最近一次定位；`flash_sale_activity` / `flash_sale_claim` 保存秒杀活动与一次性资格；`agent_knowledge_document`、`agent_menu_embedding`、`agent_conversation`、`agent_conversation_message` 保存 Agent 的可追溯知识、向量缓存与身份隔离会话；`growth_agent_action` 保存商家 Agent 操作审计；`event_consume_log`、`user_notification` 分别用于消息消费幂等和站内通知。
+
 ## 三、核心设计模式
 
 1. **身份双轨（user / guest）**：登录用户按 `user_id`、未登录按 `guest_id` 入库；下单、收藏、座位均支持双轨；游客登录后收藏经 `/api/favorites/merge` 合并。
@@ -145,5 +158,6 @@
 
 - 备份产物：`sql_backup/`（mysqldump 结构备份，命名 `structure_backup_YYYYMMDD.sql`）。
 - **新环境部署** = 建库 + 导入最新结构备份 + 手工导入共享数据 + 启动后端。种子店铺（21 家）与店铺座位由启动器（`StoreDataInitializer`/`SeatDataInitializer`）自动补齐；但**共享商品/共享类目无自动初始化器**——`store_id = 0` 的 50 个商品（41 个常规 + 9 个凑单品）与 5 个类目为存量数据，需从现有开发库导出（`SELECT ... WHERE store_id = 0` 的 `menu_item`/`menu_category` 行）或自行初始化，否则商家端菜单为空。
-- 当前系统**无自动 DDL**（MyBatis-Plus 不做建表），表结构变更需手工 DDL 并重新导出备份。`V20260809_01_business_closure.sql` 使用 `information_schema` 动态 DDL，兼容 MySQL 5.7+/8.0+ 且可重复执行；不要改回 `ADD COLUMN IF NOT EXISTS`，该语法在 MySQL 5.7 不可用。
+- 当前系统**无自动 DDL**（MyBatis-Plus 不做建表，Agent 服务也不在请求过程中建表），表结构变更需手工执行迁移并重新导出备份。请执行 `sql/migrations/V20260831_12_runtime_consistency.sql`；脚本使用 `information_schema` 动态 DDL，兼容 MySQL 5.7+/8.0+ 且可重复执行。唯一索引遇到历史重复数据时会安全失败，禁止脚本自动删除业务记录。
+- 迁移前建议预检：`SELECT order_id, COUNT(*) FROM payment GROUP BY order_id HAVING COUNT(*) > 1`；`SELECT user_id, order_id, COUNT(*) FROM after_sale GROUP BY user_id, order_id HAVING COUNT(*) > 1`；`SELECT user_id, product_code, COUNT(*) FROM user_favorite WHERE user_id IS NOT NULL GROUP BY user_id, product_code HAVING COUNT(*) > 1`；游客收藏将 `user_id` 换为 `guest_id`；菜单、店铺、商家编号也应分别检查 `(store_id, code)`、`merchant_id`、`merchant_no` 重复。
 - 历史重构记录：`product`/`product_category` → `menu_item`/`menu_category`（2026-08）；`guest_order` 并入 `user_order`；座位单表 → 三表（`seat_template`/`store`/`seat`）。

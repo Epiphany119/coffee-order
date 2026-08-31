@@ -19,7 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 安全特性：
  * 1. 注册：BCrypt(12) 哈希存储密码
  * 2. 登录：验证 BCrypt 哈希；旧明文密码自动升级为 BCrypt
- * 3. 忘记密码：生成 30 分钟有效的一次性令牌
+ * 3. 忘记密码：生成 30 分钟有效的一次性令牌，令牌交由站外找回渠道发送
  * 4. 重置密码：令牌校验后允许设置新密码，旧令牌即时作废
  */
 @Service
@@ -39,6 +39,7 @@ public class AuthApplicationService implements AuthService {
     @Override
     @Transactional
     public AuthResponse register(RegisterRequest request) {
+        if (request == null) return AuthResponse.fail("请求不能为空");
         String username = request.getUsername();
         String rawPassword = request.getPassword();
 
@@ -69,6 +70,7 @@ public class AuthApplicationService implements AuthService {
     @Override
     @Transactional
     public AuthResponse login(LoginRequest request) {
+        if (request == null) return AuthResponse.fail("用户名或密码错误");
         if (request.getUsername() == null || request.getPassword() == null) {
             return AuthResponse.fail("用户名或密码错误");
         }
@@ -144,6 +146,7 @@ public class AuthApplicationService implements AuthService {
     @Override
     @Transactional
     public String forgotPassword(ForgotPasswordRequest request) {
+        if (request == null) throw new ServiceException(400, "请求不能为空");
         String username = request.getUsername();
         if (username == null || username.isBlank()) {
             throw new ServiceException(400, "请输入用户名");
@@ -151,8 +154,8 @@ public class AuthApplicationService implements AuthService {
 
         User user = userRepository.findByUsername(username);
         if (user == null) {
-            // 不暴露用户是否存在，统一返回成功
-            return "如果该账号存在，重置链接已生成（令牌有效期 30 分钟）";
+            // 不暴露用户是否存在；控制器统一返回成功提示，避免账号枚举。
+            return null;
         }
 
         // 作废该用户之前所有未使用的令牌
@@ -170,6 +173,7 @@ public class AuthApplicationService implements AuthService {
     @Override
     @Transactional
     public AuthResponse resetPassword(ResetPasswordRequest request) {
+        if (request == null) return AuthResponse.fail("请求不能为空");
         String tokenStr = request.getToken();
         String newPassword = request.getNewPassword();
 

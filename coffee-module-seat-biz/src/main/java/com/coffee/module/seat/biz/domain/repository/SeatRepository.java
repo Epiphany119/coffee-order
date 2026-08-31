@@ -19,11 +19,11 @@ public interface SeatRepository {
     /** 乐观分配：仅当座位仍为空闲时更新为已分配，返回是否成功 */
     boolean tryAssign(Long seatId, Long userId, String guestId);
 
-    /** 落座：座位编号即凭证，任何状态均可落座，并记录占用者，返回是否成功 */
+    /** 落座：空闲可落座，已分配时必须是原分配身份，返回是否成功 */
     boolean occupy(Long seatId, Long userId, String guestId);
 
-    /** 离座：仅当状态为已落座时释放，返回是否成功 */
-    boolean leave(Long seatId);
+    /** 离座：仅当状态为已落座且身份匹配时释放，返回是否成功 */
+    boolean leave(Long seatId, Long userId, String guestId);
 
     /** 释放所有分配时间早于指定时间的已分配座位（超时释放），返回释放数量 */
     int releaseExpired(LocalDateTime before);

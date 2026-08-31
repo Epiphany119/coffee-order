@@ -42,6 +42,7 @@ public class Payment {
 
     public enum PaymentStatus {
         PENDING("待支付"),
+        PROCESSING("支付处理中"),
         PAID("已支付"),
         FAILED("支付失败"),
         CLOSED("已关闭"),

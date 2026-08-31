@@ -163,11 +163,23 @@
 |---|---|---|
 | 19.1 | [生成点单方案](#191-生成点单方案) | `POST /api/customer-agent/plan` |
 
-### 二十、健康检查（1 个）
+### 二十、外卖配送模块（12 个）
+
+| 接口 | 方法与路径 |
+|---|---|
+| 顾客地址列表/新增/编辑/删除 | `GET/POST/PUT/DELETE /api/delivery/addresses`（地址按登录顾客隔离） |
+| 配送员注册/登录/当前账号 | `POST /api/delivery/riders/register`、`POST /api/delivery/riders/login`、`GET /api/delivery/riders/me` |
+| 待抢订单 | `GET /api/delivery/rider/orders/available`（配送员令牌；仅已支付外卖订单） |
+| 我的配送单 | `GET /api/delivery/rider/orders/mine`（配送员令牌） |
+| 抢单 | `POST /api/delivery/rider/orders/{id}/claim`（CAS，只允许一人成功） |
+| 配送状态操作 | `POST /api/delivery/rider/orders/{id}/action?action=pickup\|deliver\|complete\|release` |
+| 顾客外卖单 | `GET /api/delivery/orders/mine`（登录顾客令牌） |
+
+### 二十一、健康检查（1 个）
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
-| 20.1 | [服务健康检查](#201-服务健康检查) | `GET /health` |
+| 21.1 | [服务健康检查](#211-服务健康检查) | `GET /health` |
 
 ### 附录
 
@@ -242,7 +254,7 @@ Authorization: Bearer {accessToken}
 
 ## 三、接口总览
 
-共 76 个接口（含健康检查），按模块分组：
+共 88 个接口（含健康检查），按模块分组：
 
 | # | 模块 | 接口数 | 响应格式 | 章节 |
 |---|---|---|---|---|
@@ -262,7 +274,8 @@ Authorization: Bearer {accessToken}
 | 14 | 发现、秒杀与消息 | 6 | B / A | [十七](#十七发现秒杀与消息模块) |
 | 15 | 店长增长 Agent | 4 | A | [十八](#十八店长增长-agent) |
 | 16 | 顾客点单 Agent | 1 | A | [十九](#十九顾客点单-agent) |
-| 17 | 健康检查 | 1 | 纯文本 | [二十](#二十健康检查) |
+| 17 | 外卖配送 | 12 | A | [二十](#二十外卖配送模块) |
+| 18 | 健康检查 | 1 | 纯文本 | [二十一](#二十一健康检查) |
 
 ## 四、认证模块
 
@@ -351,7 +364,7 @@ Authorization: Bearer {accessToken}
 
 **`POST /api/auth/forgot-password`**
 
-作用：为指定用户名生成密码重置令牌（开发/演示环境直接返回令牌，前端展示后提交重置）。
+作用：为指定用户名生成密码重置令牌。生产环境统一返回模糊化成功提示，令牌必须通过站外找回渠道发送；仅在本地显式设置 `COFFEE_AUTH_EXPOSE_RESET_TOKEN=true` 时响应才包含令牌。
 
 请求体（`ForgotPasswordRequest`）：
 
@@ -370,14 +383,13 @@ Authorization: Bearer {accessToken}
 ```json
 {
   "success": true,
-  "message": "重置令牌已生成",
-  "token": "abc123xyz"
+  "message": "如果账号存在，重置流程已提交，请通过已配置的找回渠道获取令牌"
 }
 ```
 
 | 字段 | 说明 |
 |---|---|
-| token | 重置令牌（30 分钟有效），提交 4.4 时使用。**用户不存在时不暴露**：响应中的 token 为提示文案"如果该账号存在，重置链接已生成（令牌有效期 30 分钟）" |
+| token | 可选，重置令牌（30 分钟有效），提交 4.4 时使用；仅本地显式开启 `expose-reset-token` 时返回 |
 
 失败响应（格式 A 错误体）：
 
@@ -1015,7 +1027,7 @@ Authorization: Bearer {accessToken}
 | code | string | 座位编号（`店名-座位号`，如 `静安店-001`） |
 | capacity | int | 容纳人数 |
 | status | string | `FREE` 空闲 / `ASSIGNED` 已分配 / `OCCUPIED` 已落座 |
-| assignedUserId / assignedGuestId | number/string | 占用者身份（null=无） |
+| assignedUserId / assignedGuestId | number/string | 商家座位列表返回占用者身份；公开二维码解析接口始终为 null |
 | assignedAt / occupiedAt | string | 分配时间 / 落座时间 |
 | qrContent | string | 二维码内容（落座页 URL，仅分配接口返回） |
 | qrBase64 | string | 二维码 PNG base64（data URL，仅分配接口返回） |
@@ -1187,7 +1199,8 @@ Authorization: Bearer {accessToken}
 | userId | number | ⚠️ | 登录用户 id（与 guestId 二选一） |
 | guestId | string | ⚠️ | 游客标识（与 userId 二选一） |
 | storeId | number | ✅ | 下单店铺 |
-| fulfillmentType | string | ❌ | `PICKUP` 到店自取 / `DINE_IN` 店内用餐 |
+| fulfillmentType | string | ❌ | `PICKUP` 到店自取 / `DINE_IN` 店内用餐 / `DELIVERY` 外卖配送 |
+| deliveryAddressId | number | DELIVERY 必填 | 登录顾客的收货地址 id；外卖不分配座位 |
 | note | string | ❌ | 订单备注 |
 | productCode | string | 单品必填 | 商品编码 |
 | size | string | ❌ | `SMALL`/`MEDIUM`/`LARGE`/`CUSTOM` |
@@ -1265,6 +1278,7 @@ Authorization: Bearer {accessToken}
 | orderNo | 详细订单号（格式见 10.8） |
 | status | 中文状态：待支付/待处理/制作中/已完成/已取消 |
 | paymentNo | 支付单号（拉支付用）；支付单创建失败时为 null |
+| deliveryOrderId | number | 外卖配送单 id；非外卖订单为 null |
 | finalPrice | 实付金额（会员折扣 + 优惠券后） |
 | memberDiscount / couponDiscount / couponName | 折扣明细 |
 | earnedPoints | 本单预计积分（支付完成时结算） |
@@ -1278,7 +1292,7 @@ Authorization: Bearer {accessToken}
 | 404 | 产品不存在: xxx | productCode 无效或该店无此商品 |
 | 400 | 商品数量必须大于 0 | 批量明细 quantity ≤ 0 |
 
-> 说明：下单必须提供 `userId` 或 `guestId`，并携带与该身份匹配的 Bearer Token；定制规格（CUSTOM）量非法时按基准量 1.0 比例兜底计价。秒杀下单请提交单品参数（不要传 `items`），并传入未过期的 `flashSaleClaimNo`；服务端会原子核销资格，已核销或已过期的资格返回 `409`。
+> 说明：下单必须提供 `userId` 或 `guestId`，并携带与该身份匹配的 Bearer Token；`DELIVERY` 仅支持登录用户，必须传 `deliveryAddressId`，不会触发座位分配。定制规格（CUSTOM）量非法时按基准量 1.0 比例兜底计价。秒杀下单请提交单品参数（不要传 `items`），并传入未过期的 `flashSaleClaimNo`；服务端会原子核销资格，已核销或已过期的资格返回 `409`。
 >
 > 批量模型说明：批量订单为单条 `user_order` + 多条 `order_item` 明细；`beverageName` 拼接为「名称×数量」顿号连接，`size` 记为 `MIXED`（实际以明细为准）；会员折扣/优惠券按订单总额计算后按各商品行原价比例分摊到明细（尾差归最后一行），明细小计合计 = 实付总额。
 
@@ -1290,7 +1304,7 @@ Authorization: Bearer {accessToken}
 
 路径参数：`id`（number，订单 id）。查询参数：`action`（string，`cancel` 取消）。
 
-> 状态机行为：非法 action（如对 UNPAID 执行 start）静默不生效，订单状态保持不变，不报错。已完成（COMPLETED）订单可取消（退款语义，消费累计与积分回滚）。
+> 状态机行为：用户端仅允许取消待支付（UNPAID）订单；已支付订单必须走售后退款流程，不能直接改为取消。非法 action 或状态不匹配会返回 400/409，订单不会被静默修改。
 
 成功响应（200）：`Result<OrderResponse>`（`status` 为中文状态、`message` 为"状态已更新"）。
 
@@ -1400,7 +1414,7 @@ Authorization: Bearer {accessToken}
 | 404 | 订单不存在 | id 无效 |
 | 403 | 订单不属于该店铺，无权操作 | storeId 与订单店铺不匹配 |
 
-> 状态机行为同 10.3：非法 action 静默不生效，不报错。
+> 状态机行为同 10.3：状态不匹配或 action 非法会返回 400/409，订单不会被静默修改；商家只能操作所属店铺订单。
 
 ### 10.9 详细订单号规则
 
@@ -1507,7 +1521,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 { "success": true, "message": "已添加到收藏" }
 ```
 
-> 幂等说明：重复收藏（同身份同商品）静默返回成功；userId/guestId 均未传时同样静默返回成功（不落库）；商品不存在时也会插入收藏记录（前端保证传入有效商品编码）。
+> 幂等说明：重复收藏（同身份同商品）静默返回成功；userId/guestId 必须且只能传一个，缺失或同时传入会返回 400；商品编码不能为空，商品是否存在由菜单数据约束和前端传值共同保证。
 
 ### 12.3 取消收藏
 
@@ -1695,7 +1709,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 ## 十四、支付模块
 
 > 响应格式：**A**。接口前缀 `/api/pay`。
-> 渠道策略：`MOCK`（模拟支付，直接成功）+ `WECHAT`/`ALIPAY`/`BANK`（骨架占位，调用返回 501 未接入）。支付状态：`PENDING` 待支付 / `PAID` 已支付 / `FAILED` 支付失败 / `CLOSED` 已关闭 / `REFUNDED` 已退款。
+> 渠道策略：`MOCK`（模拟支付，直接成功）+ `WECHAT`/`ALIPAY`/`BANK`（骨架占位，调用返回 501 未接入）。支付状态：`PENDING` 待支付 / `PROCESSING` 处理中 / `PAID` 已支付 / `FAILED` 支付失败 / `CLOSED` 已关闭 / `REFUNDED` 已退款。
 
 `PaymentResponse` 字段：
 
@@ -1707,7 +1721,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 | userId | number/null | 下单用户 id（游客单为 null） |
 | channel | string | 渠道 WECHAT/ALIPAY/BANK/MOCK |
 | amount | number | 支付金额 |
-| status | string | PENDING/PAID/FAILED/CLOSED/REFUNDED |
+| status | string | PENDING/PROCESSING/PAID/FAILED/CLOSED/REFUNDED |
 | statusDesc | string | 状态中文描述 |
 | transactionNo | string | 渠道流水号（支付成功后生成） |
 | paidAt / createdAt | string | 支付时间 / 创建时间 |
@@ -1774,7 +1788,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 **`POST /api/pay/callback/{channel}`**
 
-作用：渠道异步回调统一入口（模拟/未来真实渠道；验签在渠道类内实现）。幂等可重放，重复回调不重复入账。
+作用：渠道异步回调统一入口（当前仅显式启用的 MOCK 回调可用；真实渠道接入前不会开放）。回调必须携带 `X-Payment-Callback-Secret`，并校验支付单号、金额和渠道；幂等可重放，重复回调不重复入账。
 
 路径参数：`channel`（string，`WECHAT`/`ALIPAY`/`BANK`/`MOCK`）。
 
@@ -2183,7 +2197,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 成功响应：`data` 为数组，包含 `id`、`actionType`、`title`、`status`、`createdAt`、`executedAt`。
 
-> 使用前先执行 [V20260809_10_growth_agent.sql](../sql/migrations/V20260809_10_growth_agent.sql) 创建审计表。
+> 使用前先执行 [V20260831_12_runtime_consistency.sql](../sql/migrations/V20260831_12_runtime_consistency.sql) 创建审计表及相关运行时表。
 
 ## 十九、顾客点单 Agent
 
@@ -2256,9 +2270,89 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 安全规则：令牌绑定用户/游客身份与门店，5 分钟过期，只能绑定一枚幂等键；换身份、换门店、修改商品行或用另一枚幂等键重复确认均会被拒绝。价格、库存、优惠与支付单均由正式订单链路处理。
 
-## 二十、健康检查
+## 二十、外卖配送模块
 
-### 20.1 服务健康检查
+> 模块实现：`coffee-module-delivery-biz`。顾客地址接口使用顾客 Bearer Token；配送员接口使用 `RIDER` Bearer Token。外卖配送必须是登录顾客订单，暂不支持游客外卖和配送费计算。
+
+### 20.1 顾客地址列表
+
+**`GET /api/delivery/addresses`**
+
+返回当前登录顾客的地址列表，默认地址排在前面。
+
+### 20.2 新增/编辑/删除顾客地址
+
+**`POST /api/delivery/addresses`**、**`PUT /api/delivery/addresses/{id}`**、**`DELETE /api/delivery/addresses/{id}`**
+
+新增和编辑请求体：
+
+```json
+{
+  "label": "公司",
+  "receiverName": "小林",
+  "receiverPhone": "13800000000",
+  "detailAddress": "静安区某某路 88 号 12 楼",
+  "isDefault": true
+}
+```
+
+服务端按当前登录用户校验地址归属；每个账号最多保存 20 条。地址被配送单使用时会复制成快照，后续编辑地址不影响已下单配送单。
+
+### 20.3 创建外卖订单
+
+**`POST /api/order`**
+
+在原订单请求体上使用 `fulfillmentType: "DELIVERY"` 和 `deliveryAddressId`。示例：
+
+```json
+{
+  "userId": 1,
+  "guestId": null,
+  "storeId": 5,
+  "fulfillmentType": "DELIVERY",
+  "deliveryAddressId": 12,
+  "items": [{ "productCode": "LATTE", "size": "MEDIUM", "quantity": 1, "condiments": [] }]
+}
+```
+
+订单创建时会自动生成一条 `OPEN` 配送单；支付成功、主订单从 `UNPAID` 进入 `PENDING` 后，才会出现在配送员待抢列表。此流程不会分配座位。
+
+### 20.4 配送员注册/登录/当前账号
+
+**`POST /api/delivery/riders/register`**、**`POST /api/delivery/riders/login`**、**`GET /api/delivery/riders/me`**
+
+注册请求体：`{ "username": "rider01", "password": "abc123", "nickname": "小林", "phone": "13800000000" }`。登录/注册成功响应中的 `accessToken` 只能用于配送员接口。
+
+### 20.5 待抢订单与我的配送单
+
+**`GET /api/delivery/rider/orders/available`**、**`GET /api/delivery/rider/orders/mine`**
+
+待抢订单只返回 `OPEN` 且对应主订单已支付、未取消的配送单；响应包含门店、商品摘要、收货地址快照、金额和配送状态。
+
+### 20.6 抢单与状态操作
+
+**`POST /api/delivery/rider/orders/{id}/claim`**
+
+抢单使用数据库条件更新，同一配送单只有一个请求能成功；被抢走时返回 `409`。
+
+**`POST /api/delivery/rider/orders/{id}/action?action={action}`**
+
+| action | 前置状态 | 下一个状态 |
+|---|---|---|
+| `pickup` | `CLAIMED` | `PICKED_UP` |
+| `deliver` | `PICKED_UP` | `DELIVERING` |
+| `complete` | `DELIVERING` | `DELIVERED` |
+| `release` | `CLAIMED` | `OPEN` |
+
+### 20.7 顾客外卖配送单
+
+**`GET /api/delivery/orders/mine`**
+
+登录顾客查询自己的配送单及状态，地址字段来自下单时的快照。
+
+## 二十一、健康检查
+
+### 21.1 服务健康检查
 
 **`GET /health`**
 
@@ -2341,7 +2435,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 ### A.8 订单取餐方式
 
-`PICKUP` 到店自取 / `DINE_IN` 店内用餐。
+`PICKUP` 到店自取 / `DINE_IN` 店内用餐 / `DELIVERY` 外卖配送（登录顾客 + 收货地址，不分配座位）。
 
 ### A.9 商品规格
 
@@ -2351,4 +2445,4 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 - `POST /api/location/user`：登录用户上报最近位置，body 为 `{ "userId": 1, "latitude": 31.23, "longitude": 121.46 }`。服务端限制中国大陆经纬度范围，并按用户幂等更新。
 - `GET /api/location/recommend?latitude=31.23&longitude=121.46&limit=5`：返回营业门店，按球面距离升序；响应包含 `distanceKm`、门店坐标和基础门店信息。
 
-首次部署请执行 `sql_backup/location_module.sql`，再根据实际门店地址校正 `LocationApplicationService` 中的坐标种子。
+首次部署请执行 `sql/migrations/V20260831_12_runtime_consistency.sql`（已包含 `user_location` 表），再根据实际门店地址校正 `LocationApplicationService` 中的坐标种子。`sql_backup/location_module.sql` 仅保留作历史单模块部署参考。

@@ -26,7 +26,7 @@ public class PaymentResponse {
     /** 支付金额 */
     private Double amount;
 
-    /** 状态：PENDING/PAID/FAILED/CLOSED/REFUNDED */
+    /** 状态：PENDING/PROCESSING/PAID/FAILED/CLOSED/REFUNDED */
     private String status;
 
     /** 状态中文描述 */

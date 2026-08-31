@@ -29,7 +29,7 @@ public interface SeatService {
     /**
      * 离座释放
      */
-    SeatResponse leaveSeat(Long seatId);
+    SeatResponse leaveSeat(Long seatId, Long userId, String guestId);
 
     /**
      * 店铺座位状态列表（管理用，storeId 为空查全部）

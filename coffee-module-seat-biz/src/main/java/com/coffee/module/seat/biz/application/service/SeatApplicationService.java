@@ -19,6 +19,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -49,6 +50,8 @@ public class SeatApplicationService implements SeatService {
     @Override
     @Transactional
     public SeatResponse assignSeat(AssignSeatRequest request) {
+        if (request == null) throw new IllegalArgumentException("请求不能为空");
+        requireIdentity(request.getUserId(), request.getGuestId());
         if (request.getStoreId() == null) {
             throw new IllegalArgumentException("请先选择店铺");
         }
@@ -98,12 +101,15 @@ public class SeatApplicationService implements SeatService {
     @Override
     public SeatResponse resolveSeat(String code) {
         Seat seat = findByCode(code);
-        return toResponse(seat, false);
+        // 二维码是公开入口，只返回落座所需的状态和座位信息，不暴露当前顾客身份及时间。
+        return toPublicResponse(seat);
     }
 
     @Override
     @Transactional
     public SeatResponse occupySeat(Long seatId, OccupySeatRequest request) {
+        if (request == null) throw new IllegalArgumentException("缺少落座身份");
+        requireIdentity(request.getUserId(), request.getGuestId());
         Seat seat = seatRepository.findById(seatId);
         if (seat == null) {
             throw new IllegalArgumentException("座位不存在");
@@ -116,8 +122,16 @@ public class SeatApplicationService implements SeatService {
                 throw new IllegalStateException("你已在「" + s.code() + "」取号/落座，请先离座释放再落座新座位");
             }
         }
-        // 座位编号即凭证：任何状态（空闲/已分配/已被他人占用）扫码均可直接落座。
-        // 落座即记录占用者，前端据此校验座位归属，避免跨账号继承他人座位状态
+        if (seat.getStatus() == SeatStatus.OCCUPIED) {
+            if (sameIdentity(seat, request.getUserId(), request.getGuestId())) {
+                return toResponse(seat, false);
+            }
+            throw new IllegalStateException("该座位已被其他顾客占用");
+        }
+        if (seat.getStatus() == SeatStatus.ASSIGNED
+                && !sameIdentity(seat, request.getUserId(), request.getGuestId())) {
+            throw new IllegalStateException("该座位已被其他顾客取号");
+        }
         if (!seatRepository.occupy(seatId, request.getUserId(), request.getGuestId())) {
             throw new IllegalStateException("座位状态已变化，请重新扫码");
         }
@@ -129,7 +143,8 @@ public class SeatApplicationService implements SeatService {
 
     @Override
     @Transactional
-    public SeatResponse leaveSeat(Long seatId) {
+    public SeatResponse leaveSeat(Long seatId, Long userId, String guestId) {
+        requireIdentity(userId, guestId);
         Seat seat = seatRepository.findById(seatId);
         if (seat == null) {
             throw new IllegalArgumentException("座位不存在");
@@ -137,7 +152,10 @@ public class SeatApplicationService implements SeatService {
         if (seat.getStatus() != SeatStatus.OCCUPIED) {
             throw new IllegalStateException("该座位当前未落座");
         }
-        if (!seatRepository.leave(seatId)) {
+        if (!sameIdentity(seat, userId, guestId)) {
+            throw new com.coffee.common.core.exception.ServiceException(403, "无权释放其他顾客的座位");
+        }
+        if (!seatRepository.leave(seatId, userId, guestId)) {
             throw new IllegalStateException("座位状态已变化，请刷新后重试");
         }
         seat.leave();
@@ -189,6 +207,19 @@ public class SeatApplicationService implements SeatService {
         return MAX_PEOPLE;
     }
 
+    private void requireIdentity(Long userId, String guestId) {
+        boolean hasUser = userId != null && userId > 0;
+        boolean hasGuest = guestId != null && !guestId.isBlank();
+        if (hasUser == hasGuest) {
+            throw new com.coffee.common.core.exception.ServiceException(400, "必须提供唯一的用户或游客身份");
+        }
+    }
+
+    private boolean sameIdentity(Seat seat, Long userId, String guestId) {
+        return (userId != null && Objects.equals(userId, seat.getAssignedUserId()))
+                || (guestId != null && !guestId.isBlank() && Objects.equals(guestId, seat.getAssignedGuestId()));
+    }
+
     /** 解析座位编号（店名-编号，编号自带店铺，直接查库） */
     private Seat findByCode(String code) {
         if (code == null || code.isBlank()) {
@@ -220,5 +251,11 @@ public class SeatApplicationService implements SeatService {
                 seat.getAssignedUserId(), seat.getAssignedGuestId(),
                 seat.getAssignedAt(), seat.getOccupiedAt(),
                 qrContent, qrBase64);
+    }
+
+    private SeatResponse toPublicResponse(Seat seat) {
+        return SeatResponse.from(seat.getStatus(), seat.getId(), seat.getStoreId(),
+                seat.getStoreName(), seat.getSeatNo(), seat.getCapacity(),
+                null, null, null, null, null, null);
     }
 }

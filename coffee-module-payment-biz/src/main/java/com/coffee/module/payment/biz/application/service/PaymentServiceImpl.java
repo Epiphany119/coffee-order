@@ -10,11 +10,13 @@ import com.coffee.module.payment.biz.domain.Payment;
 import com.coffee.module.payment.biz.domain.repository.PaymentRepository;
 import com.coffee.module.payment.biz.domain.service.PaymentChannel;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -28,21 +30,27 @@ public class PaymentServiceImpl implements PaymentService {
     private final PaymentRepository paymentRepository;
     private final OrderQueryService orderQueryService;
     private final OrderPaymentService orderPaymentService;
+    private final PaymentStateService paymentStateService;
     private final List<PaymentChannel> channels;
 
     public PaymentServiceImpl(PaymentRepository paymentRepository,
                               OrderQueryService orderQueryService,
                               OrderPaymentService orderPaymentService,
+                              PaymentStateService paymentStateService,
                               List<PaymentChannel> channels) {
         this.paymentRepository = paymentRepository;
         this.orderQueryService = orderQueryService;
         this.orderPaymentService = orderPaymentService;
+        this.paymentStateService = paymentStateService;
         this.channels = channels;
     }
 
     @Override
     @Transactional
     public PaymentResponse createForOrder(Long orderId) {
+        if (orderId == null || orderId <= 0) {
+            throw new ServiceException(400, "订单 id 无效");
+        }
         // 幂等：同订单已有支付单（含已支付）直接返回，不重复创建
         Payment existing = paymentRepository.findByOrderId(orderId);
         if (existing != null) {
@@ -51,6 +59,12 @@ public class PaymentServiceImpl implements PaymentService {
         OrderBrief brief = orderQueryService.getOrderBrief(orderId);
         if (brief == null) {
             throw new ServiceException(404, "订单不存在");
+        }
+        if (!"UNPAID".equals(brief.getStatus())) {
+            throw new ServiceException(409, "订单当前状态不可创建支付单");
+        }
+        if (brief.getFinalPrice() == null || brief.getFinalPrice() < 0) {
+            throw new ServiceException(409, "订单金额无效，无法创建支付单");
         }
         Payment payment = new Payment();
         payment.setPaymentNo(nextPaymentNo());
@@ -61,12 +75,18 @@ public class PaymentServiceImpl implements PaymentService {
         payment.setStatus(Payment.PaymentStatus.PENDING);
         payment.setCreatedAt(LocalDateTime.now());
         payment.setUpdatedAt(payment.getCreatedAt());
-        paymentRepository.save(payment);
+        try {
+            paymentRepository.save(payment);
+        } catch (DuplicateKeyException duplicateKeyException) {
+            // 配合 payment(order_id) 唯一索引处理多实例并发创建。
+            Payment concurrent = paymentRepository.findByOrderId(orderId);
+            if (concurrent != null) return toResponse(concurrent);
+            throw duplicateKeyException;
+        }
         return toResponse(payment);
     }
 
     @Override
-    @Transactional
     public PaymentResponse pay(String paymentNo, String channelCode) {
         Payment payment = paymentRepository.findByPaymentNo(paymentNo);
         if (payment == null) {
@@ -78,40 +98,87 @@ public class PaymentServiceImpl implements PaymentService {
         // 订单须仍处于待支付状态（防止订单已取消仍被支付）
         orderPaymentService.checkPayable(payment.getOrderId());
 
-        PaymentChannel channel = resolveChannel(channelCode);
-        String transactionNo = channel.pay(payment); // Mock 直接成功；真实渠道骨架抛 501
+        if (!paymentStateService.tryStartProcessing(payment.getId())) {
+            throw new ServiceException(409, "支付请求正在处理中，请稍后查询支付状态");
+        }
+        payment.setStatus(Payment.PaymentStatus.PROCESSING);
+        boolean paidPersisted = false;
+        try {
+            PaymentChannel channel = resolveChannel(channelCode);
+            String normalizedChannel = channelCode.trim().toUpperCase(Locale.ROOT);
+            String transactionNo = requireTransactionNo(channel.pay(payment)); // Mock 直接成功；真实渠道骨架抛 501
+            LocalDateTime paidAt = LocalDateTime.now();
+            if (!paymentStateService.markPaidIfProcessing(payment.getId(), normalizedChannel, transactionNo, paidAt)) {
+                throw new ServiceException(409, "支付状态已变化，请重新查询");
+            }
+            paidPersisted = true;
 
-        payment.setChannel(channelCode.toUpperCase());
-        payment.setTransactionNo(transactionNo);
-        payment.setStatus(Payment.PaymentStatus.PAID);
-        payment.setPaidAt(LocalDateTime.now());
-        payment.setUpdatedAt(payment.getPaidAt());
-        paymentRepository.save(payment);
-        // 订单状态回写：UNPAID → PENDING（幂等）
-        orderPaymentService.markPaid(payment.getOrderId());
-        return toResponse(payment);
+            payment.setChannel(normalizedChannel);
+            payment.setTransactionNo(transactionNo);
+            payment.setStatus(Payment.PaymentStatus.PAID);
+            payment.setPaidAt(paidAt);
+            payment.setUpdatedAt(paidAt);
+            try {
+                if (!orderPaymentService.markPaid(payment.getOrderId())) {
+                    throw new ServiceException(409, "订单已取消，支付结果未进入订单，请核对支付状态");
+                }
+            } catch (RuntimeException exception) {
+                // MOCK 没有真实资金，订单并发取消时可以安全标记为已冲正；真实渠道必须接入原渠道退款 API。
+                if (Payment.Channel.MOCK.name().equals(normalizedChannel)) {
+                    paymentStateService.markRefundedIfPaid(payment.getId());
+                    payment.setStatus(Payment.PaymentStatus.REFUNDED);
+                }
+                throw exception;
+            }
+            return toResponse(payment);
+        } catch (RuntimeException exception) {
+            if (!paidPersisted && payment.getStatus() == Payment.PaymentStatus.PROCESSING) {
+                paymentStateService.resetProcessing(payment.getId());
+            }
+            throw exception;
+        }
     }
 
     @Override
-    @Transactional
     public PaymentResponse handleCallback(String channelCode, String paymentNo, String transactionNo) {
         Payment payment = paymentRepository.findByPaymentNo(paymentNo);
         if (payment == null) {
             throw new ServiceException(404, "支付单不存在");
         }
+        if (payment.getStatus() == Payment.PaymentStatus.PAID) return toResponse(payment);
+        if (payment.getStatus() != Payment.PaymentStatus.PENDING
+                && payment.getStatus() != Payment.PaymentStatus.PROCESSING) {
+            throw new ServiceException(409, "支付单当前状态不接受回调");
+        }
+        if (payment.getChannel() != null && !payment.getChannel().equalsIgnoreCase(channelCode)) {
+            throw new ServiceException(400, "支付回调渠道与支付单不匹配");
+        }
+        // 回调落账前再次检查订单状态，防止已取消订单被异步回调改成已支付。
+        orderPaymentService.checkPayable(payment.getOrderId());
         PaymentChannel channel = resolveChannel(channelCode);
-        String txNo = channel.handleCallback(payment, transactionNo); // 验签在渠道内实现；骨架抛 501
-
-        // 回调幂等：仅 PENDING 状态回写；已 PAID 直接返回现状
-        if (payment.getStatus() == Payment.PaymentStatus.PENDING) {
-            payment.setChannel(channelCode.toUpperCase());
-            payment.setTransactionNo(txNo);
-            payment.setStatus(Payment.PaymentStatus.PAID);
-            payment.setPaidAt(LocalDateTime.now());
-            payment.setUpdatedAt(payment.getPaidAt());
-            paymentRepository.save(payment);
-            // TODO 订单若已取消（CANCELED）需触发退款流程，暂未接入
-            orderPaymentService.markPaid(payment.getOrderId());
+        String normalizedChannel = channelCode.trim().toUpperCase(Locale.ROOT);
+        String txNo = requireTransactionNo(channel.handleCallback(payment, transactionNo));
+        LocalDateTime paidAt = LocalDateTime.now();
+        if (!paymentStateService.markPaidIfPendingOrProcessing(payment.getId(), normalizedChannel, txNo, paidAt)) {
+            Payment latest = paymentRepository.findByPaymentNo(paymentNo);
+            if (latest != null && latest.getStatus() == Payment.PaymentStatus.PAID) return toResponse(latest);
+            throw new ServiceException(409, "支付状态已变化，请重新查询");
+        }
+        payment.setChannel(normalizedChannel);
+        payment.setTransactionNo(txNo);
+        payment.setStatus(Payment.PaymentStatus.PAID);
+        payment.setPaidAt(paidAt);
+        payment.setUpdatedAt(paidAt);
+        try {
+            if (!orderPaymentService.markPaid(payment.getOrderId())) {
+                throw new ServiceException(409, "订单已取消，支付结果未进入订单，请核对支付状态");
+            }
+        } catch (RuntimeException exception) {
+            if (Payment.Channel.MOCK.name().equals(normalizedChannel)) {
+                paymentStateService.markRefundedIfPaid(payment.getId());
+                payment.setStatus(Payment.PaymentStatus.REFUNDED);
+            }
+            throw exception;
         }
         return toResponse(payment);
     }
@@ -144,6 +211,17 @@ public class PaymentServiceImpl implements PaymentService {
             }
         }
         throw new ServiceException(400, "不支持的支付渠道: " + channelCode);
+    }
+
+    private String requireTransactionNo(String transactionNo) {
+        if (transactionNo == null || transactionNo.isBlank()) {
+            throw new ServiceException(502, "支付渠道未返回交易流水号");
+        }
+        String normalized = transactionNo.trim();
+        if (normalized.length() > 100) {
+            throw new ServiceException(502, "支付渠道交易流水号过长");
+        }
+        return normalized;
     }
 
     private String nextPaymentNo() {

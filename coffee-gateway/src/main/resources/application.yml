@@ -22,13 +22,13 @@ spring:
         - id: coffee-web-local
           uri: ${COFFEE_WEB_URL:http://127.0.0.1:8088}
           predicates:
-            - Path=/api/**,/actuator/**
+            - Path=/api/**
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,gateway
+        include: health,info
   endpoint:
     health:
       probes:

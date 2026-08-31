@@ -3,9 +3,9 @@
 
 spring:
   datasource:
-    url: jdbc:mysql://101.96.195.24:3306/coffee_order_pro?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: yuliandev
-    password: yuliandev
+    url: ${COFFEE_DB_URL}
+    username: ${COFFEE_DB_USERNAME}
+    password: ${COFFEE_DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
   cache:
     type: simple
@@ -25,12 +25,14 @@ management:
 
 coffee:
   auth:
-    token-secret: change-this-development-secret-before-production-2026
+    token-secret: ${COFFEE_AUTH_TOKEN_SECRET}
     token-expires-seconds: 28800
+    expose-reset-token: ${COFFEE_AUTH_EXPOSE_RESET_TOKEN:false}
   payment:
-    callback-secret: change-this-callback-secret-before-production-2026
+    callback-secret: ${COFFEE_PAYMENT_CALLBACK_SECRET}
+    mock-callback-enabled: ${COFFEE_PAYMENT_MOCK_CALLBACK_ENABLED:false}
   seat:
-    qr-base-url: http://192.168.31.42:5173
+    qr-base-url: ${COFFEE_QR_BASE_URL:http://localhost:5174}
     store-name: 静安店
     assign-timeout-minutes: 15
   inventory:

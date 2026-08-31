@@ -23,7 +23,7 @@ public interface AuthService {
     AuthResponse getUserInfo(Long id);
 
     /**
-     * 忘记密码 — 生成重置令牌并返回
+     * 忘记密码 — 生成重置令牌；由 Web 层根据环境策略决定是否展示
      */
     String forgotPassword(ForgotPasswordRequest request);
 

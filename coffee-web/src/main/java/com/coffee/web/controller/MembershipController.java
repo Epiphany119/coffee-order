@@ -31,7 +31,7 @@ public class MembershipController {
     /** 开卡（幂等，从 coffee_user 快照初始化） */
     @PostMapping("/card/init")
     public MemberCardDTO initCard(@RequestBody Map<String, Object> body) {
-        Long userId = Long.valueOf(body.get("userId").toString());
+        Long userId = requiredUserId(body);
         AccessGuard.requireUser(userId);
         return membershipService.initCard(userId);
     }
@@ -58,9 +58,13 @@ public class MembershipController {
     /** 积分兑换（拆券发放到卡券包） */
     @PostMapping("/points/redeem")
     public RedeemResultDTO redeemPoints(@RequestBody Map<String, Object> body) {
-        Long userId = Long.valueOf(body.get("userId").toString());
+        Long userId = requiredUserId(body);
         AccessGuard.requireUser(userId);
-        String itemCode = body.get("itemCode").toString();
+        Object itemCodeValue = body == null ? null : body.get("itemCode");
+        if (itemCodeValue == null || itemCodeValue.toString().isBlank()) {
+            throw new com.coffee.common.core.exception.ServiceException(400, "兑换项不能为空");
+        }
+        String itemCode = itemCodeValue.toString().trim();
         return membershipService.redeemPoints(userId, itemCode);
     }
 
@@ -69,5 +73,17 @@ public class MembershipController {
     public List<VoucherDTO> listVouchers(@RequestParam Long userId) {
         AccessGuard.requireUser(userId);
         return membershipService.listVouchers(userId);
+    }
+
+    private Long requiredUserId(Map<String, Object> body) {
+        Object value = body == null ? null : body.get("userId");
+        if (value == null || value.toString().isBlank()) {
+            throw new com.coffee.common.core.exception.ServiceException(400, "用户 id 不能为空");
+        }
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException e) {
+            throw new com.coffee.common.core.exception.ServiceException(400, "用户 id 格式无效");
+        }
     }
 }

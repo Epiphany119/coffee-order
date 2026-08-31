@@ -17,7 +17,8 @@ public class TokenAuthenticationInterceptor implements HandlerInterceptor {
     public TokenAuthenticationInterceptor(TokenService tokenService) { this.tokenService = tokenService; }
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        RequestIdentityHolder.clear();
         // 认证入口不应因浏览器自动附带的过期 Token 而被阻断；这些接口自身
         // 不依赖请求身份，成功后会签发一张新 Token。受保护的用户资料、订单等
         // 路径仍会走下面的严格校验。
@@ -33,24 +34,46 @@ public class TokenAuthenticationInterceptor implements HandlerInterceptor {
             try {
                 RequestIdentityHolder.set(tokenService.verify(authorization.substring(7).trim()));
             } catch (Exception e) {
-                // Token 无效或过期时不阻断请求：公开接口（如店铺列表、菜单）
-                // 仍需正常访问，受保护接口会在业务层校验身份。
                 log.debug("Token verification failed for {}: {}", request.getRequestURI(), e.getMessage());
+                if (!isPublicResource(request)) {
+                    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "无效的登录凭证");
+                    return false;
+                }
             }
         }
         return true;
+    }
+
+    private boolean isPublicResource(HttpServletRequest request) {
+        if (!"GET".equalsIgnoreCase(request.getMethod())) return false;
+        String path = request.getRequestURI();
+        return "/api/menu".equals(path)
+                || "/api/store/list".equals(path)
+                || "/api/store/open".equals(path)
+                || "/api/store/available".equals(path)
+                || path.matches("/api/store/\\d+")
+                || "/api/seat/resolve".equals(path)
+                || "/api/flash-sales/current".equals(path)
+                || "/api/location/recommend".equals(path)
+                || "/api/membership/level-rules".equals(path)
+                || "/api/membership/redeem-items".equals(path)
+                || "/api/discovery/search".equals(path)
+                || "/api/topup/products".equals(path);
     }
 
     private boolean isPublicSessionEndpoint(HttpServletRequest request) {
         String path = request.getRequestURI();
         if ("/api/auth/login-challenge".equals(path)) return true;
         if (!"POST".equalsIgnoreCase(request.getMethod())) return false;
+        if (path.startsWith("/api/pay/callback/")) return true;
         return "/api/auth/login".equals(path)
                 || "/api/auth/register".equals(path)
                 || "/api/auth/forgot-password".equals(path)
                 || "/api/auth/reset-password".equals(path)
                 || "/api/merchant/login".equals(path)
                 || "/api/merchant/register".equals(path)
+                || "/api/delivery/riders/login".equals(path)
+                || "/api/delivery/riders/register".equals(path)
                 || "/api/guest/session".equals(path);
     }
 

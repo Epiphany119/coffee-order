@@ -15,7 +15,7 @@ public class Order {
     private String guestId;
     /** 下单店铺 id（用户端选店后绑定） */
     private Long storeId;
-    /** 取餐方式（PICKUP 到店自取 / DINE_IN 店内用餐） */
+    /** 取餐方式（PICKUP 到店自取 / DINE_IN 店内用餐 / DELIVERY 外卖配送） */
     private String fulfillmentType;
     /** 订单备注 */
     private String note;

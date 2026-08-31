@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
  * 座位模块配置
  * 可在 application.yml 中覆盖：
  *   coffee.seat.store-name: 静安店
- *   coffee.seat.qr-base-url: http://localhost:5173
+ *   coffee.seat.qr-base-url: http://localhost:5174
  *   coffee.seat.assign-timeout-minutes: 15
  */
 @Component
@@ -18,7 +18,7 @@ public class SeatProperties {
     private String storeName = "静安店";
 
     /** 二维码内容的基础地址（前端系统地址），生产环境改为部署域名 */
-    private String qrBaseUrl = "http://localhost:5173";
+    private String qrBaseUrl = "http://localhost:5174";
 
     /** 分配后未落座的超时释放时间（分钟） */
     private int assignTimeoutMinutes = 15;

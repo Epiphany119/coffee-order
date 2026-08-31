@@ -27,6 +27,7 @@
         <module>coffee-module-after-sales-biz</module>
         <module>coffee-module-payment-biz</module>
         <module>coffee-module-location-biz</module>
+        <module>coffee-module-delivery-biz</module>
         <module>coffee-web</module>
         <module>coffee-gateway</module>
         <module>coffee-inventory-service</module>
@@ -132,6 +133,11 @@
             <dependency>
                 <groupId>com.coffee</groupId>
                 <artifactId>coffee-module-location-biz</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.coffee</groupId>
+                <artifactId>coffee-module-delivery-biz</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

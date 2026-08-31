@@ -18,7 +18,6 @@ public class AgentConversationService {
     public AgentConversationService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
     public String ensureSession(String suppliedSessionId, String ownerKey, String scene) {
-        bootstrap();
         if (suppliedSessionId != null && !suppliedSessionId.isBlank()) {
             Integer exists = jdbc.queryForObject("SELECT COUNT(1) FROM agent_conversation WHERE session_id=? AND owner_key=? AND scene=?",
                     Integer.class, suppliedSessionId, ownerKey, scene);
@@ -33,14 +32,12 @@ public class AgentConversationService {
 
     public void append(String sessionId, String ownerKey, String role, String content) {
         if (content == null || content.isBlank()) return;
-        bootstrap();
         jdbc.update("INSERT INTO agent_conversation_message(session_id,owner_key,role,content,created_at) VALUES (?,?,?,?,?)",
                 sessionId, ownerKey, role, content, LocalDateTime.now());
         jdbc.update("UPDATE agent_conversation SET updated_at=? WHERE session_id=? AND owner_key=?", LocalDateTime.now(), sessionId, ownerKey);
     }
 
     public List<String> recent(String sessionId, String ownerKey, int size) {
-        bootstrap();
         List<String> newestFirst = jdbc.query("""
                 SELECT CONCAT(role, '：', content) FROM agent_conversation_message
                 WHERE session_id=? AND owner_key=? ORDER BY id DESC LIMIT ?
@@ -51,20 +48,4 @@ public class AgentConversationService {
         return chronological;
     }
 
-    private void bootstrap() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS agent_conversation (
-                  session_id VARCHAR(40) PRIMARY KEY, owner_key VARCHAR(80) NOT NULL,
-                  scene VARCHAR(40) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
-                  KEY idx_agent_conversation_owner (owner_key, scene, updated_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """);
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS agent_conversation_message (
-                  id BIGINT PRIMARY KEY AUTO_INCREMENT, session_id VARCHAR(40) NOT NULL,
-                  owner_key VARCHAR(80) NOT NULL, role VARCHAR(16) NOT NULL, content TEXT NOT NULL,
-                  created_at DATETIME NOT NULL, KEY idx_agent_message_session (session_id, id)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """);
-    }
 }

@@ -37,6 +37,7 @@ public class StoreController {
     /** 创建店铺（商家建店 / 管理端） */
     @PostMapping
     public StoreResponse create(@RequestBody StoreRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         if (request.getMerchantId() == null) {
             throw new com.coffee.common.core.exception.ServiceException(400, "创建店铺必须指定商家身份");
         }
@@ -71,6 +72,7 @@ public class StoreController {
     /** 更新店铺（店名/地址/电话/营业时间/状态） */
     @PutMapping("/{id}")
     public StoreResponse update(@PathVariable("id") Long id, @RequestBody StoreRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         requireStoreOwner(id);
         return storeService.updateStore(id, request);
     }
@@ -100,6 +102,7 @@ public class StoreController {
     /** 店铺可见类目：共享类目 + 该店自定义类目 */
     @GetMapping("/{storeId}/categories")
     public List<MenuCategoryDTO> storeCategories(@PathVariable("storeId") Long storeId) {
+        requireStoreOwner(storeId);
         return productService.listCategories(storeId);
     }
 
@@ -107,6 +110,7 @@ public class StoreController {
     @PostMapping("/{storeId}/category")
     public MenuCategoryDTO createCategory(@PathVariable("storeId") Long storeId,
                                           @RequestBody MenuCategoryRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         requireStoreOwner(storeId);
         return productService.createCategory(storeId, request);
     }
@@ -115,6 +119,7 @@ public class StoreController {
     @PostMapping("/{storeId}/menu")
     public MenuItemDTO createMenu(@PathVariable("storeId") Long storeId,
                                  @RequestBody MenuItemRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         requireStoreOwner(storeId);
         return productService.createForStore(storeId, request);
     }
@@ -132,6 +137,7 @@ public class StoreController {
     public MenuItemDTO updateMenu(@PathVariable("storeId") Long storeId,
                                  @PathVariable("productId") Long productId,
                                  @RequestBody MenuItemRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         requireStoreOwner(storeId);
         return productService.updateProduct(storeId, productId, request);
     }

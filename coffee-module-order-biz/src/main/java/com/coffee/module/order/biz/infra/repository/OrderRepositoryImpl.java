@@ -167,6 +167,11 @@ public class OrderRepositoryImpl implements OrderRepository {
         orderMapper.updateStatus(orderId, status.name());
     }
 
+    @Override
+    public boolean updateStatusIfCurrent(Long orderId, Order.OrderStatus expectedStatus, Order.OrderStatus status) {
+        return orderMapper.updateStatusIfCurrent(orderId, expectedStatus.name(), status.name()) > 0;
+    }
+
     private Order toDomain(OrderPO po) {
         Order order = new Order();
         order.setId(po.getId());

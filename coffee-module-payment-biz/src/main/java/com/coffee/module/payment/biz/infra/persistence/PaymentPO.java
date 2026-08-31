@@ -30,7 +30,7 @@ public class PaymentPO {
 
     private Double amount;
 
-    /** 状态 PENDING/PAID/FAILED/CLOSED/REFUNDED */
+    /** 状态 PENDING/PROCESSING/PAID/FAILED/CLOSED/REFUNDED */
     private String status;
 
     /** 渠道交易流水号 */

@@ -31,6 +31,7 @@ public class StoreApplicationService implements StoreService {
     @Override
     @Transactional
     public StoreResponse createStore(StoreRequest request) {
+        if (request == null) throw new ServiceException(400, "请求不能为空");
         if (request.getCode() == null || request.getCode().isBlank()) {
             throw new ServiceException(400, "店铺编码不能为空");
         }
@@ -80,6 +81,7 @@ public class StoreApplicationService implements StoreService {
     @Override
     @Transactional
     public StoreResponse updateStore(Long storeId, StoreRequest request) {
+        if (request == null) throw new ServiceException(400, "请求不能为空");
         Store store = requireStore(storeId);
         if (request.getName() != null && !request.getName().isBlank()) {
             store.setName(request.getName().trim());

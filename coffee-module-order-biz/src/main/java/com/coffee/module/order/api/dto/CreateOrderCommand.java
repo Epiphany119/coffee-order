@@ -12,8 +12,10 @@ public class CreateOrderCommand {
     private String guestId;
     /** 下单店铺（用户端切换店铺后绑定当前店铺） */
     private Long storeId;
-    /** 取餐方式（PICKUP 到店自取 / DINE_IN 店内用餐） */
+    /** 取餐方式（PICKUP 到店自取 / DINE_IN 店内用餐 / DELIVERY 外卖配送） */
     private String fulfillmentType;
+    /** 外卖收货地址 id；仅 DELIVERY 且登录用户下单时使用。 */
+    private Long deliveryAddressId;
     /** 订单备注 */
     private String note;
     private String productCode;

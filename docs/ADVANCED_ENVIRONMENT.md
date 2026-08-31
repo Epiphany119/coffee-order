@@ -50,6 +50,9 @@ export COFFEE_ROCKETMQ_NAMESRV='127.0.0.1:9876'
 export NACOS_SERVER_ADDR='127.0.0.1:8848'
 export COFFEE_AUTH_TOKEN_SECRET='至少32字符的随机生产密钥'
 export COFFEE_PAYMENT_CALLBACK_SECRET='至少32字符的随机回调密钥'
+export COFFEE_PAYMENT_MOCK_CALLBACK_ENABLED='false'
+export COFFEE_CORS_ALLOWED_ORIGINS='http://localhost:5174,http://127.0.0.1:5174'
+export COFFEE_QR_BASE_URL='http://你的前端域名或局域网地址:5174'
 export COFFEE_OTLP_TRACING_ENDPOINT='http://127.0.0.1:4318/v1/traces'
 mvn -pl coffee-web -am spring-boot:run -Dspring-boot.run.profiles=prod,rocketmq
 ```

@@ -23,7 +23,7 @@ class CustomerSemanticMenuRetriever {
     Map<String,Double> retrieve(Long storeId,String query,List<MenuItemDTO> products) {
         if (storeId==null || products.isEmpty()) return Map.of();
         try {
-            bootstrap(); List<String> texts=products.stream().map(this::document).toList(); List<String> hashes=texts.stream().map(this::hash).toList();
+            List<String> texts=products.stream().map(this::document).toList(); List<String> hashes=texts.stream().map(this::hash).toList();
             Map<String,Row> cached=rows(storeId);
             List<Integer> stale=new ArrayList<>(); for(int i=0;i<products.size();i++){Row row=cached.get(products.get(i).getCode());if(row==null||!hashes.get(i).equals(row.hash))stale.add(i);}
             if(!stale.isEmpty()) {
@@ -59,6 +59,5 @@ class CustomerSemanticMenuRetriever {
     private double cosine(List<Double>a,List<Double>b){if(a.size()!=b.size())return 0;double dot=0,na=0,nb=0;for(int i=0;i<a.size();i++){dot+=a.get(i)*b.get(i);na+=a.get(i)*a.get(i);nb+=b.get(i)*b.get(i);}return na==0||nb==0?0:dot/Math.sqrt(na*nb);}
     private String hash(String text){try{return Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));}catch(Exception e){return text;}}
     private String safe(String s){return s==null?"":s;}
-    private void bootstrap(){jdbc.execute("CREATE TABLE IF NOT EXISTS agent_menu_embedding (store_id BIGINT NOT NULL,product_code VARCHAR(80) NOT NULL,text_hash VARCHAR(100) NOT NULL,vector_json MEDIUMTEXT NOT NULL,updated_at DATETIME NOT NULL,PRIMARY KEY(store_id,product_code)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");}
     private record Row(String hash,List<Double> vector){}
 }

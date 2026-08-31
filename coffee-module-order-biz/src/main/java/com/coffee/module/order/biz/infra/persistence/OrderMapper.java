@@ -58,6 +58,11 @@ public interface OrderMapper extends BaseMapper<OrderPO> {
     @Update("UPDATE user_order SET status = #{status} WHERE id = #{id}")
     void updateStatus(@Param("id") Long id, @Param("status") String status);
 
+    /** 状态机 CAS：只有数据库中的旧状态仍匹配时才允许流转。 */
+    @Update("UPDATE user_order SET status = #{status} WHERE id = #{id} AND status = #{expectedStatus}")
+    int updateStatusIfCurrent(@Param("id") Long id, @Param("expectedStatus") String expectedStatus,
+                              @Param("status") String status);
+
     /** 店铺当日最大订单顺序号：order_no 末段数字的最大值，无则 0 */
     @Select("SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(order_no, '-', -1) AS UNSIGNED)), 0) " +
             "FROM user_order WHERE store_id = #{storeId} AND order_no LIKE CONCAT(#{prefix}, '-%')")

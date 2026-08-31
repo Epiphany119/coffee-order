@@ -4,15 +4,30 @@ server:
 spring:
   application:
     name: coffee-web
+  datasource:
+    # 默认仅提供本机地址，账号、密码必须由环境变量注入。
+    url: ${COFFEE_DB_URL:jdbc:mysql://127.0.0.1:3306/coffee_order_pro?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${COFFEE_DB_USERNAME}
+    password: ${COFFEE_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  cache:
+    type: simple
+  cloud:
+    service-registry:
+      auto-registration:
+        enabled: false
+    nacos:
+      discovery:
+        enabled: false
+        register-enabled: false
   # ============================================================
   # 配置切换说明：
-  #   local  - 本地开发（使用 application-local.yml 的本地配置）
+  #   local  - 本地开发（可选使用 application-local.yml 覆盖）
   #   dev    - 线上开发（使用 application-dev.yml 的线上数据库配置）
-  # 只需修改下一行的 active 值即可切换环境
+  # 可通过 SPRING_PROFILES_ACTIVE 切换环境，默认 local
   # ============================================================
   profiles:
-    active: local
-    # active: dev  # 线上开发时取消注释，注释掉上面的 local
+    active: ${SPRING_PROFILES_ACTIVE:local}
 
 management:
   tracing:
@@ -51,8 +66,29 @@ mybatis-plus:
     db-config:
       id-type: auto
 
-# 仅包含与环境无关的业务配置；数据库、中间件、密钥等均见 application-dev/prod.yml。
+# 默认配置只提供安全占位值；数据库、令牌和回调密钥必须通过环境变量注入。
 coffee:
+  auth:
+    # 空值会让 TokenService 拒绝启动，避免误用开发密钥。
+    token-secret: ${COFFEE_AUTH_TOKEN_SECRET:}
+    token-expires-seconds: ${COFFEE_AUTH_TOKEN_EXPIRES_SECONDS:28800}
+    expose-reset-token: ${COFFEE_AUTH_EXPOSE_RESET_TOKEN:false}
+  payment:
+    callback-secret: ${COFFEE_PAYMENT_CALLBACK_SECRET:}
+    mock-callback-enabled: ${COFFEE_PAYMENT_MOCK_CALLBACK_ENABLED:false}
+  seat:
+    qr-base-url: ${COFFEE_QR_BASE_URL:http://localhost:5174}
+    store-name: ${COFFEE_STORE_NAME:FIKA}
+    assign-timeout-minutes: ${COFFEE_SEAT_ASSIGN_TIMEOUT_MINUTES:15}
+  inventory:
+    redis-cache-enabled: false
+  membership:
+    async-enabled: false
+  flash-sale:
+    redis-enabled: false
+  web:
+    cors:
+      allowed-origins: ${COFFEE_CORS_ALLOWED_ORIGINS:http://localhost:5174,http://127.0.0.1:5174}
   ai:
     platform:
       # 当前采用 GLM 路由 + 后端受控工具编排；未来接入 Spring AI Alibaba 时只替换适配器。

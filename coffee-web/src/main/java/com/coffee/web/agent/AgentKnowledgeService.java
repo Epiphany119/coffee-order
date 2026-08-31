@@ -33,7 +33,6 @@ public class AgentKnowledgeService {
     public List<KnowledgeHit> retrieve(String query, Long storeId, int limit) {
         String normalized = query == null ? "" : query.trim();
         if (normalized.isBlank()) return List.of();
-        bootstrap();
         List<KnowledgeHit> semanticHits = embeddingClient.embed(List.of(normalized))
                 .flatMap(vector -> vectorStore.search(vector.get(0), storeId, limit))
                 .map(hits -> loadSemanticHits(hits, storeId))
@@ -73,7 +72,6 @@ public class AgentKnowledgeService {
     /** 单次请求最多 64 条，适合菜单等结构化知识初始化。 */
     public void upsertBatch(Long storeId, List<KnowledgeDocument> documents) {
         if (documents == null || documents.isEmpty()) return;
-        bootstrap();
         List<KnowledgeDocument> valid = documents.stream()
                 .filter(document -> document != null && document.title() != null && !document.title().isBlank()
                         && document.content() != null && !document.content().isBlank())
@@ -140,21 +138,6 @@ public class AgentKnowledgeService {
             if (pair.matches("[\\u4e00-\\u9fa5]{2}")) tokens.add(pair);
         }
         return tokens.stream().distinct().toList();
-    }
-
-    private void bootstrap() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS agent_knowledge_document (
-                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-                  store_id BIGINT NULL,
-                  title VARCHAR(200) NOT NULL,
-                  content TEXT NOT NULL,
-                  source VARCHAR(80) NOT NULL,
-                  enabled TINYINT NOT NULL DEFAULT 1,
-                  updated_at DATETIME NOT NULL,
-                  UNIQUE KEY uk_agent_knowledge (store_id, title)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """);
     }
 
     public record KnowledgeHit(long id, Long storeId, String title, String content,

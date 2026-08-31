@@ -36,6 +36,9 @@ import java.util.*;
 @Service
 public class OrderApplicationService implements OrderService {
 
+    private static final int MAX_CART_LINES = 50;
+    private static final int MAX_LINE_QUANTITY = 99;
+
     private final OrderDomainService orderDomainService;
     private final OrderRepository orderRepository;
     private final MenuService productService;
@@ -75,8 +78,15 @@ public class OrderApplicationService implements OrderService {
     @Override
     @Transactional
     public OrderResponse createOrder(CreateOrderCommand command) {
+        if (command == null) throw new ServiceException(400, "请求不能为空");
+        validateIdentity(command.getUserId(), command.getGuestId());
+        if (command.getStoreId() == null || command.getStoreId() <= 0) {
+            throw new ServiceException(400, "请选择有效门店");
+        }
         if (command.getFlashSaleClaimNo() != null && !command.getFlashSaleClaimNo().isBlank() && command.isBatch()) {
-            if (command.getItems().size() != 1 || command.getItems().get(0).getQuantity() != 1) {
+            if (command.getItems().size() != 1 || command.getItems().get(0) == null
+                    || command.getItems().get(0).getQuantity() == null
+                    || command.getItems().get(0).getQuantity() != 1) {
                 throw new ServiceException(400, "秒杀商品请单独结算，且每次限购一件");
             }
             CartItemCommand item = command.getItems().get(0);
@@ -93,6 +103,9 @@ public class OrderApplicationService implements OrderService {
         Long storeId = command.getStoreId();
         Long userId = command.getUserId();
         String guestId = command.getGuestId();
+        if (command.getProductCode() == null || command.getProductCode().isBlank()) {
+            throw new ServiceException(400, "请选择商品");
+        }
         MenuItemDTO product = productService.getProductByCode(storeId, command.getProductCode());
         double regularUnitPrice = productService.calculatePrice(
                 storeId,
@@ -170,15 +183,22 @@ public class OrderApplicationService implements OrderService {
 
     private OrderResponse createBatchOrder(CreateOrderCommand command) {
         List<CartItemCommand> cartItems = command.getItems();
+        if (cartItems == null || cartItems.isEmpty() || cartItems.size() > MAX_CART_LINES) {
+            throw new ServiceException(400, "购物车商品数量无效");
+        }
         Long userId = command.getUserId();
-        String guestId = command.getGuestId() != null ? command.getGuestId() : "anonymous";
+        String guestId = command.getGuestId();
 
         // 第一遍：解析每个购物车行（原价单价/商品名/数量）并计算原价总额
         List<CartLine> lines = new ArrayList<>();
         double totalOriginal = 0;
         for (CartItemCommand item : cartItems) {
-            if (item.getQuantity() <= 0) {
-                throw new ServiceException(400, "商品数量必须大于 0");
+            if (item == null || item.getQuantity() == null
+                    || item.getQuantity() <= 0 || item.getQuantity() > MAX_LINE_QUANTITY) {
+                throw new ServiceException(400, "商品数量需在 1-" + MAX_LINE_QUANTITY + " 之间");
+            }
+            if (item.getProductCode() == null || item.getProductCode().isBlank()) {
+                throw new ServiceException(400, "商品编码不能为空");
             }
             MenuItemDTO product = productService.getProductByCode(command.getStoreId(), item.getProductCode());
             double unitPrice = productService.calculatePrice(
@@ -322,32 +342,36 @@ public class OrderApplicationService implements OrderService {
         if (order == null) {
             throw new ServiceException(404, "订单不存在");
         }
-        // 用户端/游客端仅允许取消尚未支付的订单；已支付订单必须通过商家售后流程处理，
-        // 避免客户端绕过退款、积分与库存等后续业务。
+        // 用户端/游客端仅允许取消未支付订单；已支付订单必须通过退款流程处理。
         if (isUserOrder && (action == null || !"cancel".equalsIgnoreCase(action)
-                || order.getStatus() == Order.OrderStatus.COMPLETED
-                || order.getStatus() == Order.OrderStatus.CANCELED)) {
-            throw new ServiceException(400, "仅未完成订单可由用户取消");
+                || order.getStatus() != Order.OrderStatus.UNPAID)) {
+            throw new ServiceException(400, "仅待支付订单可由用户取消");
         }
-        Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(order.getStatus().name(), action);
-        orderRepository.updateStatus(orderId, newStatus);
-        if (newStatus == Order.OrderStatus.CANCELED && order.getStatus() == Order.OrderStatus.UNPAID
+        if ("cancel".equalsIgnoreCase(action) && order.getStatus() != Order.OrderStatus.UNPAID) {
+            throw new ServiceException(409, "已支付订单不能直接取消，请走售后退款流程");
+        }
+        Order.OrderStatus previousStatus = order.getStatus();
+        Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(previousStatus.name(), action);
+        if (!orderRepository.updateStatusIfCurrent(orderId, previousStatus, newStatus)) {
+            throw new ServiceException(409, "订单状态已变化，请刷新后重试");
+        }
+        if (newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.UNPAID
                 && order.getUserId() != null && order.getVoucherNo() != null) {
             membershipService.restoreVoucher(order.getUserId(), order.getVoucherNo());
         }
-        if (newStatus == Order.OrderStatus.CANCELED && order.getStatus() == Order.OrderStatus.UNPAID) {
+        if (newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.UNPAID) {
             orderRepository.findItemsByOrderId(orderId).forEach(item ->
                     inventoryService.release(order.getStoreId(), item.getProductId(), item.getQuantity()));
         }
         eventPublisher.publishEvent(OrderDomainEvent.statusChanged(orderId, order.getBeverageName(), newStatus.name()));
         // 消费累计 + 积分入账：仅在订单完成的那一刻计入（状态机单向，只会触发一次），取消/未完成不计入
-        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.COMPLETED && order.getStatus() != Order.OrderStatus.COMPLETED
+        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.COMPLETED && previousStatus != Order.OrderStatus.COMPLETED
                 && order.getUserId() != null && order.getUserId() > 0) {
             memberService.addSpending(order.getUserId(), order.getFinalPrice());
             membershipService.addConsumptionPoints(order.getUserId(), order.getFinalPrice());
         }
         // 取消回滚：已完成订单被取消时，累计消费与积分按实付金额扣回（先扣消费，积分按回滚后重算）
-        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.CANCELED && order.getStatus() == Order.OrderStatus.COMPLETED
+        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.COMPLETED
                 && order.getUserId() != null && order.getUserId() > 0) {
             memberService.subtractSpending(order.getUserId(), order.getFinalPrice());
             membershipService.deductConsumptionPoints(order.getUserId(), order.getFinalPrice());
@@ -371,21 +395,27 @@ public class OrderApplicationService implements OrderService {
         if (storeId == null || !storeId.equals(order.getStoreId())) {
             throw new ServiceException(403, "订单不属于该店铺，无权操作");
         }
-        Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(order.getStatus().name(), action);
-        orderRepository.updateStatus(orderId, newStatus);
-        if (newStatus == Order.OrderStatus.CANCELED && order.getStatus() == Order.OrderStatus.UNPAID) {
+        Order.OrderStatus previousStatus = order.getStatus();
+        if ("cancel".equalsIgnoreCase(action) && previousStatus != Order.OrderStatus.UNPAID) {
+            throw new ServiceException(409, "已支付订单不能直接取消，请走售后退款流程");
+        }
+        Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(previousStatus.name(), action);
+        if (!orderRepository.updateStatusIfCurrent(orderId, previousStatus, newStatus)) {
+            throw new ServiceException(409, "订单状态已变化，请刷新后重试");
+        }
+        if (newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.UNPAID) {
             orderRepository.findItemsByOrderId(orderId).forEach(item ->
                     inventoryService.release(order.getStoreId(), item.getProductId(), item.getQuantity()));
         }
         eventPublisher.publishEvent(OrderDomainEvent.statusChanged(orderId, order.getBeverageName(), newStatus.name()));
         // 消费累计 + 积分入账：仅在订单完成的那一刻计入（状态机单向，只会触发一次），取消/未完成不计入
-        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.COMPLETED && order.getStatus() != Order.OrderStatus.COMPLETED
+        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.COMPLETED && previousStatus != Order.OrderStatus.COMPLETED
                 && order.getUserId() != null && order.getUserId() > 0) {
             memberService.addSpending(order.getUserId(), order.getFinalPrice());
             membershipService.addConsumptionPoints(order.getUserId(), order.getFinalPrice());
         }
         // 取消回滚：已完成订单被取消时，累计消费与积分按实付金额扣回（先扣消费，积分按回滚后重算）
-        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.CANCELED && order.getStatus() == Order.OrderStatus.COMPLETED
+        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.COMPLETED
                 && order.getUserId() != null && order.getUserId() > 0) {
             memberService.subtractSpending(order.getUserId(), order.getFinalPrice());
             membershipService.deductConsumptionPoints(order.getUserId(), order.getFinalPrice());
@@ -442,7 +472,11 @@ public class OrderApplicationService implements OrderService {
         if (userId == null || userId <= 0) return 0;
         double saved = orderRepository.findByUserId(userId).stream()
                 .filter(o -> o.getStatus() == Order.OrderStatus.COMPLETED)
-                .mapToDouble(o -> Math.max(0, o.getOriginalPrice() - o.getFinalPrice()))
+                .mapToDouble(o -> {
+                    double originalPrice = o.getOriginalPrice() == null ? 0 : o.getOriginalPrice();
+                    double finalPrice = o.getFinalPrice() == null ? 0 : o.getFinalPrice();
+                    return Math.max(0, originalPrice - finalPrice);
+                })
                 .sum();
         return MoneyUtils.round2(saved);
     }
@@ -586,7 +620,7 @@ public class OrderApplicationService implements OrderService {
 
     private CouponResult applyCoupon(String code, double amount, Long userId) {
         if (userId == null || userId <= 0 || code == null || code.isBlank()) return new CouponResult(amount, 0, "", null);
-        return switch (code.trim().toUpperCase()) {
+        return switch (code.trim().toUpperCase(Locale.ROOT)) {
             case "FIKA8" -> fixedCoupon(amount, 48, 8, "下午茶立减 ¥8");
             case "SWEET12" -> fixedCoupon(amount, 78, 12, "甜品满 ¥78 减 ¥12");
             case "BEAN15" -> fixedCoupon(amount, 88, 15, "咖啡满 ¥88 减 ¥15");
@@ -612,6 +646,14 @@ public class OrderApplicationService implements OrderService {
 
     private void consumeVoucherIfNeeded(Long userId, CouponResult coupon) {
         if (coupon.voucherNo != null) membershipService.consumeVoucher(userId, coupon.voucherNo);
+    }
+
+    private void validateIdentity(Long userId, String guestId) {
+        boolean hasUser = userId != null && userId > 0;
+        boolean hasGuest = guestId != null && !guestId.isBlank();
+        if (hasUser == hasGuest) {
+            throw new ServiceException(400, "下单身份只能是用户或游客其中一种");
+        }
     }
 
     private record CouponResult(double finalPrice, double discount, String name, String voucherNo) {}

@@ -77,6 +77,9 @@ public class MenuDomainService implements MenuService {
     @Override
     @CacheEvict(cacheNames = "menu:categories", allEntries = true)
     public MenuCategoryDTO createCategory(Long storeId, MenuCategoryRequest request) {
+        if (request == null) {
+            throw new ServiceException(400, "请求不能为空");
+        }
         if (request.getName() == null || request.getName().isBlank()) {
             throw new ServiceException(400, "类目名称不能为空");
         }
@@ -100,20 +103,31 @@ public class MenuDomainService implements MenuService {
             @CacheEvict(cacheNames = "menu:topup", allEntries = true)
     })
     public MenuItemDTO createForStore(Long storeId, MenuItemRequest request) {
+        if (request == null) {
+            throw new ServiceException(400, "请求不能为空");
+        }
         if (request.getCode() == null || request.getCode().isBlank()) {
             throw new ServiceException(400, "商品编码不能为空");
         }
+        if (request.getName() == null || request.getName().isBlank()) {
+            throw new ServiceException(400, "商品名称不能为空");
+        }
+        if (request.getCategoryCode() == null || request.getCategoryCode().isBlank()) {
+            throw new ServiceException(400, "商品分类不能为空");
+        }
+        validatePrices(request);
+        String code = request.getCode().trim();
         // 冲突校验覆盖全局品：与全局初始品同 code 时拒绝（改全局品请走编辑接口，会自动生成本店专属品）
-        if (productRepository.findByCodeAndStore(storeId, request.getCode()) != null) {
-            throw new ServiceException(400, "该店已存在此编码的商品: " + request.getCode());
+        if (productRepository.findByCodeAndStore(storeId, code) != null) {
+            throw new ServiceException(400, "该店已存在此编码的商品: " + code);
         }
         MenuItem product = new MenuItem();
         // store_id 即状态码：商家新增的商品为该店专属品（状态码 = storeId）
         product.setStoreId(storeId);
-        product.setCode(request.getCode());
-        product.setName(request.getName());
-        product.setCategoryCode(request.getCategoryCode());
-        product.setCategoryId(resolveCategoryId(request.getCategoryId(), request.getCategoryCode()));
+        product.setCode(code);
+        product.setName(request.getName().trim());
+        product.setCategoryCode(request.getCategoryCode().trim());
+        product.setCategoryId(resolveCategoryId(request.getCategoryId(), request.getCategoryCode().trim()));
         product.setBasePrice(java.math.BigDecimal.valueOf(
                 request.getBasePrice() != null ? request.getBasePrice() : 0));
         product.setPriceSmall(request.getPriceSmall());
@@ -135,6 +149,10 @@ public class MenuDomainService implements MenuService {
             @CacheEvict(cacheNames = "menu:topup", allEntries = true)
     })
     public MenuItemDTO updateProduct(Long storeId, Long productId, MenuItemRequest request) {
+        if (request == null) {
+            throw new ServiceException(400, "请求不能为空");
+        }
+        validatePrices(request);
         MenuItem product = productRepository.findById(productId);
         if (product == null) {
             throw new ServiceException(404, "商品不存在: " + productId);
@@ -160,17 +178,19 @@ public class MenuDomainService implements MenuService {
         } else if (!storeId.equals(product.getStoreId())) {
             throw new ServiceException(404, "商品不存在: " + productId);
         }
-        if (request.getCode() != null && !request.getCode().isBlank() && !request.getCode().equals(product.getCode())) {
-            if (productRepository.findByCodeAndStore(storeId, request.getCode()) != null) {
-                throw new ServiceException(400, "该店已存在此编码的商品: " + request.getCode());
+        if (request.getCode() != null && !request.getCode().isBlank()
+                && !request.getCode().trim().equals(product.getCode())) {
+            String code = request.getCode().trim();
+            if (productRepository.findByCodeAndStore(storeId, code) != null) {
+                throw new ServiceException(400, "该店已存在此编码的商品: " + code);
             }
-            product.setCode(request.getCode());
+            product.setCode(code);
         }
         if (request.getName() != null && !request.getName().isBlank()) {
-            product.setName(request.getName());
+            product.setName(request.getName().trim());
         }
         if (request.getCategoryCode() != null && !request.getCategoryCode().isBlank()) {
-            product.setCategoryCode(request.getCategoryCode());
+            product.setCategoryCode(request.getCategoryCode().trim());
         }
         if (request.getCategoryId() != null) {
             product.setCategoryId(request.getCategoryId());
@@ -243,8 +263,15 @@ public class MenuDomainService implements MenuService {
         } else {
             price = product.getSizePrice(size);
         }
+        if (!Double.isFinite(price) || price < 0) {
+            throw new ServiceException(409, "商品价格无效");
+        }
         double condimentExtra = getCondimentExtraPrice(condiments);
-        return com.coffee.common.core.util.MoneyUtils.round2(price + condimentExtra);
+        double total = price + condimentExtra;
+        if (!Double.isFinite(total) || total < 0) {
+            throw new ServiceException(409, "商品价格无效");
+        }
+        return com.coffee.common.core.util.MoneyUtils.round2(total);
     }
 
     /** 定制规格计价：定制价 = 中等款定价 ×（定制量 ÷ 基准量），基准量按分类（饮品 ml / 甜点轻食 g） */
@@ -260,7 +287,7 @@ public class MenuDomainService implements MenuService {
         if (customSize == null || customSize.isBlank()) return 0;
         try {
             double v = Double.parseDouble(customSize.trim());
-            return v > 0 ? v : 0;
+            return Double.isFinite(v) && v > 0 ? v : 0;
         } catch (NumberFormatException e) {
             return 0;
         }
@@ -281,6 +308,7 @@ public class MenuDomainService implements MenuService {
         if (condiments == null || condiments.isEmpty()) return 0;
         double total = 0;
         for (String c : condiments) {
+            if (c == null || c.isBlank()) continue;
             total += switch (c) {
                 case "珍珠", "波霸", "椰果", "芋圆" -> 0;
                 case "芝士奶盖", "奶盖" -> 5;
@@ -300,11 +328,24 @@ public class MenuDomainService implements MenuService {
             if (amount.isEmpty()) return "定制";
             return "定制 " + amount + (isLiquid(categoryCode) ? "ml" : "g");
         }
-        return switch (size) {
+        return switch (size == null ? "MEDIUM" : size) {
             case "SMALL" -> "小杯";
             case "LARGE" -> "大杯";
             default -> "中杯";
         };
+    }
+
+    private void validatePrices(MenuItemRequest request) {
+        validatePrice("基础价格", request.getBasePrice());
+        validatePrice("小杯价格", request.getPriceSmall());
+        validatePrice("中杯价格", request.getPriceMedium());
+        validatePrice("大杯价格", request.getPriceLarge());
+    }
+
+    private void validatePrice(String name, Double value) {
+        if (value != null && (!Double.isFinite(value) || value < 0)) {
+            throw new ServiceException(400, name + "不能为负数或无效数字");
+        }
     }
 
     /** 解析分类外键：优先用传入的 categoryId，否则按 categoryCode 反查类目表回填（保证 category_id 不落 NULL） */

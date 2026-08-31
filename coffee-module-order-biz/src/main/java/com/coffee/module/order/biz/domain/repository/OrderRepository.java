@@ -34,4 +34,5 @@ public interface OrderRepository {
     /** 近 N 天热销商品（Map: name/quantity/amount） */
     List<java.util.Map<String, Object>> hotProducts(Long storeId, int days, int limit);
     void updateStatus(Long orderId, Order.OrderStatus status);
+    boolean updateStatusIfCurrent(Long orderId, Order.OrderStatus expectedStatus, Order.OrderStatus status);
 }

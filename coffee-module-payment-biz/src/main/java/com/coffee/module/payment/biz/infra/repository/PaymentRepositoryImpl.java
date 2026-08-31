@@ -6,6 +6,8 @@ import com.coffee.module.payment.biz.infra.persistence.PaymentMapper;
 import com.coffee.module.payment.biz.infra.persistence.PaymentPO;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
+
 /**
  * 支付单仓储实现
  */
@@ -46,6 +48,32 @@ public class PaymentRepositoryImpl implements PaymentRepository {
     public Payment findByOrderId(Long orderId) {
         PaymentPO po = paymentMapper.selectByOrderId(orderId);
         return po != null ? toDomain(po) : null;
+    }
+
+    @Override
+    public boolean tryStartProcessing(Long paymentId) {
+        return paymentMapper.tryStartProcessing(paymentId) > 0;
+    }
+
+    @Override
+    public boolean markPaidIfProcessing(Long paymentId, String channel, String transactionNo, LocalDateTime paidAt) {
+        return paymentMapper.markPaidIfProcessing(paymentId, channel, transactionNo, paidAt) > 0;
+    }
+
+    @Override
+    public boolean markPaidIfPendingOrProcessing(Long paymentId, String channel, String transactionNo,
+                                                  LocalDateTime paidAt) {
+        return paymentMapper.markPaidIfPendingOrProcessing(paymentId, channel, transactionNo, paidAt) > 0;
+    }
+
+    @Override
+    public boolean resetProcessing(Long paymentId) {
+        return paymentMapper.resetProcessing(paymentId) > 0;
+    }
+
+    @Override
+    public boolean markRefundedIfPaid(Long paymentId) {
+        return paymentMapper.markRefundedIfPaid(paymentId) > 0;
     }
 
     private Payment toDomain(PaymentPO po) {

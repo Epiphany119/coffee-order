@@ -6,6 +6,7 @@ import com.coffee.module.seat.api.dto.OccupySeatRequest;
 import com.coffee.module.seat.api.dto.SeatResponse;
 import com.coffee.module.store.api.StoreService;
 import com.coffee.web.security.AccessGuard;
+import com.coffee.web.security.RequestIdentity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -28,6 +29,7 @@ public class SeatController {
     /** 按人数分配空闲座位，返回座位信息与落座二维码 */
     @PostMapping("/assign")
     public SeatResponse assign(@RequestBody AssignSeatRequest request) {
+        bindCustomerIdentity(request);
         return seatService.assignSeat(request);
     }
 
@@ -40,13 +42,15 @@ public class SeatController {
     /** 确认落座（扫码后调用） */
     @PostMapping("/{id}/occupy")
     public SeatResponse occupy(@PathVariable("id") Long id, @RequestBody OccupySeatRequest request) {
+        bindCustomerIdentity(request);
         return seatService.occupySeat(id, request);
     }
 
     /** 离座释放 */
     @PostMapping("/{id}/leave")
     public SeatResponse leave(@PathVariable("id") Long id) {
-        return seatService.leaveSeat(id);
+        RequestIdentity identity = requireCustomerIdentity();
+        return seatService.leaveSeat(id, identity.id(), identity.guestId());
     }
 
     /** 店铺座位状态列表（storeId 为空查全部） */
@@ -62,10 +66,37 @@ public class SeatController {
     public List<SeatResponse> occupied(@RequestParam("storeId") Long storeId,
                                        @RequestParam(value = "userId", required = false) Long userId,
                                        @RequestParam(value = "guestId", required = false) String guestId) {
-        if (userId != null) AccessGuard.requireUser(userId);
-        else if (guestId != null && !guestId.isBlank()) AccessGuard.requireGuest(guestId);
-        else throw new com.coffee.common.core.exception.ServiceException(400, "缺少身份");
-        return seatService.listOccupiedSeats(storeId, userId, guestId);
+        RequestIdentity identity = requireCustomerIdentity();
+        return seatService.listOccupiedSeats(storeId, identity.id(), identity.guestId());
+    }
+
+    private void bindCustomerIdentity(AssignSeatRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        RequestIdentity identity = requireCustomerIdentity();
+        request.setUserId(identity.id());
+        request.setGuestId(identity.guestId());
+    }
+
+    private void bindCustomerIdentity(OccupySeatRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        RequestIdentity identity = requireCustomerIdentity();
+        request.setUserId(identity.id());
+        request.setGuestId(identity.guestId());
+    }
+
+    private RequestIdentity requireCustomerIdentity() {
+        RequestIdentity identity = AccessGuard.currentIdentity();
+        if (identity.kind() == RequestIdentity.Kind.MERCHANT) {
+            throw new com.coffee.common.core.exception.ServiceException(403, "商家身份不能执行顾客座位操作");
+        }
+        if (identity.kind() == RequestIdentity.Kind.USER && identity.id() == null) {
+            throw new com.coffee.common.core.exception.ServiceException(401, "用户身份无效");
+        }
+        if (identity.kind() == RequestIdentity.Kind.GUEST
+                && (identity.guestId() == null || identity.guestId().isBlank())) {
+            throw new com.coffee.common.core.exception.ServiceException(401, "游客身份无效");
+        }
+        return identity;
     }
 
     private void requireStoreOwner(Long storeId) {

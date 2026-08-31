@@ -37,18 +37,20 @@ public interface SeatMapper extends BaseMapper<SeatPO> {
             "WHERE id = #{id} AND status = 'FREE'")
     int updateAssign(@Param("id") Long id, @Param("userId") Long userId, @Param("guestId") String guestId);
 
-    /** 落座：座位编号即凭证，任何状态（空闲/已分配/已被他人占用）扫码均可直接落座，
-     *  并记录占用者（assigned_user_id/assigned_guest_id），用于前端归属校验 */
+    /** 落座：空闲座位可直接落座；已分配座位仅允许原分配身份落座。 */
     @Update("UPDATE seat SET status = 'OCCUPIED', assigned_user_id = #{userId}, " +
             "assigned_guest_id = #{guestId}, occupied_at = NOW(), updated_at = NOW() " +
-            "WHERE id = #{id}")
+            "WHERE id = #{id} AND (status = 'FREE' OR " +
+            "(status = 'ASSIGNED' AND ((#{userId} IS NOT NULL AND assigned_user_id = #{userId}) " +
+            "OR (#{guestId} IS NOT NULL AND assigned_guest_id = #{guestId}))))")
     int updateOccupy(@Param("id") Long id, @Param("userId") Long userId, @Param("guestId") String guestId);
 
-    /** 离座：仅当已落座时释放 */
+    /** 离座：仅当已落座且当前身份是占用者时释放 */
     @Update("UPDATE seat SET status = 'FREE', assigned_user_id = NULL, assigned_guest_id = NULL, " +
             "assigned_at = NULL, occupied_at = NULL, updated_at = NOW() " +
-            "WHERE id = #{id} AND status = 'OCCUPIED'")
-    int updateLeave(@Param("id") Long id);
+            "WHERE id = #{id} AND status = 'OCCUPIED' AND ((#{userId} IS NOT NULL AND assigned_user_id = #{userId}) " +
+            "OR (#{guestId} IS NOT NULL AND assigned_guest_id = #{guestId}))")
+    int updateLeave(@Param("id") Long id, @Param("userId") Long userId, @Param("guestId") String guestId);
 
     /** 超时释放：分配超过时限未落座 */
     @Update("UPDATE seat SET status = 'FREE', assigned_user_id = NULL, assigned_guest_id = NULL, " +

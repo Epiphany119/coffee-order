@@ -82,6 +82,10 @@
         </dependency>
         <dependency>
             <groupId>com.coffee</groupId>
+            <artifactId>coffee-module-delivery-biz</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.coffee</groupId>
             <artifactId>coffee-module-payment-biz</artifactId>
         </dependency>
         <dependency>

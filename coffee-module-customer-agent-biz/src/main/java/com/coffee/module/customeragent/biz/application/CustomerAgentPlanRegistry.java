@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 /**
  * 短时、一次性方案仓库。确认时只接受令牌，商品行始终从服务端方案快照读取。
@@ -21,6 +22,7 @@ public class CustomerAgentPlanRegistry {
     private static final Duration TTL = Duration.ofMinutes(5);
     /** 原方案最多两项，凑单后允许追加一项；仍限制在小型、安全的点单方案范围内。 */
     private static final int MAX_PLAN_LINES = 10;
+    private static final Pattern IDEMPOTENCY_KEY_PATTERN = Pattern.compile("[A-Za-z0-9_-]{16,128}");
     private final ConcurrentHashMap<String, Entry> plans = new ConcurrentHashMap<>();
 
     public String issue(AgentOrderPlan plan) {
@@ -32,7 +34,9 @@ public class CustomerAgentPlanRegistry {
 
     public AgentOrderPlan consume(String token, String idempotencyKey, Long storeId, Long userId, String guestId, boolean includeAddOn) {
         if (token == null || !token.matches("[a-f0-9]{32}")) throw new ServiceException(400, "无效的 Agent 方案确认令牌");
-        if (idempotencyKey == null || idempotencyKey.isBlank()) throw new ServiceException(400, "缺少订单幂等键");
+        if (idempotencyKey == null || !IDEMPOTENCY_KEY_PATTERN.matcher(idempotencyKey).matches()) {
+            throw new ServiceException(400, "订单幂等键格式无效");
+        }
         Entry entry = plans.get(token);
         if (entry == null || Instant.now().isAfter(entry.expiresAt())) throw new ServiceException(410, "该 Agent 方案已过期，请重新生成");
         AgentOrderPlan plan = entry.plan();
