@@ -28,6 +28,7 @@ const emit = defineEmits<{
   'open-login': []
   'open-register': []
   'open-featured': []
+  'store-changed': [StoreResponse]
 }>()
 
 // --- 店铺选择 ---
@@ -111,6 +112,7 @@ async function switchStore(s: StoreResponse) {
   }
   store.setCurrentStore(s)
   store.closeStorePicker()
+  emit('store-changed', s)
   ElMessage.success(`已切换到「${s.name}」，购物袋与座位已重置`)
 }
 </script>

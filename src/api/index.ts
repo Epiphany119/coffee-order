@@ -38,6 +38,12 @@ import type {
   , GrowthAgentAnalysis
   , GrowthAgentAction
   , CustomerAgentPlan
+  , DeliveryAddress
+  , DeliveryAddressRequest
+  , DeliveryOrder
+  , DeliveryRiderLoginRequest
+  , DeliveryRiderRegisterRequest
+  , DeliveryRiderResponse
 } from './types'
 
 // ============================================================
@@ -47,7 +53,7 @@ import type {
 //   1. URL 参数 ?apiHost=...  （小程序主动指定）
 //   2. localStorage 'fika_api_host'  （上一次探测成功的地址）
 //   3. 探测候选 IP 列表，找到第一个连得上的
-//   4. 最终兜底 http://192.168.31.33:8088
+//   4. 使用当前 WebView 主机的 8088 端口；也可通过 apiHost 显式指定
 //
 // 浏览器开发环境（localhost）走 /api 相对路径，由 Vite 代理转发
 // ============================================================
@@ -59,11 +65,15 @@ const isInMiniProgramWebView = (() => {
   } catch { return false }
 })()
 
-const CANDIDATE_HOSTS = [
-  'http://192.168.31.33:8088',  // 公司 WiFi
-  'http://192.168.55.207:8088', // 家里（手机热点）
-  'http://127.0.0.1:8088'       // 本机兜底
-]
+const CANDIDATE_HOSTS = (() => {
+  const hosts: string[] = []
+  try {
+    const hostname = window.location.hostname
+    if (hostname) hosts.push(`http://${hostname}:8088`)
+  } catch {}
+  hosts.push('http://127.0.0.1:8088')
+  return [...new Set(hosts)]
+})()
 
 const PROBE_TIMEOUT_MS = 1500
 
@@ -71,8 +81,8 @@ function getUrlParamHost(): string {
   try {
     const params = new URLSearchParams(window.location.search)
     const host = params.get('apiHost')
-    if (host) {
-      const normalized = host.startsWith('http') ? host : `http://${host}`
+    const normalized = normalizeApiHost(host)
+    if (normalized) {
       try { localStorage.setItem('fika_api_host', normalized) } catch {}
       return normalized
     }
@@ -82,8 +92,22 @@ function getUrlParamHost(): string {
 
 function getCachedHost(): string {
   try {
-    return localStorage.getItem('fika_api_host') || ''
+    return normalizeApiHost(localStorage.getItem('fika_api_host'))
   } catch { return '' }
+}
+
+function normalizeApiHost(value: string | null): string {
+  if (!value) return ''
+  const candidate = value.trim()
+  if (!candidate) return ''
+  const withProtocol = /^https?:\/\//i.test(candidate) ? candidate : `http://${candidate}`
+  try {
+    const url = new URL(withProtocol)
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) return ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return ''
+  }
 }
 
 async function probeHost(host: string): Promise<boolean> {
@@ -132,14 +156,25 @@ const request = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
+// 小程序 WebView 的首批请求也必须等待地址探测完成，否则可能在探测结果
+// 写入 defaults 前误打到 WebView 自身地址。
+const apiHostReady = isInMiniProgramWebView
+  ? detectApiHost().then((host) => {
+      request.defaults.baseURL = host + '/api'
+      console.log('[fika-api] WebView using backend:', host)
+    }).catch(() => undefined)
+  : Promise.resolve()
+
 /**
  * 每次请求从会话快照读取令牌，避免 store 初始化顺序和刷新恢复时出现循环依赖。
  * 登录用户优先于商家；游客令牌只保存在 sessionStorage，关闭标签页即失效。
  */
-function readAccessToken(preferMerchant = false, skipMerchant = false): string | null {
+function readAccessToken(preferMerchant = false, skipMerchant = false, preferRider = false): string | null {
   try {
     const user = JSON.parse(localStorage.getItem('fikaSession') || 'null')
     const merchant = JSON.parse(localStorage.getItem('fikaMerchant') || 'null')
+    const rider = JSON.parse(localStorage.getItem('fikaRider') || 'null')
+    if (preferRider) return rider?.accessToken || null
     if (preferMerchant && merchant?.accessToken) return merchant.accessToken
     if (user?.accessToken) return user.accessToken
     if (!skipMerchant && merchant?.accessToken) return merchant.accessToken
@@ -149,7 +184,22 @@ function readAccessToken(preferMerchant = false, skipMerchant = false): string |
   }
 }
 
-request.interceptors.request.use((config) => {
+function isMerchantApiPath(path: string): boolean {
+  return path.startsWith('/merchant/')
+    || path === '/store'
+    || path.startsWith('/store/')
+    || path.startsWith('/business-agent/')
+    || path.startsWith('/seat/list')
+    || path === '/orders'
+    || (path.startsWith('/orders/') && path.includes('/action'))
+}
+
+function isDeliveryRiderApiPath(path: string): boolean {
+  return path === '/delivery/riders/me' || path.startsWith('/delivery/rider/')
+}
+
+request.interceptors.request.use(async (config) => {
+  await apiHostReady
   const path = config.url || ''
   // 登录、注册、找回密码和游客建会话都是公开接口。绝不能附带旧 Token：
   // 否则后端会在进入登录控制器前校验到已过期 Token，表现为“重新登录也登录不上”。
@@ -160,6 +210,8 @@ request.interceptors.request.use((config) => {
     || path === '/auth/login-challenge'
     || path === '/merchant/login'
     || path === '/merchant/register'
+    || path === '/delivery/riders/login'
+    || path === '/delivery/riders/register'
     || path === '/guest/session'
   if (publicSessionRequest) {
     delete config.headers.Authorization
@@ -167,33 +219,25 @@ request.interceptors.request.use((config) => {
   }
   // 顾客端 Agent 接口必须使用用户/游客 token，跳过商家 token
   const customerAgentRequest = path.startsWith('/customer-agent/')
+  const riderRequest = isDeliveryRiderApiPath(path)
   // 商家端订单、座位、店铺接口也必须使用商家令牌；用户与商家同时登录时不能误带用户令牌。
-  const merchantRequest = !customerAgentRequest && (
-    path.startsWith('/merchant/')
-    || path.startsWith('/store/')
-    || path.startsWith('/business-agent/')
-    || path.startsWith('/seat/list')
-    || (path === '/orders' && !!config.params?.storeId)
-    || (path.startsWith('/orders/') && path.includes('storeId='))
-  )
+  const merchantRequest = !customerAgentRequest && !riderRequest && isMerchantApiPath(path)
   // customer-agent 路径跳过商家 token，确保使用正确的身份
-  const token = readAccessToken(merchantRequest, customerAgentRequest)
+  const token = readAccessToken(merchantRequest, customerAgentRequest || riderRequest, riderRequest)
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
-// WebView 场景：异步探测后端地址（构建目标不支持顶层 await，探测完成后写入 baseURL）
-if (isInMiniProgramWebView) {
-  detectApiHost().then((host) => {
-    request.defaults.baseURL = host + '/api'
-    console.log('[fika-api] WebView using backend:', host)
-  })
-}
-
 request.interceptors.response.use(
   (res) => {
     const body = res.data
-    return body && body.data ? body.data : body
+    // 后端业务异常统一返回 Result(code=4xx)，但 HTTP 状态仍可能是 200；
+    // 必须在这里转成 rejected Promise，否则页面会把错误当成空数据继续渲染。
+    if (body && typeof body === 'object' && typeof body.code === 'number' && 'message' in body) {
+      if (body.code !== 200) throw new Error(body.message || '请求失败')
+      return Object.prototype.hasOwnProperty.call(body, 'data') ? body.data : body
+    }
+    return body
   },
   (err) => {
     console.error('[fika-api] request failed:', err.config?.url, err.message)
@@ -202,16 +246,22 @@ request.interceptors.response.use(
     if (err.response?.status === 401) {
       try {
         const path = err.config?.url || ''
-        if (path.startsWith('/merchant/') || path.startsWith('/store/')) {
+        const authDomain = isDeliveryRiderApiPath(path)
+          ? 'rider'
+          : isMerchantApiPath(path) ? 'merchant' : 'user'
+        if (authDomain === 'rider') {
+          localStorage.removeItem('fikaRider')
+        } else if (authDomain === 'merchant') {
           localStorage.removeItem('fikaMerchant')
           localStorage.removeItem('fikaMerchantStore')
         } else {
           localStorage.removeItem('fikaSession')
           sessionStorage.removeItem('fikaGuestToken')
         }
+        window.dispatchEvent(new CustomEvent('fika-auth-expired', { detail: { domain: authDomain } }))
       } catch {}
     }
-    if (err.response?.status === 0) {
+    if (!err.response || err.response.status === 0) {
       throw new Error('网络连接失败，请检查后端服务是否启动')
     }
     throw new Error(err.response?.data?.message || err.message || '请求失败')
@@ -324,39 +374,61 @@ export const customerAgentApi = {
           return
         }
         const reader = response.body?.getReader()
+        if (!reader) {
+          callbacks.onError?.({ message: '服务端未返回流式响应', step: 'failed' })
+          resolve()
+          return
+        }
+
         const decoder = new TextDecoder()
         let buffer = ''
 
-        const read = async () => {
-          if (!reader) return
-          const { done, value } = await reader.read()
-          if (done) { resolve(); return }
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-
-          for (const line of lines) {
-            if (line.startsWith('event:')) {
-              const eventName = line.substring(6).trim()
-              const nextLine = lines.find(l => l.startsWith('data:'))
-              if (nextLine) {
-                const jsonStr = nextLine.substring(5).trim()
-                try {
-                  const payload = JSON.parse(jsonStr)
-                  if (eventName === 'stage') {
-                    callbacks.onStage?.(payload)
-                  } else if (eventName === 'result') {
-                    callbacks.onResult?.(payload)
-                  } else if (eventName === 'error') {
-                    callbacks.onError?.(payload)
-                  }
-                } catch { /* ignore parse errors */ }
-              }
-            }
+        const dispatchFrame = (frame: string) => {
+          const lines = frame.replace(/\r\n/g, '\n').split('\n')
+          const eventName = lines.find(line => line.startsWith('event:'))?.substring(6).trim()
+          const data = lines
+            .filter(line => line.startsWith('data:'))
+            .map(line => line.substring(5).trim())
+            .join('\n')
+          if (!eventName || !data) return
+          try {
+            const payload = JSON.parse(data)
+            if (eventName === 'stage') callbacks.onStage?.(payload)
+            else if (eventName === 'result') callbacks.onResult?.(payload)
+            else if (eventName === 'error') callbacks.onError?.(payload)
+          } catch {
+            callbacks.onError?.({ message: 'Agent 返回数据格式无效', step: 'failed' })
           }
-          read()
         }
-        read()
+
+        const drainFrames = () => {
+          // SSE 事件以空行分隔；兼容 Spring 返回的 CRLF 和分块传输。
+          buffer = buffer.replace(/\r\n/g, '\n')
+          let boundary = buffer.indexOf('\n\n')
+          while (boundary >= 0) {
+            dispatchFrame(buffer.slice(0, boundary))
+            buffer = buffer.slice(boundary + 2)
+            boundary = buffer.indexOf('\n\n')
+          }
+        }
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) {
+              buffer += decoder.decode()
+              drainFrames()
+              if (buffer.trim()) dispatchFrame(buffer)
+              break
+            }
+            buffer += decoder.decode(value, { stream: true })
+            drainFrames()
+          }
+        } catch (err: any) {
+          callbacks.onError?.({ message: err?.message || '流式连接中断', step: 'failed' })
+        } finally {
+          resolve()
+        }
       }).catch((err) => {
         callbacks.onError?.({ message: err.message || '网络错误', step: 'failed' })
         resolve()
@@ -425,6 +497,31 @@ export const orderApi = {
   /** 商家端：订单状态操作（start 接单 / complete 完成 / cancel 取消） */
   merchantAction: (orderId: number, action: string, storeId: number) =>
     request.post<any, OrderResponse>(`/orders/${orderId}/action?action=${action}&storeId=${storeId}`)
+}
+
+// ============================================================
+// 外卖模块（顾客地址 + 配送员抢单窗口）
+// ============================================================
+
+export const deliveryApi = {
+  listAddresses: () => request.get<any, DeliveryAddress[]>('/delivery/addresses'),
+  createAddress: (data: DeliveryAddressRequest) =>
+    request.post<any, DeliveryAddress>('/delivery/addresses', data),
+  updateAddress: (id: number, data: DeliveryAddressRequest) =>
+    request.put<any, DeliveryAddress>(`/delivery/addresses/${id}`, data),
+  deleteAddress: (id: number) => request.delete<any, void>(`/delivery/addresses/${id}`),
+
+  riderRegister: (data: DeliveryRiderRegisterRequest) =>
+    request.post<any, DeliveryRiderResponse>('/delivery/riders/register', data),
+  riderLogin: (data: DeliveryRiderLoginRequest) =>
+    request.post<any, DeliveryRiderResponse>('/delivery/riders/login', data),
+  riderMe: () => request.get<any, DeliveryRiderResponse>('/delivery/riders/me'),
+  availableOrders: () => request.get<any, DeliveryOrder[]>('/delivery/rider/orders/available'),
+  riderOrders: () => request.get<any, DeliveryOrder[]>('/delivery/rider/orders/mine'),
+  claimOrder: (id: number) => request.post<any, DeliveryOrder>(`/delivery/rider/orders/${id}/claim`),
+  riderAction: (id: number, action: string) =>
+    request.post<any, DeliveryOrder>(`/delivery/rider/orders/${id}/action`, null, { params: { action } }),
+  customerOrders: () => request.get<any, DeliveryOrder[]>('/delivery/orders/mine')
 }
 
 export const notificationApi = {
@@ -636,14 +733,10 @@ export const storeApi = {
   uploadMenuImage: async (storeId: number, file: File) => {
     const fd = new FormData()
     fd.append('file', file)
-    const res = await axios.post(`/api/store/${storeId}/menu/image`, fd, {
+    // 复用统一 request，确保注入商家令牌并执行统一的 401 会话清理。
+    return request.post<any, { url: string }>(`/store/${storeId}/menu/image`, fd, {
       timeout: 30000,
-      headers: {
-        'Content-Type': 'multipart/form-data',
-        ...(readAccessToken() ? { Authorization: `Bearer ${readAccessToken()}` } : {})
-      }
+      headers: { 'Content-Type': 'multipart/form-data' }
     })
-    const body = res.data
-    return body && body.data ? body.data : body
   }
 }

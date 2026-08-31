@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { authApi, favoriteApi, guestApi } from '@/api'
 import type { AuthResponse, Product, CartItem, Coupon, MemberDashboard, OrderRecord, SeatResponse, StoreResponse } from '@/api/types'
 
 export const useAppStore = defineStore('app', () => {
@@ -42,7 +43,6 @@ export const useAppStore = defineStore('app', () => {
   /** 登录用户的店铺偏好保存到数据库 */
   async function saveLastStore(userId: number, storeId: number) {
     try {
-      const { authApi } = await import('@/api')
       await authApi.updatePreference(userId, storeId)
     } catch (e) {
       console.warn('save store preference failed', e)
@@ -55,7 +55,6 @@ export const useAppStore = defineStore('app', () => {
     // 先确保历史 localStorage 旧偏好已迁入数据库（幂等：key 已删则直接跳过），避免竞态读到空偏好
     await syncStorePreferenceAfterLogin()
     try {
-      const { authApi } = await import('@/api')
       const pref = await authApi.getPreference(currentUser.value.id)
       const lastId = pref?.lastStoreId
       let found: StoreResponse | null = null
@@ -128,13 +127,16 @@ export const useAppStore = defineStore('app', () => {
   /** 用服务端最新用户数据覆盖本地快照（消费/等级/昵称可能已变化） */
   async function refreshUser(userId: number) {
     try {
-      const { authApi } = await import('@/api')
       const fresh = await authApi.getUser(userId)
       if (fresh && fresh.success && fresh.id != null) {
         setUser(fresh)
       }
     } catch (e) {
       console.warn('refresh user failed', e)
+      // 响应拦截器已清理失效令牌；同步清空内存态，避免过期快照继续
+      // 被当作已登录身份发起订单/会员请求。
+      currentUser.value = null
+      setSeat(null)
     }
   }
 
@@ -166,6 +168,7 @@ export const useAppStore = defineStore('app', () => {
     // 清除会话凭证：只有主动退出才回登录页
     try {
       localStorage.removeItem(SESSION_KEY)
+      sessionStorage.removeItem('fikaGuestToken')
     } catch (e) {
       console.warn('clear session failed', e)
     }
@@ -186,7 +189,6 @@ export const useAppStore = defineStore('app', () => {
   async function ensureGuestId(): Promise<string> {
     if (guestId.value) return guestId.value
     try {
-      const { guestApi } = await import('@/api')
       const res = await guestApi.createSession()
       guestId.value = res?.guestId || null
     } catch (e) {
@@ -297,7 +299,6 @@ export const useAppStore = defineStore('app', () => {
 
   async function loadFavorites() {
     try {
-      const { favoriteApi } = await import('@/api')
       const params = isLoggedIn.value && currentUser.value?.id
         ? { userId: currentUser.value.id }
         : { guestId: await ensureGuestId() }
@@ -309,7 +310,6 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function toggleFavorite(product: Product) {
-    const { favoriteApi } = await import('@/api')
     const params = isLoggedIn.value && currentUser.value?.id
       ? { userId: currentUser.value.id }
       : { guestId: await ensureGuestId() }
@@ -341,7 +341,6 @@ export const useAppStore = defineStore('app', () => {
       if (raw) {
         const codes = JSON.parse(raw)
         if (Array.isArray(codes) && codes.length > 0) {
-          const { favoriteApi } = await import('@/api')
           for (const code of codes) {
             try {
               await favoriteApi.addFavorite({ userId, productCode: code })
@@ -358,7 +357,6 @@ export const useAppStore = defineStore('app', () => {
     // 2) 本次会话的游客收藏并入用户账号
     try {
       if (guestId.value) {
-        const { favoriteApi } = await import('@/api')
         await favoriteApi.merge(userId, guestId.value)
       }
     } catch (e) {

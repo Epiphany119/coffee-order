@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 import { customerAgentApi, orderApi, memberApi, membershipApi } from '@/api'
-import type { Product, Coupon, CustomerAgentItem } from '@/api/types'
+import type { Product, Coupon, CustomerAgentItem, DeliveryAddress } from '@/api/types'
 
 import SiteHeader from '@/components/SiteHeader.vue'
 import HeroSection from '@/components/HeroSection.vue'
@@ -18,6 +18,7 @@ import SeatPanel from '@/components/SeatPanel.vue'
 import PayDialog from '@/components/PayDialog.vue'
 import TopupDialog from '@/components/TopupDialog.vue'
 import CustomerOrderAgent from '@/components/CustomerOrderAgent.vue'
+import DeliveryAddressDialog from '@/components/DeliveryAddressDialog.vue'
 
 const store = useAppStore()
 const emit = defineEmits<{ 'go-member': []; 'open-login': []; 'open-register': [] }>()
@@ -27,6 +28,10 @@ const flashSaleClaimNo = ref<string | null>(null)
 const showProductModal = ref(false)
 const showMemberModal = ref(false)
 const fulfillmentType = ref('PICKUP')
+const pickupTiming = ref('ASAP')
+const deliveryAddressVisible = ref(false)
+const selectedDeliveryAddress = ref<DeliveryAddress | null>(null)
+const seatPanel = ref<{ openSelect: () => void } | null>(null)
 const submitting = ref(false)
 
 /** 下单后支付弹窗（下单成功自动拉起，可选"稍后支付"） */
@@ -54,6 +59,10 @@ onMounted(async () => {
 
 watch(() => store.isLoggedIn, async (val) => {
   if (val) await loadMemberDashboard()
+  else {
+    selectedDeliveryAddress.value = null
+    if (fulfillmentType.value === 'DELIVERY') fulfillmentType.value = 'PICKUP'
+  }
 })
 
 async function loadOrders() {
@@ -102,8 +111,49 @@ function onAddToCart(item: any) {
   ElMessage.success(`${item.productName} 已加入购物袋`)
 }
 
+function chooseDelivery() {
+  if (!store.isLoggedIn) {
+    ElMessage.info('外卖配送需要先登录顾客账号')
+    emit('open-login')
+    return
+  }
+  fulfillmentType.value = 'DELIVERY'
+  deliveryAddressVisible.value = true
+}
+
+function chooseFulfillment(type: 'PICKUP' | 'DINE_IN') {
+  fulfillmentType.value = type
+  if (type === 'DINE_IN') seatPanel.value?.openSelect()
+}
+
+function selectDeliveryAddress(address: DeliveryAddress) {
+  selectedDeliveryAddress.value = address
+  fulfillmentType.value = 'DELIVERY'
+  deliveryAddressVisible.value = false
+  ElMessage.success(`已选择${address.label} · ${address.detailAddress}`)
+}
+
+/** 切换门店后强制重新确认外卖地址，避免用户误把上一家门店的配送选择带到新门店。 */
+function handleStoreChanged() {
+  if (fulfillmentType.value !== 'DELIVERY') return
+  selectedDeliveryAddress.value = null
+  deliveryAddressVisible.value = true
+  ElMessage.info('门店已切换，请重新确认本次外卖收货地址')
+}
+
 async function submitOrder() {
   if (!store.cart.length) return
+  if (fulfillmentType.value === 'DELIVERY') {
+    if (!store.isLoggedIn) {
+      emit('open-login')
+      return
+    }
+    if (!selectedDeliveryAddress.value?.id) {
+      deliveryAddressVisible.value = true
+      ElMessage.info('请先选择收货地址')
+      return
+    }
+  }
   submitting.value = true
   try {
     const payload = {
@@ -120,6 +170,7 @@ async function submitOrder() {
       couponCode: store.selectedCoupon?.code || null,
       flashSaleClaimNo: flashSaleClaimNo.value,
       fulfillmentType: fulfillmentType.value,
+      deliveryAddressId: fulfillmentType.value === 'DELIVERY' ? selectedDeliveryAddress.value?.id ?? null : null,
       note: store.orderNote.trim() || undefined
     }
     const data = await orderApi.createOrder(payload)
@@ -147,6 +198,11 @@ async function submitOrder() {
 /** Agent 方案确认后直接创建待支付订单：不写购物袋，但仍复用订单幂等、身份、价格与库存校验。 */
 async function submitAgentOrder(planToken: string, includeAddOn = false) {
   if (!planToken || !store.currentStore?.storeId) return
+  if (fulfillmentType.value === 'DELIVERY') {
+    ElMessage.info('外卖配送请从购物袋确认地址后下单，Agent 方案暂不支持直接配送')
+    deliveryAddressVisible.value = true
+    return
+  }
   submitting.value = true
   try {
     const data = await customerAgentApi.confirm({
@@ -213,7 +269,7 @@ function openFeaturedProduct() {
 
 <template>
   <div class="main-layout">
-    <SiteHeader @logout="store.logout()" @go-member="$emit('go-member')" @open-login="$emit('open-login')" @open-register="$emit('open-register')" @open-featured="openFeaturedProduct" />
+    <SiteHeader @logout="store.logout()" @go-member="$emit('go-member')" @open-login="$emit('open-login')" @open-register="$emit('open-register')" @open-featured="openFeaturedProduct" @store-changed="handleStoreChanged" />
 
     <HeroSection :featured-product="featuredProduct" @browse="browseMenu" @featured="openFeaturedProduct" />
 
@@ -222,7 +278,7 @@ function openFeaturedProduct() {
       <button
         class="service-option"
         :class="{ active: fulfillmentType === 'PICKUP' }"
-        @click="fulfillmentType = 'PICKUP'"
+        @click="chooseFulfillment('PICKUP')"
       >
         <span>🥡</span>
         <div>
@@ -233,7 +289,7 @@ function openFeaturedProduct() {
       <button
         class="service-option"
         :class="{ active: fulfillmentType === 'DINE_IN' }"
-        @click="fulfillmentType = 'DINE_IN'"
+        @click="chooseFulfillment('DINE_IN')"
       >
         <span>🍽</span>
         <div>
@@ -241,9 +297,20 @@ function openFeaturedProduct() {
           <small>来店后扫码入座，慢一点也没关系</small>
         </div>
       </button>
+      <button
+        class="service-option delivery-option"
+        :class="{ active: fulfillmentType === 'DELIVERY' }"
+        @click="chooseDelivery"
+      >
+        <span>🛵</span>
+        <div>
+          <b>外卖配送</b>
+          <small>{{ selectedDeliveryAddress ? `${selectedDeliveryAddress.label} · ${selectedDeliveryAddress.detailAddress}` : '填写地址后由配送员送到家' }}</small>
+        </div>
+      </button>
       <label class="pickup-select">
         想什么时候喝
-        <select v-model="fulfillmentType">
+        <select v-model="pickupTiming">
           <option value="ASAP">马上安排</option>
           <option value="15MIN">15 分钟后</option>
           <option value="30MIN">30 分钟后</option>
@@ -293,7 +360,13 @@ function openFeaturedProduct() {
 <!--    <FloatingRobot />-->
 
     <!-- Seat assignment & QR occupy -->
-    <SeatPanel />
+    <SeatPanel ref="seatPanel" @choose-delivery="chooseDelivery" />
+
+    <DeliveryAddressDialog
+      v-model="deliveryAddressVisible"
+      :selected-id="selectedDeliveryAddress?.id ?? null"
+      @select="selectDeliveryAddress"
+    />
 
     <!-- 支付弹窗（下单后自动拉起；支付成功刷新订单） -->
     <PayDialog
@@ -379,6 +452,10 @@ function openFeaturedProduct() {
   span { font-size: 18px; }
 }
 
+.delivery-option {
+  min-width: 220px;
+}
+
 .pickup-select {
   border-left: 1px solid var(--line);
   display: flex;
@@ -408,11 +485,14 @@ function openFeaturedProduct() {
 }
 
 @media (max-width: 900px) {
+  .service-switch { flex-wrap: wrap; }
   .shop-layout {
     grid-template-columns: 1fr;
   }
 }
 @media (max-width: 620px) {
+  .service-option, .delivery-option { min-width: calc(50% - 3px); flex: 1 1 calc(50% - 3px); }
+  .pickup-select { width: 100%; border-top: 1px solid var(--line); border-left: 0; padding: 10px 8px 4px; justify-content: space-between; }
   .agent-entry { align-items: flex-start; flex-direction: column; margin-top: -10px; }
   .agent-entry button { width: 100%; }
 }

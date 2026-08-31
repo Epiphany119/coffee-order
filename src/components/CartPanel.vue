@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { topupApi } from '@/api'
 import { CONDIMENTS, sizeText } from '@/api/types'
 import type { TopupProgress } from '@/api/types'
 
@@ -44,7 +45,6 @@ async function loadTopupProgress() {
     return
   }
   try {
-    const { topupApi } = await import('@/api')
     topupProgress.value = await topupApi.getProgress({
       userId: store.isLoggedIn ? store.currentUser?.id : null,
       amount: totals.value.afterMember,

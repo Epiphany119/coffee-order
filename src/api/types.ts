@@ -45,7 +45,8 @@ export interface ResetPasswordRequest {
 export interface ForgotPasswordResponse {
   success: boolean
   message: string
-  token: string
+  /** 仅在开发环境显式开启 expose-reset-token 时返回；生产环境通过站外渠道发送。 */
+  token?: string
 }
 
 export interface AssignSeatRequest {
@@ -260,6 +261,8 @@ export interface OrderRequest {
   /** 秒杀抢购码；仅允许单件单独结算，不可叠加优惠券 */
   flashSaleClaimNo?: string | null
   fulfillmentType: string
+  /** 外卖配送收货地址 id；仅 fulfillmentType=DELIVERY 时提交 */
+  deliveryAddressId?: number | null
   note?: string
 }
 
@@ -285,6 +288,8 @@ export interface OrderResponse {
   orderId?: number
   /** 支付单号（下单时由支付模块创建，供拉起支付） */
   paymentNo?: string
+  /** 外卖配送单 id；非外卖订单为空 */
+  deliveryOrderId?: number | null
   beverageName: string
   originalPrice: number
   finalPrice: number
@@ -319,12 +324,85 @@ export interface OrderRecord {
   categoryCode?: string
   /** user=用户订单 / guest=游客订单 */
   orderType?: string
-  /** PICKUP 到店自取 / DINE_IN 店内用餐 */
+  /** PICKUP 到店自取 / DINE_IN 店内用餐 / DELIVERY 外卖配送 */
   fulfillmentType?: string
   note?: string
   estimatedReadyTime?: string
   /** 订单明细（order_item），批量订单 = 1 单 N 明细，每行是购物车行级 */
   items?: OrderItem[]
+}
+
+// ============================================================
+// 外卖模块
+// ============================================================
+
+export interface DeliveryAddressRequest {
+  /** 地址标签，如：家、公司、学校 */
+  label: string
+  receiverName: string
+  receiverPhone: string
+  detailAddress: string
+  isDefault?: boolean
+}
+
+export interface DeliveryAddress {
+  id: number
+  label: string
+  receiverName: string
+  receiverPhone: string
+  detailAddress: string
+  isDefault: boolean
+  createdAt?: string | number[]
+  updatedAt?: string | number[]
+}
+
+export type DeliveryOrderStatus = 'OPEN' | 'CLAIMED' | 'PICKED_UP' | 'DELIVERING' | 'DELIVERED' | 'CANCELED'
+
+export interface DeliveryOrder {
+  id: number
+  deliveryOrderId: number
+  orderId: number
+  orderNo: string
+  userId?: number
+  storeId: number
+  storeName: string
+  amount: number
+  itemSummary: string
+  note?: string | null
+  addressLabel: string
+  receiverName: string
+  receiverPhone: string
+  detailAddress: string
+  status: DeliveryOrderStatus | string
+  statusLabel: string
+  riderId?: number | null
+  riderName?: string | null
+  createdAt: string | number[]
+  claimedAt?: string | number[] | null
+  pickedUpAt?: string | number[] | null
+  deliveredAt?: string | number[] | null
+  updatedAt?: string | number[] | null
+}
+
+export interface DeliveryRiderLoginRequest {
+  username: string
+  password: string
+}
+
+export interface DeliveryRiderRegisterRequest extends DeliveryRiderLoginRequest {
+  nickname?: string
+  phone?: string
+}
+
+export interface DeliveryRiderResponse {
+  success: boolean
+  message: string
+  id: number | null
+  username: string | null
+  nickname: string | null
+  phone: string | null
+  status: string | null
+  accessToken?: string | null
 }
 
 /** 售后单 */

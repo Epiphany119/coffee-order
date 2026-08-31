@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
 import fikaLogoMark from '@/assets/images/fika-logo-mark.png'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -16,6 +16,7 @@ const loading = ref(true)
 
 /** 商家端独立界面（/merchant 开头的路由走 router-view，不进入用户端视图体系） */
 const isMerchantRoute = computed(() => route.path.startsWith('/merchant'))
+const isDeliveryRoute = computed(() => route.path.startsWith('/delivery'))
 
 // 'auth' = 登录/注册页，'main' = 主应用页，'member' = 个人主页
 const view = ref<'auth' | 'main' | 'member'>('auth')
@@ -91,11 +92,27 @@ function openAuth(tab: 'login' | 'register' = 'login') {
 function goMerchant() {
   router.push('/merchant/auth')
 }
+
+function goDelivery() {
+  router.push('/delivery')
+}
+
+function handleAuthExpired(event: Event) {
+  const domain = (event as CustomEvent<{ domain?: string }>).detail?.domain
+  if (domain !== 'user') return
+  store.logout()
+  view.value = 'auth'
+  authDefaultTab.value = 'login'
+  ElMessage.warning('登录已失效，请重新登录后再下单')
+}
+
+onMounted(() => window.addEventListener('fika-auth-expired', handleAuthExpired))
+onBeforeUnmount(() => window.removeEventListener('fika-auth-expired', handleAuthExpired))
 </script>
 
 <template>
   <!-- 商家端独立界面 -->
-  <router-view v-if="isMerchantRoute" />
+  <router-view v-if="isMerchantRoute || isDeliveryRoute" />
 
   <template v-else>
     <!-- Loading screen -->
@@ -118,6 +135,8 @@ function goMerchant() {
 
     <!-- 商家端入口 -->
     <button v-if="!loading && view === 'auth'" class="merchant-entry" @click="goMerchant">商家中心 →</button>
+    <!-- 配送员端入口 -->
+    <button v-if="!loading && view !== 'member'" class="delivery-entry" @click="goDelivery">配送员接单 →</button>
   </template>
 </template>
 
@@ -176,5 +195,25 @@ body { margin: 0; }
 .merchant-entry:hover {
   border-color: #e06d35;
   color: #e06d35;
+}
+
+.delivery-entry {
+  position: fixed;
+  right: 20px;
+  bottom: 68px;
+  border: 1px solid rgba(242, 109, 61, .5);
+  background: rgba(255, 250, 242, .92);
+  color: #a9502d;
+  padding: 9px 16px;
+  border-radius: 22px;
+  font-size: 12px;
+  letter-spacing: .04em;
+  backdrop-filter: blur(6px);
+  transition: all .2s;
+  z-index: 100;
+}
+.delivery-entry:hover {
+  border-color: #e06d35;
+  background: #fff2e9;
 }
 </style>

@@ -231,7 +231,7 @@ onMounted(loadDashboard)
           <tr>
             <th>订单号</th>
             <th>时间</th>
-            <th>桌位</th>
+            <th>履约方式</th>
             <th>商品</th>
             <th>金额</th>
             <th>状态</th>
@@ -241,7 +241,7 @@ onMounted(loadDashboard)
           <tr v-for="o in recentOrders" :key="o.id">
             <td class="mono">#{{ o.id }}</td>
             <td class="muted">{{ formatTime(o.createdAt) }}</td>
-            <td>{{ o.fulfillmentType === 'DINE_IN' ? '店内用餐' : '到店自取' }}</td>
+            <td>{{ o.fulfillmentType === 'DELIVERY' ? '外卖配送' : o.fulfillmentType === 'DINE_IN' ? '店内用餐' : '到店自取' }}</td>
             <td class="items">{{ o.beverageName }}{{ o.size ? '（' + o.size + '）' : '' }}</td>
             <td class="mono">¥{{ fmt(o.finalPrice) }}</td>
             <td><span class="order-badge" :class="statusClass(o.status)">{{ STATUS_TEXT[o.status] || o.status }}</span></td>

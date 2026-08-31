@@ -20,7 +20,9 @@ const visible = computed({
 
 const FULFILLMENT_LABELS: Record<string, string> = {
   TAKEAWAY: '到店自取',
+  PICKUP: '到店自取',
   DINE_IN: '店内用餐',
+  DELIVERY: '外卖配送',
   ROOM: '包厢',
 }
 

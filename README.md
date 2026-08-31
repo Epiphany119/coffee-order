@@ -63,7 +63,7 @@ src/
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # http://localhost:5174
 ```
 
 **必须确保后端已启动**（8088 端口）。Vite 代理规则（`vite.config.ts`）：

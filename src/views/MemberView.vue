@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
-import { orderApi, favoriteApi, membershipApi, afterSaleApi, notificationApi, flashSaleApi } from '@/api'
+import { orderApi, favoriteApi, membershipApi, afterSaleApi, notificationApi, flashSaleApi, memberApi } from '@/api'
 import { STATUS_LABELS, CATEGORY_META, sizeText } from '@/api/types'
 import type { Product, RedeemItem, Voucher, FeedbackRecord, FlashSaleClaimRecord } from '@/api/types'
 import OrderDetailDialog from '@/components/OrderDetailDialog.vue'
@@ -242,7 +242,6 @@ function goToProduct(product: Product) {
 async function loadMemberDashboard() {
   if (!store.isLoggedIn || !store.currentUser?.id) return
   try {
-    const { memberApi } = await import('@/api')
     const data = await memberApi.getDashboard(store.currentUser.id)
     store.updateMemberDashboard(data)
   } catch (e) {

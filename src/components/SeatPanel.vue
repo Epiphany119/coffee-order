@@ -6,6 +6,7 @@ import { seatApi } from '@/api'
 import type { SeatResponse } from '@/api/types'
 
 const store = useAppStore()
+const emit = defineEmits<{ 'choose-delivery': [] }>()
 
 type Modal = null | 'select' | 'qr' | 'confirm'
 
@@ -88,7 +89,10 @@ async function tryRestoreSeat(): Promise<boolean> {
 function readSeatParam(): string | null {
   const params = new URLSearchParams(window.location.search)
   const code = params.get('seat')
-  return code ? decodeURIComponent(code) : null
+  if (!code) return null
+  // URLSearchParams 已经完成一次解码；兼容旧二维码的二次编码，同时避免
+  // 恶意/损坏参数让页面在挂载阶段因 URIError 直接中断。
+  try { return decodeURIComponent(code) } catch { return code }
 }
 
 function clearSeatParam() {
@@ -178,6 +182,19 @@ function closeModal() {
   modal.value = null
   // 分配后关掉弹窗也要保留座位卡
 }
+
+function chooseDelivery() {
+  if (assigning.value || occupying.value) return
+  modal.value = null
+  emit('choose-delivery')
+}
+
+/** 堂食入口主动打开取号弹窗；已有座位时不重复打断用户。 */
+function openSelect() {
+  if (!store.seat) modal.value = 'select'
+}
+
+defineExpose({ openSelect })
 </script>
 
 <template>
@@ -202,6 +219,7 @@ function closeModal() {
         <button class="primary-btn" :disabled="assigning" @click="doAssign">
           {{ assigning ? '分配中...' : '分配座位' }}
         </button>
+        <button class="delivery-btn" @click="chooseDelivery">我想点外卖，不分配座位</button>
         <button class="ghost-btn" @click="closeModal">稍后再说</button>
       </div>
     </div>
@@ -237,8 +255,9 @@ function closeModal() {
               : '座位编号即凭证，确认后落座' }}
           </p>
           <button class="primary-btn" :disabled="occupying" @click="doOccupy(pendingSeat.seatId)">
-            {{ occupying ? '落座中...' : '确认落座' }}
+          {{ occupying ? '落座中...' : '确认落座' }}
           </button>
+          <button class="delivery-btn" @click="chooseDelivery">改为外卖配送，不落座</button>
         </template>
         <template v-else>
           <div class="card-title">解析失败</div>
@@ -393,6 +412,19 @@ function closeModal() {
   background: white;
   color: #6b7570;
   font-size: 14px;
+  cursor: pointer;
+}
+
+.delivery-btn {
+  width: 100%;
+  margin-top: 9px;
+  border: 1px solid #f1c7b2;
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: #fff8f3;
+  color: #b85632;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
 }
 

@@ -4,6 +4,7 @@ import fikaLogoMark from '@/assets/images/fika-logo-mark.png'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useMerchantStore } from '@/stores/merchant'
+import { storeApi } from '@/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -26,12 +27,20 @@ const pageTitle = computed(() => {
   return hit ? hit.label : 'FIKA 商家中心'
 })
 
-/** 营业状态本地切换（示例数据，后续接后端 updateStore 接口） */
-function toggleStatus() {
+/** 营业状态实时写回后端，避免刷新后营业状态回退。 */
+async function toggleStatus() {
   if (!mstore.joinedStore) return
   const next = mstore.joinedStore.status === 'OPEN' ? 'CLOSED' : 'OPEN'
-  mstore.setJoinedStore({ ...mstore.joinedStore, status: next })
-  ElMessage.success(next === 'OPEN' ? '已开始营业' : '已打烊')
+  try {
+    const updated = await storeApi.update(mstore.joinedStore.storeId, {
+      name: mstore.joinedStore.name,
+      status: next
+    })
+    mstore.setJoinedStore(updated)
+    ElMessage.success(next === 'OPEN' ? '已开始营业' : '已打烊')
+  } catch (e: any) {
+    ElMessage.error(e.message || '营业状态更新失败')
+  }
 }
 
 function logout() {

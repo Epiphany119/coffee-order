@@ -145,6 +145,7 @@ function itemText(o: OrderRecord) {
 }
 
 function seatText(o: OrderRecord) {
+  if (o.fulfillmentType === 'DELIVERY') return '外卖配送'
   return o.fulfillmentType === 'DINE_IN' ? '店内用餐' : '到店自取'
 }
 

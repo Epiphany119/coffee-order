@@ -1,12 +1,19 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import HomeView from '@/views/HomeView.vue'
 
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'home',
-    component: () => import('@/views/HomeView.vue')
+    component: HomeView
+  },
+  // ============ 配送员端（C 端，独立于顾客/商家界面） ============
+  {
+    path: '/delivery',
+    name: 'delivery-rider',
+    component: () => import('@/views/DeliveryRiderView.vue')
   },
   // ============ 商家端（独立界面，与用户端分离） ============
   {

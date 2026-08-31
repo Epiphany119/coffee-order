@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
+import * as os from 'node:os'
 
 // 支持多 IP 自动切换：
 //   1. 优先从 .env.development.local 读 VITE_API_TARGET
@@ -62,8 +63,7 @@ export default defineConfig(({ mode }) => {
  */
 function getLocalIp(): string {
   try {
-    const { networkInterfaces } = require('os')
-    const nets = networkInterfaces()
+    const nets = os.networkInterfaces()
     for (const name of Object.keys(nets)) {
       for (const net of nets[name] || []) {
         if (net.family === 'IPv4' && !net.internal) {

@@ -5,7 +5,7 @@ import fikaLogoMark from '@/assets/images/fika-logo-mark.png'
 import fikaLogo from '@/assets/images/fika-logo.png'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
-import { authApi } from '@/api'
+import { authApi, locationApi } from '@/api'
 import type { AuthRequest, LoginChallenge } from '@/api/types'
 
 const store = useAppStore()
@@ -143,9 +143,7 @@ async function doLogin(){
     if (navigator.geolocation && data.id != null) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          import('@/api').then(({ locationApi }) => locationApi.saveUserLocation(
-            data.id!, position.coords.latitude, position.coords.longitude
-          )).catch(() => {})
+          locationApi.saveUserLocation(data.id!, position.coords.latitude, position.coords.longitude).catch(() => {})
         },
         () => {},
         { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 }
@@ -265,7 +263,18 @@ async function doForgot(){
 
     }
 
-    resetToken.value = data.token
+    // 生产环境不把高价值重置令牌放进匿名 HTTP 响应；用户通过已配置渠道
+    // 收到令牌后，在下一步手动填写。开发环境显式开启时仍可自动带入。
+    resetToken.value = data.token || ''
+
+    if (!data.token) {
+      // 无论账号是否存在都进入同一页面，避免通过页面行为枚举账号；
+      // 真实令牌由站外渠道发送，用户可以直接粘贴后继续。
+      resetForm.value = { password: '', confirm: '' }
+      view.value = 'reset'
+      resetHint.value = '如果账号存在，请查收已配置的找回渠道，再粘贴令牌继续'
+      return
+    }
 
     resetForm.value = { password: '', confirm: '' }
 
@@ -286,6 +295,11 @@ async function doForgot(){
 }
 
 async function doReset(){
+
+  if(!resetToken.value.trim()){
+    resetHint.value = '请输入收到的重置令牌'
+    return
+  }
 
   const p = resetForm.value.password
 
@@ -473,7 +487,7 @@ async function doReset(){
         >
           <div class="sub-title">找回密码</div>
           <p class="sub-desc">
-            输入账号获取重置令牌，30 分钟内有效
+            输入账号提交找回申请；令牌由已配置的找回渠道发送，30 分钟内有效
           </p>
 
           <label>
@@ -488,7 +502,7 @@ async function doReset(){
               class="submit"
               :disabled="forgotLoading"
           >
-            {{ forgotLoading ? '获取中...' : '获取重置令牌' }}
+            {{ forgotLoading ? '提交中...' : '提交找回申请' }}
           </button>
 
           <p class="hint">
@@ -510,8 +524,17 @@ async function doReset(){
         >
           <div class="sub-title">重置密码</div>
           <p class="sub-desc">
-            令牌已生成，请设置新密码
+            填写收到的令牌并设置新密码
           </p>
+
+          <label>
+            重置令牌
+            <input
+                v-model="resetToken"
+                autocomplete="one-time-code"
+                placeholder="粘贴收到的令牌"
+            />
+          </label>
 
           <label>
             新密码
