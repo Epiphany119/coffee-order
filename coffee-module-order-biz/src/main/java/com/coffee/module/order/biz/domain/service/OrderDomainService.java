@@ -52,22 +52,37 @@ public class OrderDomainService {
     }
 
     public Order.OrderStatus calculateNextStatus(String currentStatus, String action) {
+        return calculateNextStatus(currentStatus, action, "PICKUP");
+    }
+
+    /**
+     * 计算商家端订单状态。外卖单在制作完成后只能进入待骑手接单，
+     * 到店自取/店内用餐单制作完成后才直接完成。
+     */
+    public Order.OrderStatus calculateNextStatus(String currentStatus, String action, String fulfillmentType) {
         if (currentStatus == null || action == null || action.isBlank()) {
             throw new IllegalArgumentException("订单状态或操作不能为空");
         }
         String normalized = action.trim().toLowerCase(Locale.ROOT);
-        return switch (currentStatus) {
+        String fulfillment = fulfillmentType == null ? "PICKUP" : fulfillmentType.trim().toUpperCase(Locale.ROOT);
+        return switch (currentStatus.trim().toUpperCase(Locale.ROOT)) {
             // 已支付订单不能直接取消，必须接入退款流程后再改变状态。
             case "UNPAID" -> "cancel".equals(normalized)
                     ? Order.OrderStatus.CANCELED
                     : invalidTransition(currentStatus, action);
-            case "PENDING" -> "start".equals(normalized)
+            case "PENDING" -> "accept".equals(normalized)
+                    ? Order.OrderStatus.ACCEPTED
+                    : invalidTransition(currentStatus, action);
+            case "ACCEPTED" -> ("start".equals(normalized) || "prepare".equals(normalized))
                     ? Order.OrderStatus.PREPARING
                     : invalidTransition(currentStatus, action);
             case "PREPARING" -> "complete".equals(normalized)
-                    ? Order.OrderStatus.COMPLETED
+                    ? ("DELIVERY".equals(fulfillment)
+                        ? Order.OrderStatus.READY_FOR_DELIVERY
+                        : Order.OrderStatus.COMPLETED)
                     : invalidTransition(currentStatus, action);
-            case "COMPLETED", "CANCELED" -> invalidTransition(currentStatus, action);
+            case "READY_FOR_DELIVERY", "RIDER_ASSIGNED", "DELIVERING", "DELIVERED",
+                    "COMPLETED", "CANCELED" -> invalidTransition(currentStatus, action);
             default -> throw new IllegalArgumentException("未知订单状态: " + currentStatus);
         };
     }

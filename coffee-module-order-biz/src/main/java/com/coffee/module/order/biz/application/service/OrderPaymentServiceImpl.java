@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 订单支付服务实现：UNPAID → PENDING 状态回写
+ * 订单支付服务实现：UNPAID → PENDING（等待商家接单）状态回写
  */
 @Service
 public class OrderPaymentServiceImpl implements OrderPaymentService {

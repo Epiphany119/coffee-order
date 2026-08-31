@@ -43,8 +43,13 @@ public class Order {
     private java.util.List<OrderItem> items;
     public enum OrderStatus {
         UNPAID("待支付"),
-        PENDING("待处理"),
+        PENDING("等待商家接单"),
+        ACCEPTED("商家已接单，等待制作"),
         PREPARING("制作中"),
+        READY_FOR_DELIVERY("商家制作完毕，待骑手接单"),
+        RIDER_ASSIGNED("骑手已接单"),
+        DELIVERING("骑手配送中"),
+        DELIVERED("骑手已送达，请取餐"),
         COMPLETED("已完成"),
         CANCELED("已取消");
 

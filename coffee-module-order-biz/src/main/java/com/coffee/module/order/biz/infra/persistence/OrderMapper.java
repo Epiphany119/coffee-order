@@ -29,26 +29,27 @@ public interface OrderMapper extends BaseMapper<OrderPO> {
     @Select("SELECT * FROM user_order WHERE store_id = #{storeId} AND status != 'UNPAID' ORDER BY created_at DESC LIMIT #{limit}")
     java.util.List<OrderPO> selectRecentByStoreId(@Param("storeId") Long storeId, @Param("limit") int limit);
 
-    /** 今日营业额与订单数（营业额仅计入已完成 COMPLETED 订单；订单数不含待支付 UNPAID） */
-    @Select("SELECT COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN final_price ELSE 0 END), 0) AS revenue, " +
+    /** 今日营业额与订单数（营业额计入 COMPLETED/DELIVERED；订单数不含待支付 UNPAID） */
+    @Select("SELECT COALESCE(SUM(CASE WHEN status IN ('COMPLETED', 'DELIVERED') THEN final_price ELSE 0 END), 0) AS revenue, " +
             "COUNT(CASE WHEN status != 'UNPAID' THEN 1 END) AS cnt FROM user_order WHERE store_id = #{storeId} AND DATE(created_at) = CURDATE()")
     java.util.Map<String, Object> selectTodayStats(@Param("storeId") Long storeId);
 
     /** 待处理订单数 */
-    @Select("SELECT COUNT(*) FROM user_order WHERE store_id = #{storeId} AND status = 'PENDING'")
+    @Select("SELECT COUNT(*) FROM user_order WHERE store_id = #{storeId} " +
+            "AND status IN ('PENDING', 'ACCEPTED', 'PREPARING')")
     long countPendingByStoreId(@Param("storeId") Long storeId);
 
-    /** 近 N 天每日营业额（仅计入已完成 COMPLETED 订单；day=YYYYMMDD；ROUND 消除 DOUBLE 浮点噪声） */
+    /** 近 N 天每日营业额（计入 COMPLETED/DELIVERED；day=YYYYMMDD；ROUND 消除 DOUBLE 浮点噪声） */
     @Select("SELECT DATE_FORMAT(created_at, '%Y%m%d') AS day, " +
-            "ROUND(COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN final_price ELSE 0 END), 0), 2) AS amount " +
+            "ROUND(COALESCE(SUM(CASE WHEN status IN ('COMPLETED', 'DELIVERED') THEN final_price ELSE 0 END), 0), 2) AS amount " +
             "FROM user_order WHERE store_id = #{storeId} " +
             "AND created_at >= DATE_SUB(CURDATE(), INTERVAL (#{days} - 1) DAY) " +
             "GROUP BY DATE_FORMAT(created_at, '%Y%m%d') ORDER BY MIN(created_at)")
     java.util.List<java.util.Map<String, Object>> selectDailySales(@Param("storeId") Long storeId, @Param("days") int days);
 
-    /** 近 N 周每周营业额（周一起始；day=周起日期 YYYYMMDD；仅统计 COMPLETED；ROUND 消除浮点噪声） */
+    /** 近 N 周每周营业额（周一起始；day=周起日期 YYYYMMDD；计入 COMPLETED/DELIVERED；ROUND 消除浮点噪声） */
     @Select("SELECT DATE_FORMAT(DATE_SUB(created_at, INTERVAL WEEKDAY(created_at) DAY), '%Y%m%d') AS day, " +
-            "ROUND(COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN final_price ELSE 0 END), 0), 2) AS amount " +
+            "ROUND(COALESCE(SUM(CASE WHEN status IN ('COMPLETED', 'DELIVERED') THEN final_price ELSE 0 END), 0), 2) AS amount " +
             "FROM user_order WHERE store_id = #{storeId} " +
             "AND created_at >= DATE_SUB(DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY), INTERVAL (#{weeks} - 1) * 7 DAY) " +
             "AND created_at < DATE_ADD(DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY), INTERVAL 7 DAY) " +

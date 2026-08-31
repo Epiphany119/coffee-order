@@ -23,7 +23,7 @@ public interface OrderRepository {
     List<Order> findRecentByStoreId(Long storeId, int limit);
     /** 今日营业额与订单数（Map: revenue/cnt） */
     java.util.Map<String, Object> todayStats(Long storeId);
-    /** 待处理（PENDING）订单数 */
+    /** 待商家处理（PENDING/ACCEPTED/PREPARING）订单数 */
     long countPendingByStoreId(Long storeId);
     /** 店铺当日最大订单顺序号（order_no 末段，跨分类连续；无则 0） */
     int maxSeqOfDay(Long storeId, String datePrefix);

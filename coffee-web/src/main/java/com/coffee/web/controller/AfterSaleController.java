@@ -34,7 +34,7 @@ public class AfterSaleController {
         this.orderQueryService = orderQueryService;
     }
 
-    /** 创建售后单（仅已完成订单） */
+    /** 创建售后单（仅已完成或骑手已送达订单） */
     @PostMapping("/after-sale")
     public Result<AfterSaleResponse> create(@RequestBody AfterSaleRequest request) {
         if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
@@ -66,7 +66,7 @@ public class AfterSaleController {
         return Result.success(afterSaleService.processAfterSale(id, storeId, request));
     }
 
-    /** 提交订单反馈（仅已完成订单） */
+    /** 提交订单反馈（仅已完成或骑手已送达订单） */
     @PostMapping("/after-sale/feedback")
     public Result<FeedbackResponse> createFeedback(@RequestBody FeedbackRequest request) {
         if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");

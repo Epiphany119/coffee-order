@@ -10,6 +10,7 @@ import com.coffee.module.delivery.api.dto.DeliveryOrderResponse;
 import com.coffee.module.delivery.api.dto.DeliveryRiderLoginRequest;
 import com.coffee.module.delivery.api.dto.DeliveryRiderRegisterRequest;
 import com.coffee.module.delivery.api.dto.DeliveryRiderResponse;
+import com.coffee.module.delivery.api.event.DeliveryOrderStatusChangedEvent;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryAddressMapper;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryAddressPO;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryOrderMapper;
@@ -17,6 +18,7 @@ import com.coffee.module.delivery.biz.infra.persistence.DeliveryOrderPO;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryRiderMapper;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryRiderPO;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,13 +37,16 @@ public class DeliveryApplicationService implements DeliveryService {
     private final DeliveryAddressMapper addressMapper;
     private final DeliveryOrderMapper orderMapper;
     private final DeliveryRiderMapper riderMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public DeliveryApplicationService(DeliveryAddressMapper addressMapper,
                                       DeliveryOrderMapper orderMapper,
-                                      DeliveryRiderMapper riderMapper) {
+                                      DeliveryRiderMapper riderMapper,
+                                      ApplicationEventPublisher eventPublisher) {
         this.addressMapper = addressMapper;
         this.orderMapper = orderMapper;
         this.riderMapper = riderMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     // ======================== 顾客地址 ========================
@@ -162,7 +167,8 @@ public class DeliveryApplicationService implements DeliveryService {
         po.setReceiverName(address.getReceiverName());
         po.setReceiverPhone(address.getReceiverPhone());
         po.setDetailAddress(address.getDetailAddress());
-        po.setStatus("OPEN");
+        // 顾客下单时先建立配送单，但必须等商家完成制作后才公开给骑手。
+        po.setStatus("WAITING_MERCHANT");
         po.setCreatedAt(LocalDateTime.now());
         po.setUpdatedAt(po.getCreatedAt());
         try {
@@ -174,6 +180,29 @@ public class DeliveryApplicationService implements DeliveryService {
             return toOrderResponse(concurrent);
         }
         return toOrderResponse(po);
+    }
+
+    @Override
+    @Transactional
+    public void publishForRider(Long orderId) {
+        if (orderId == null || orderId <= 0) throw new ServiceException(400, "关联订单无效");
+        DeliveryOrderPO current = orderMapper.selectByOrderId(orderId);
+        if (current == null) throw new ServiceException(409, "配送任务不存在，无法发布");
+        if ("OPEN".equals(current.getStatus())) return;
+        if (!"WAITING_MERCHANT".equals(current.getStatus())) {
+            throw new ServiceException(409, "配送任务当前状态不能发布");
+        }
+        if (orderMapper.openIfMerchantReady(orderId) == 0) {
+            DeliveryOrderPO latest = orderMapper.selectByOrderId(orderId);
+            if (latest != null && "OPEN".equals(latest.getStatus())) return;
+            throw new ServiceException(409, "订单尚未完成制作，暂不能发布配送任务");
+        }
+    }
+
+    @Override
+    @Transactional
+    public void cancelForOrder(Long orderId) {
+        if (orderId != null && orderId > 0) orderMapper.cancelPending(orderId);
     }
 
     @Override
@@ -207,7 +236,10 @@ public class DeliveryApplicationService implements DeliveryService {
         if (orderMapper.claimIfOpen(deliveryOrderId, riderId, displayRiderName(rider)) == 0) {
             throw new ServiceException(409, "这笔订单刚刚被其他配送员抢走，请刷新列表");
         }
-        return toOrderResponse(requireOrder(deliveryOrderId));
+        DeliveryOrderPO claimed = requireOrder(deliveryOrderId);
+        eventPublisher.publishEvent(DeliveryOrderStatusChangedEvent.changed(
+                claimed.getId(), claimed.getOrderId(), current.getStatus(), claimed.getStatus(), riderId));
+        return toOrderResponse(claimed);
     }
 
     @Override
@@ -230,7 +262,10 @@ public class DeliveryApplicationService implements DeliveryService {
         if (affected == 0) {
             throw new ServiceException(409, "订单状态已变化，请刷新后重试");
         }
-        return toOrderResponse(requireOrder(deliveryOrderId));
+        DeliveryOrderPO latest = requireOrder(deliveryOrderId);
+        eventPublisher.publishEvent(DeliveryOrderStatusChangedEvent.changed(
+                latest.getId(), latest.getOrderId(), current.getStatus(), latest.getStatus(), riderId));
+        return toOrderResponse(latest);
     }
 
     // ======================== 配送员账号 ========================
@@ -382,6 +417,7 @@ public class DeliveryApplicationService implements DeliveryService {
 
     private String statusLabel(String status) {
         return switch (status == null ? "" : status) {
+            case "WAITING_MERCHANT" -> "等待商家完成制作";
             case "OPEN" -> "待抢单";
             case "CLAIMED" -> "已抢单";
             case "PICKED_UP" -> "已取餐";

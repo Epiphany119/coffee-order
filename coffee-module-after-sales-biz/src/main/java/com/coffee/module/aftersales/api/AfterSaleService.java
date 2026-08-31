@@ -13,7 +13,7 @@ import java.util.List;
  */
 public interface AfterSaleService {
 
-    /** 创建售后单（仅已完成订单可售后，同订单防重复提交） */
+    /** 创建售后单（仅已完成或骑手已送达订单可售后，同订单防重复提交） */
     AfterSaleResponse createAfterSale(AfterSaleRequest request);
 
     /** 按用户查售后单列表 */
@@ -25,7 +25,7 @@ public interface AfterSaleService {
     /** 商家更新处理状态与处理说明。 */
     AfterSaleResponse processAfterSale(Long afterSaleId, Long storeId, AfterSaleProcessRequest request);
 
-    /** 提交订单反馈（仅已完成订单可反馈） */
+    /** 提交订单反馈（仅已完成或骑手已送达订单可反馈） */
     FeedbackResponse createFeedback(FeedbackRequest request);
 
     /** 按用户查反馈列表 */

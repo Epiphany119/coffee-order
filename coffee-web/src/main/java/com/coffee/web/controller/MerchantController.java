@@ -87,7 +87,7 @@ public class MerchantController {
         return storeService.listByMerchant(id);
     }
 
-    /** 经营数据 dashboard：今日营业额/订单数/待处理/营业额柱状图(按范围)/最近订单 */
+    /** 经营数据 dashboard：今日营业额/订单数/待处理履约订单/营业额柱状图(按范围)/最近订单 */
     @GetMapping("/{merchantId}/dashboard")
     public Map<String, Object> dashboard(@PathVariable("merchantId") Long merchantId,
                                          @RequestParam(value = "range", required = false, defaultValue = "7d") String range) {

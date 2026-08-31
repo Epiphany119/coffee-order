@@ -16,7 +16,7 @@ public class OrderBrief {
     /** 商品名快照 */
     private String beverageName;
 
-    /** 状态：UNPAID/PENDING/PREPARING/COMPLETED/CANCELED */
+    /** 状态：UNPAID/PENDING/ACCEPTED/PREPARING/READY_FOR_DELIVERY/RIDER_ASSIGNED/DELIVERING/DELIVERED/COMPLETED/CANCELED */
     private String status;
 
     /** 实付金额（支付模块建支付单用） */

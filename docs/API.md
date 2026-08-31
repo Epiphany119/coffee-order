@@ -815,10 +815,10 @@ Authorization: Bearer {accessToken}
 | 字段 | 说明 |
 |---|---|
 | store | 店铺信息（`StoreResponse`） |
-| todayRevenue | 今日营业额（仅统计 COMPLETED 订单实付金额） |
+| todayRevenue | 今日营业额（统计 COMPLETED/DELIVERED 订单实付金额） |
 | todayOrders | 今日订单数（统计非 UNPAID 订单） |
-| pendingOrders | 待处理订单数（PENDING） |
-| sales | 营业额柱状图序列 `[{day, amount}]`：`day`=YYYYMMDD（`12w` 为周起日期）；**无订单的日期/周补 0**；金额已 ROUND 2 位（仅 COMPLETED） |
+| pendingOrders | 待商家处理订单数（PENDING/ACCEPTED/PREPARING；外卖 READY_FOR_DELIVERY 已发布配送任务，不再占用商家待处理数） |
+| sales | 营业额柱状图序列 `[{day, amount}]`：`day`=YYYYMMDD（`12w` 为周起日期）；**无订单的日期/周补 0**；金额已 ROUND 2 位（统计 COMPLETED/DELIVERED） |
 | recentOrders | 最近 5 笔订单（结构同 10.5，含 `orderType`） |
 
 失败响应：
@@ -1276,7 +1276,7 @@ Authorization: Bearer {accessToken}
 |---|---|
 | orderId | 订单 id（= 取餐号） |
 | orderNo | 详细订单号（格式见 10.8） |
-| status | 中文状态：待支付/待处理/制作中/已完成/已取消 |
+| status | 中文状态：待支付/等待商家接单/商家已接单等待制作/商家制作中/商家制作完毕待骑手接单/骑手已接单/骑手配送中/骑手已送达请取餐/已完成/已取消 |
 | paymentNo | 支付单号（拉支付用）；支付单创建失败时为 null |
 | deliveryOrderId | number | 外卖配送单 id；非外卖订单为 null |
 | finalPrice | 实付金额（会员折扣 + 优惠券后） |
@@ -1300,7 +1300,7 @@ Authorization: Bearer {accessToken}
 
 **`POST /api/order/user/{id}/action?action={action}`**
 
-作用：登录用户操作自己的订单（如取消待支付/待处理/制作中订单）。
+作用：登录用户操作自己的订单；当前仅允许取消待支付订单。
 
 路径参数：`id`（number，订单 id）。查询参数：`action`（string，`cancel` 取消）。
 
@@ -1342,7 +1342,7 @@ Authorization: Bearer {accessToken}
 | size / customSize | string | 规格 / 定制尺寸 |
 | condiments | string | 加料 |
 | originalPrice / finalPrice | number | 原价 / 实付 |
-| status | string | `UNPAID`/`PENDING`/`PREPARING`/`COMPLETED`/`CANCELED` |
+| status | string | `UNPAID`/`PENDING`/`ACCEPTED`/`PREPARING`/`READY_FOR_DELIVERY`/`RIDER_ASSIGNED`/`DELIVERING`/`DELIVERED`/`COMPLETED`/`CANCELED` |
 | createdAt | string | 下单时间 |
 | estimatedReadyTime | string | 预计出餐时间 |
 | items | array | 明细：`[{productId, beverageName, quantity, unitPrice, originalUnitPrice, subtotal}]`（`unitPrice` 折后单价、`originalUnitPrice` 单件原价、`subtotal` 折后小计） |
@@ -1388,7 +1388,7 @@ Authorization: Bearer {accessToken}
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | storeId | number | ❌ | 按店过滤；不传返回全部 |
-| status | string | ❌ | 状态过滤：`PENDING`/`PREPARING`/`COMPLETED`/`CANCELED` |
+| status | string | ❌ | 状态过滤：`PENDING`/`ACCEPTED`/`PREPARING`/`READY_FOR_DELIVERY`/`RIDER_ASSIGNED`/`DELIVERING`/`DELIVERED`/`COMPLETED`/`CANCELED` |
 
 成功响应（200）：`Result<Map[]>`，列表项在 10.5 基础上多 `orderType`（`user` 用户单 / `guest` 游客单）。
 
@@ -1402,7 +1402,7 @@ Authorization: Bearer {accessToken}
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| action | string | ✅ | `start` 接单：PENDING→PREPARING；`complete` 完成：PREPARING→COMPLETED；`cancel` 取消：PREPARING→CANCELED |
+| action | string | ✅ | `accept` 接单：PENDING→ACCEPTED；`start` 开始制作：ACCEPTED→PREPARING；`complete` 完成制作：非外卖 PREPARING→COMPLETED，外卖 PREPARING→READY_FOR_DELIVERY 并自动发布配送任务 |
 | storeId | number | ✅ | 店铺 id（归属校验） |
 
 成功响应（200）：`Result<OrderResponse>`（`status` 为中文描述、`message` 为"状态已更新"）。
@@ -1474,7 +1474,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 |---|---|
 | nickname | 昵称（未注册/不存在时为"会员"） |
 | totalSpent | 累计消费 |
-| totalSaved | 累计优惠金额（原价-实付，仅 COMPLETED 订单） |
+| totalSaved | 累计优惠金额（原价-实付，计入 COMPLETED/DELIVERED 订单） |
 | memberLevel | 普通会员（<100）/ VIP会员（≥100）/ SVIP会员（≥500） |
 | points | 积分 |
 | pointsLevel | 积分等级（BRONZE 等，预留） |
@@ -1879,7 +1879,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 ## 十六、售后模块
 
 > 响应格式：**A**。接口前缀 `/api/after-sale`。
-> 规则：仅**已完成（COMPLETED）**订单可售后/反馈；订单必须属于该用户（游客不能售后）；同一订单防重复提交。
+> 规则：仅**已完成（COMPLETED）或骑手已送达（DELIVERED）**订单可售后/反馈；订单必须属于该用户（游客不能售后）；同一订单防重复提交。
 
 ### 16.1 创建售后单
 
@@ -1928,7 +1928,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 | 400 | 请选择售后类型 | type 不合法 |
 | 400 | 请描述问题（至少 4 个字） | reason 太短 |
 | 404 | 订单不存在 | 订单不存在或非本人 |
-| 400 | 仅已完成订单可以申请售后 | 订单状态非 COMPLETED |
+| 400 | 仅已完成或骑手已送达订单可以申请售后 | 订单状态非 COMPLETED/DELIVERED |
 | 400 | 该订单已提交过售后申请，请耐心等待处理 | 防重复提交 |
 
 ### 16.2 我的售后单列表
@@ -1980,7 +1980,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 | 400 | 建议内容不能为空 | content 缺失 |
 | 400 | 评分范围 1-5 | rating 越界 |
 | 404 | 订单不存在 | 订单不存在或非本人 |
-| 400 | 仅已完成订单可以提交反馈 | 订单状态非 COMPLETED |
+| 400 | 仅已完成或骑手已送达订单可以提交反馈 | 订单状态非 COMPLETED/DELIVERED |
 
 ### 16.4 我的反馈列表
 
@@ -2315,7 +2315,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 }
 ```
 
-订单创建时会自动生成一条 `OPEN` 配送单；支付成功、主订单从 `UNPAID` 进入 `PENDING` 后，才会出现在配送员待抢列表。此流程不会分配座位。
+订单创建时会自动生成一条 `WAITING_MERCHANT` 配送单；支付成功后主订单进入 `PENDING`（等待商家接单），商家依次接单、开始制作、完成制作，主订单进入 `READY_FOR_DELIVERY` 后配送单才会发布为 `OPEN`，出现在配送员待抢列表。此流程不会分配座位。
 
 ### 20.4 配送员注册/登录/当前账号
 
@@ -2327,7 +2327,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 **`GET /api/delivery/rider/orders/available`**、**`GET /api/delivery/rider/orders/mine`**
 
-待抢订单只返回 `OPEN` 且对应主订单已支付、未取消的配送单；响应包含门店、商品摘要、收货地址快照、金额和配送状态。
+待抢订单只返回 `OPEN` 且对应主订单为 `READY_FOR_DELIVERY` 的配送单；响应包含门店、商品摘要、收货地址快照、金额和配送状态。
 
 ### 20.6 抢单与状态操作
 
@@ -2367,12 +2367,17 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 | 状态（DB） | 中文 | 流转 |
 |---|---|---|
 | UNPAID | 待支付 | 下单初始态；[支付成功]→PENDING；可取消→CANCELED |
-| PENDING | 待处理 | 商家接单 start→PREPARING；可取消→CANCELED |
-| PREPARING | 制作中 | 完成 complete→COMPLETED；可取消→CANCELED |
-| COMPLETED | 已完成 | 终态（可取消→CANCELED 即退款语义，消费累计/积分回滚） |
+| PENDING | 等待商家接单 | 商家 accept→ACCEPTED |
+| ACCEPTED | 商家已接单，等待制作 | 商家 start→PREPARING |
+| PREPARING | 商家制作中 | 商家 complete→COMPLETED（非外卖）或 READY_FOR_DELIVERY（外卖） |
+| READY_FOR_DELIVERY | 商家制作完毕，待骑手接单 | 骑手 claim→RIDER_ASSIGNED |
+| RIDER_ASSIGNED | 骑手已接单 | 骑手 deliver→DELIVERING（取餐动作不改变主订单状态） |
+| DELIVERING | 骑手配送中 | 骑手 complete→DELIVERED |
+| DELIVERED | 骑手已送达，请取餐 | 终态；平台写入取餐通知 |
+| COMPLETED | 已完成 | 非外卖终态 |
 | CANCELED | 已取消 | 终态 |
 
-> 商家端列表/统计统一过滤 `UNPAID`；完整状态机：`UNPAID →[支付成功]→ PENDING →[start]→ PREPARING →[complete]→ COMPLETED`。
+> 商家端列表/统计统一过滤 `UNPAID`；外卖完整状态机：`UNPAID →[支付成功]→ PENDING →[accept]→ ACCEPTED →[start]→ PREPARING →[complete]→ READY_FOR_DELIVERY →[claim]→ RIDER_ASSIGNED →[deliver]→ DELIVERING →[complete]→ DELIVERED`。到店自取/店内用餐在 `complete` 后进入 `COMPLETED`。
 
 ### A.2 支付状态
 

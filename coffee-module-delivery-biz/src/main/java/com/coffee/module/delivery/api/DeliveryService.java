@@ -28,6 +28,12 @@ public interface DeliveryService {
 
     DeliveryOrderResponse createDeliveryOrder(DeliveryOrderCreateRequest request);
 
+    /** 商家完成制作后，将配送单从等待商家状态发布到骑手待抢列表。 */
+    void publishForRider(Long orderId);
+
+    /** 未支付订单取消时，关闭尚未被骑手接走的配送任务。 */
+    void cancelForOrder(Long orderId);
+
     List<DeliveryOrderResponse> listAvailableOrders();
 
     List<DeliveryOrderResponse> listRiderOrders(Long riderId);

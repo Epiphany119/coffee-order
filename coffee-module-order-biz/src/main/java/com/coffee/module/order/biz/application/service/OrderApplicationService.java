@@ -175,7 +175,7 @@ public class OrderApplicationService implements OrderService {
         consumeVoucherIfNeeded(userId, coupon);
         eventPublisher.publishEvent(OrderDomainEvent.created(order.getId(), order.getBeverageName(), order.getStatus().name()));
 
-        // 消费累计延后到订单完成时（COMPLETED）执行，取消/未完成的订单不计入累计消费
+        // 消费累计延后到订单完成时（到店 COMPLETED / 外卖 DELIVERED）执行，取消/未完成的订单不计入累计消费
 
         return buildResponse(order, product.getCategoryCode(), coupon, readyTimeStr,
                 regularUnitPrice, memberDiscount, 0, "下单成功，请完成支付");
@@ -307,7 +307,7 @@ public class OrderApplicationService implements OrderService {
 
         int earnedPoints = 0;
         if (userId != null && userId > 0) {
-            // 消费累计延后到订单完成时（COMPLETED）执行，这里只预估本次可得积分用于展示
+        // 消费累计延后到订单完成/外卖送达时执行，这里只预估本次可得积分用于展示
             earnedPoints = orderDomainService.calculateEarnedPoints(finalTotal);
         }
 
@@ -351,7 +351,8 @@ public class OrderApplicationService implements OrderService {
             throw new ServiceException(409, "已支付订单不能直接取消，请走售后退款流程");
         }
         Order.OrderStatus previousStatus = order.getStatus();
-        Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(previousStatus.name(), action);
+        Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(previousStatus.name(), action,
+                order.getFulfillmentType());
         if (!orderRepository.updateStatusIfCurrent(orderId, previousStatus, newStatus)) {
             throw new ServiceException(409, "订单状态已变化，请刷新后重试");
         }
@@ -365,7 +366,7 @@ public class OrderApplicationService implements OrderService {
         }
         eventPublisher.publishEvent(OrderDomainEvent.statusChanged(orderId, order.getBeverageName(), newStatus.name()));
         // 消费累计 + 积分入账：仅在订单完成的那一刻计入（状态机单向，只会触发一次），取消/未完成不计入
-        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.COMPLETED && previousStatus != Order.OrderStatus.COMPLETED
+        if (!asyncMembershipEnabled && isCompletionStatus(newStatus) && !isCompletionStatus(previousStatus)
                 && order.getUserId() != null && order.getUserId() > 0) {
             memberService.addSpending(order.getUserId(), order.getFinalPrice());
             membershipService.addConsumptionPoints(order.getUserId(), order.getFinalPrice());
@@ -399,7 +400,8 @@ public class OrderApplicationService implements OrderService {
         if ("cancel".equalsIgnoreCase(action) && previousStatus != Order.OrderStatus.UNPAID) {
             throw new ServiceException(409, "已支付订单不能直接取消，请走售后退款流程");
         }
-        Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(previousStatus.name(), action);
+        Order.OrderStatus newStatus = orderDomainService.calculateNextStatus(previousStatus.name(), action,
+                order.getFulfillmentType());
         if (!orderRepository.updateStatusIfCurrent(orderId, previousStatus, newStatus)) {
             throw new ServiceException(409, "订单状态已变化，请刷新后重试");
         }
@@ -409,7 +411,7 @@ public class OrderApplicationService implements OrderService {
         }
         eventPublisher.publishEvent(OrderDomainEvent.statusChanged(orderId, order.getBeverageName(), newStatus.name()));
         // 消费累计 + 积分入账：仅在订单完成的那一刻计入（状态机单向，只会触发一次），取消/未完成不计入
-        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.COMPLETED && previousStatus != Order.OrderStatus.COMPLETED
+        if (!asyncMembershipEnabled && isCompletionStatus(newStatus) && !isCompletionStatus(previousStatus)
                 && order.getUserId() != null && order.getUserId() > 0) {
             memberService.addSpending(order.getUserId(), order.getFinalPrice());
             membershipService.addConsumptionPoints(order.getUserId(), order.getFinalPrice());
@@ -425,6 +427,73 @@ public class OrderApplicationService implements OrderService {
         response.setOrderId(order.getId());
         response.setOrderName(order.getBeverageName());
         response.setStatus(newStatus.getDescription());
+        response.setMessage("状态已更新");
+        return response;
+    }
+
+    /**
+     * 接收配送模块的状态回写。该入口不暴露给顾客/商家控制器，
+     * 只由 web 组合层监听配送任务事件后调用。
+     */
+    @Override
+    @Transactional
+    public OrderResponse updateDeliveryOrderStatus(Long orderId, String deliveryStatus) {
+        Order order = orderRepository.findById(orderId);
+        if (order == null) throw new ServiceException(404, "订单不存在");
+        if (!"DELIVERY".equalsIgnoreCase(order.getFulfillmentType())) {
+            throw new ServiceException(409, "非外卖订单不能进入配送状态");
+        }
+
+        String normalized = deliveryStatus == null ? "" : deliveryStatus.trim().toUpperCase(Locale.ROOT);
+        Order.OrderStatus expected;
+        Order.OrderStatus target;
+        switch (normalized) {
+            case "OPEN" -> {
+                expected = Order.OrderStatus.RIDER_ASSIGNED;
+                target = Order.OrderStatus.READY_FOR_DELIVERY;
+            }
+            case "CLAIMED", "PICKED_UP" -> {
+                expected = Order.OrderStatus.READY_FOR_DELIVERY;
+                target = Order.OrderStatus.RIDER_ASSIGNED;
+            }
+            case "DELIVERING" -> {
+                expected = Order.OrderStatus.RIDER_ASSIGNED;
+                target = Order.OrderStatus.DELIVERING;
+            }
+            case "DELIVERED" -> {
+                expected = Order.OrderStatus.DELIVERING;
+                target = Order.OrderStatus.DELIVERED;
+            }
+            default -> throw new ServiceException(400, "不支持的配送状态");
+        }
+
+        // 重复投递事件安全幂等；其他越级或回退状态一律拒绝。
+        if (order.getStatus() == target) return statusResponse(order, target);
+        if (order.getStatus() != expected) {
+            throw new ServiceException(409, "订单主状态为 " + order.getStatus().getDescription()
+                    + "，不能同步为 " + target.getDescription());
+        }
+        if (!orderRepository.updateStatusIfCurrent(orderId, expected, target)) {
+            throw new ServiceException(409, "订单状态已变化，请刷新后重试");
+        }
+        eventPublisher.publishEvent(OrderDomainEvent.statusChanged(orderId, order.getBeverageName(), target.name()));
+        if (!asyncMembershipEnabled && target == Order.OrderStatus.DELIVERED
+                && order.getUserId() != null && order.getUserId() > 0) {
+            memberService.addSpending(order.getUserId(), order.getFinalPrice());
+            membershipService.addConsumptionPoints(order.getUserId(), order.getFinalPrice());
+        }
+        return statusResponse(order, target);
+    }
+
+    private boolean isCompletionStatus(Order.OrderStatus status) {
+        return status == Order.OrderStatus.COMPLETED || status == Order.OrderStatus.DELIVERED;
+    }
+
+    private OrderResponse statusResponse(Order order, Order.OrderStatus status) {
+        OrderResponse response = new OrderResponse();
+        response.setOrderId(order.getId());
+        response.setOrderName(order.getBeverageName());
+        response.setStatus(status.getDescription());
         response.setMessage("状态已更新");
         return response;
     }
@@ -471,7 +540,7 @@ public class OrderApplicationService implements OrderService {
     public double getTotalSaved(Long userId) {
         if (userId == null || userId <= 0) return 0;
         double saved = orderRepository.findByUserId(userId).stream()
-                .filter(o -> o.getStatus() == Order.OrderStatus.COMPLETED)
+                .filter(o -> isCompletionStatus(o.getStatus()))
                 .mapToDouble(o -> {
                     double originalPrice = o.getOriginalPrice() == null ? 0 : o.getOriginalPrice();
                     double finalPrice = o.getFinalPrice() == null ? 0 : o.getFinalPrice();

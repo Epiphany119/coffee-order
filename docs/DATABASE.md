@@ -98,13 +98,13 @@
 
 ### 2.5 user_order / order_item — 订单
 
-`user_order`：`id / order_no(详细订单号，唯一索引 uk_order_no) / user_id / guest_id(二选一) / store_id(下单店铺) / fulfillment_type(PICKUP|DINE_IN|DELIVERY) / note / beverage_name(商品名快照) / size / condiments / original_price / final_price / voucher_no(核销的卡券包券码，可空) / status(UNPAID|PENDING|PREPARING|COMPLETED|CANCELED) / delivery_info_id / created_at / completed_at / started_at / estimated_ready_time / custom_size(定制规格如 300ml，仅 CUSTOM)`。用户与游客订单统一入此表，按店隔离（商家只能操作本店订单）。`DELIVERY` 仅允许登录用户并必须携带 `deliveryAddressId`，不会分配座位；地址快照与抢单状态落在 `delivery_order`。接口返回的 `orderType`（user/guest）为根据 `user_id`/`guest_id` 计算的展示字段，非数据库列。
+`user_order`：`id / order_no(详细订单号，唯一索引 uk_order_no) / user_id / guest_id(二选一) / store_id(下单店铺) / fulfillment_type(PICKUP|DINE_IN|DELIVERY) / note / beverage_name(商品名快照) / size / condiments / original_price / final_price / voucher_no(核销的卡券包券码，可空) / status(UNPAID|PENDING|ACCEPTED|PREPARING|READY_FOR_DELIVERY|RIDER_ASSIGNED|DELIVERING|DELIVERED|COMPLETED|CANCELED) / delivery_info_id / created_at / completed_at / started_at / estimated_ready_time / custom_size(定制规格如 300ml，仅 CUSTOM)`。用户与游客订单统一入此表，按店隔离（商家只能操作本店订单）。`DELIVERY` 仅允许登录用户并必须携带 `deliveryAddressId`，不会分配座位；地址快照与抢单状态落在 `delivery_order`。接口返回的 `orderType`（user/guest）为根据 `user_id`/`guest_id` 计算的展示字段，非数据库列。
 
 ### 2.9 delivery_address / delivery_rider / delivery_order — 外卖模块
 
 - `delivery_address`：顾客可维护多条 `label / receiver_name / receiver_phone / detail_address`，可设置默认地址；地址按 `user_id` 隔离。
 - `delivery_rider`：配送员独立账号，密码使用 BCrypt；当前支持 `ACTIVE / DISABLED`，登录后令牌身份为 `RIDER`。
-- `delivery_order`：由 `DELIVERY` 主订单自动生成，创建时复制收货地址快照，状态为 `OPEN`。支付成功后才进入 C 端待抢列表；配送员通过数据库条件更新完成 `OPEN → CLAIMED → PICKED_UP → DELIVERING → DELIVERED`，抢单使用 CAS 保证同一订单只能被一人抢到。当前不计算配送费。
+- `delivery_order`：由 `DELIVERY` 主订单自动生成，创建时复制收货地址快照，状态为 `WAITING_MERCHANT`。商家完成制作后才发布为 `OPEN` 进入 C 端待抢列表；配送员通过数据库条件更新完成 `OPEN → CLAIMED → PICKED_UP → DELIVERING → DELIVERED`，并同步推进主订单状态，抢单使用 CAS 保证同一订单只能被一人抢到。当前不计算配送费。
 
 `order_no` 规则（2026-08-07）：`YYMMDD-{商家6位}-{类目3位}-{顺序3位}`，商家段 = `merchant_no` 去 `sj-` 前缀（无商家回退店铺 id），类目段 = 商品类目 id 左补 0（批量订单取首行商品类目），顺序段 = **店铺当日单号**（跨分类连续）。唯一索引保证并发下不重号，冲突由服务端重算重试。
 
@@ -120,9 +120,9 @@
 
 ### 2.7 after_sale / feedback — 售后模块
 
-`after_sale`：`id / order_id(FK→user_order.id) / user_id(FK→coffee_user.id) / type(REFUND 退款|REMAKE 重做|EXCHANGE 换货|OTHER 其他) / reason(问题说明) / status(PENDING 待处理|PROCESSING 处理中|RESOLVED 已解决|REJECTED 已拒绝|CLOSED 已关闭) / handler_note(商家处理备注) / created_at / updated_at`。业务规则：仅已完成（COMPLETED）订单可申请、订单必须属于本人、同订单防重复（`uk_after_sale_user_order` 唯一约束）；商家只能按自己店铺查询并推进状态，完成/拒绝/关闭必须写处理说明。
+`after_sale`：`id / order_id(FK→user_order.id) / user_id(FK→coffee_user.id) / type(REFUND 退款|REMAKE 重做|EXCHANGE 换货|OTHER 其他) / reason(问题说明) / status(PENDING 待处理|PROCESSING 处理中|RESOLVED 已解决|REJECTED 已拒绝|CLOSED 已关闭) / handler_note(商家处理备注) / created_at / updated_at`。业务规则：仅已完成（COMPLETED）或骑手已送达（DELIVERED）订单可申请、订单必须属于本人、同订单防重复（`uk_after_sale_user_order` 唯一约束）；商家只能按自己店铺查询并推进状态，完成/拒绝/关闭必须写处理说明。
 
-`feedback`：`id / order_id / product_id(订单首个商品) / user_id / content(建议内容) / rating(TINYINT 1-5，可空) / created_at`。仅已完成订单可提交，同订单可多次反馈；商品评价查询不返回用户账号名。
+`feedback`：`id / order_id / product_id(订单首个商品) / user_id / content(建议内容) / rating(TINYINT 1-5，可空) / created_at`。仅到店订单 `COMPLETED` 或外卖订单 `DELIVERED` 可提交，同订单可多次反馈；商品评价查询不返回用户账号名。
 
 ### 2.8 payment — 支付单（2026-08-07 新建）
 

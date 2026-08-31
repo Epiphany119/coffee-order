@@ -18,9 +18,14 @@ public interface OrderService {
     OrderResponse updateOrderStatus(Long orderId, String action, boolean isUserOrder);
 
     /**
-     * 商家操作订单状态（接单/完成/取消，校验订单归属店铺）
+     * 商家操作订单状态（接单/开始制作/完成制作，校验订单归属店铺）
      */
     OrderResponse updateStoreOrderStatus(Long orderId, String action, Long storeId);
+
+    /**
+     * 配送模块回写外卖主订单状态。仅允许由配送任务状态机触发，不能由顾客或商家直接调用。
+     */
+    OrderResponse updateDeliveryOrderStatus(Long orderId, String deliveryStatus);
 
     /**
      * 获取用户订单列表
@@ -43,7 +48,7 @@ public interface OrderService {
     java.util.List<java.util.Map<String, Object>> getStoreOrders(Long storeId, String status);
 
     /**
-     * 获取店铺统计（dashboard：今日营业额/订单数/待处理）
+     * 获取店铺统计（dashboard：今日营业额/订单数/待处理履约订单）
      */
     java.util.Map<String, Object> getStoreStats(Long storeId);
 

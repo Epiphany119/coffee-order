@@ -145,7 +145,7 @@ public class BusinessAgentOrchestrator {
         try {
             Map<String, Object> metric = jdbc.queryForMap("""
                     SELECT COUNT(*) AS todayOrders, COALESCE(SUM(final_price),0) AS todayRevenue
-                    FROM user_order WHERE store_id=? AND status='COMPLETED' AND DATE(created_at)=CURDATE()
+                    FROM user_order WHERE store_id=? AND status IN ('COMPLETED', 'DELIVERED') AND DATE(created_at)=CURDATE()
                     """, storeId);
             return new ToolResult("operation_metrics", true, List.of(metric), "只统计当前门店今日已完成订单");
         } catch (Exception e) {

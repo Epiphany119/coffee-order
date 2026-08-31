@@ -57,8 +57,8 @@ public class AfterSaleServiceImpl implements AfterSaleService {
         if (order == null) {
             throw new ServiceException(404, "订单不存在");
         }
-        if (!"COMPLETED".equals(order.getStatus())) {
-            throw new ServiceException(400, "仅已完成订单可以申请售后");
+        if (!isFinalOrderStatus(order.getStatus())) {
+            throw new ServiceException(400, "仅已完成或骑手已送达订单可以申请售后");
         }
         if (afterSaleRepository.findByUserIdAndOrderId(request.getUserId(), request.getOrderId()) != null) {
             throw new ServiceException(400, "该订单已提交过售后申请，请耐心等待处理");
@@ -135,8 +135,8 @@ public class AfterSaleServiceImpl implements AfterSaleService {
         if (order == null) {
             throw new ServiceException(404, "订单不存在");
         }
-        if (!"COMPLETED".equals(order.getStatus())) {
-            throw new ServiceException(400, "仅已完成订单可以提交反馈");
+        if (!isFinalOrderStatus(order.getStatus())) {
+            throw new ServiceException(400, "仅已完成或骑手已送达订单可以提交反馈");
         }
 
         Feedback feedback = new Feedback();
@@ -177,6 +177,10 @@ public class AfterSaleServiceImpl implements AfterSaleService {
         return afterSaleRepository.findFeedbackVOByProductId(productId).stream()
                 .map(vo -> toFeedbackResponseFromVO(vo, false))
                 .toList();
+    }
+
+    private boolean isFinalOrderStatus(String status) {
+        return "COMPLETED".equals(status) || "DELIVERED".equals(status);
     }
 
     private AfterSaleResponse toResponse(AfterSale a, OrderBrief order) {

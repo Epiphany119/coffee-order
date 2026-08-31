@@ -21,7 +21,7 @@ public class DeliveryOrderResponse {
     private String receiverName;
     private String receiverPhone;
     private String detailAddress;
-    /** OPEN / CLAIMED / PICKED_UP / DELIVERING / DELIVERED / CANCELED */
+    /** WAITING_MERCHANT / OPEN / CLAIMED / PICKED_UP / DELIVERING / DELIVERED / CANCELED */
     private String status;
     private String statusLabel;
     private Long riderId;
