@@ -3,6 +3,7 @@ import type {
   AuthRequest,
   LoginChallenge,
   AuthResponse,
+  UserProfileUpdateRequest,
   ForgotPasswordRequest,
   ForgotPasswordResponse,
   ResetPasswordRequest,
@@ -44,6 +45,11 @@ import type {
   , DeliveryRiderLoginRequest
   , DeliveryRiderRegisterRequest
   , DeliveryRiderResponse
+  , DeliveryRiderProfileUpdateRequest
+  , DeliveryRiderPerformance
+  , DeliveryPerformanceRange
+  , VirtualCallResponse
+  , MerchantProfileUpdateRequest
 } from './types'
 
 // ============================================================
@@ -195,7 +201,7 @@ function isMerchantApiPath(path: string): boolean {
 }
 
 function isDeliveryRiderApiPath(path: string): boolean {
-  return path === '/delivery/riders/me' || path.startsWith('/delivery/rider/')
+  return path.startsWith('/delivery/riders/') || path.startsWith('/delivery/rider/')
 }
 
 request.interceptors.request.use(async (config) => {
@@ -286,6 +292,17 @@ export const authApi = {
 
   getUser: (id: number) =>
     request.get<any, AuthResponse>(`/auth/user/${id}`),
+
+  updateProfile: (id: number, data: UserProfileUpdateRequest) =>
+    request.put<any, AuthResponse>(`/auth/user/${id}/profile`, data),
+
+  uploadAvatar: (id: number, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request.post<any, AuthResponse>(`/auth/user/${id}/avatar`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
 
   /** 用户店铺偏好（数据库存储，非浏览器） */
   getPreference: (id: number) =>
@@ -516,11 +533,26 @@ export const deliveryApi = {
   riderLogin: (data: DeliveryRiderLoginRequest) =>
     request.post<any, DeliveryRiderResponse>('/delivery/riders/login', data),
   riderMe: () => request.get<any, DeliveryRiderResponse>('/delivery/riders/me'),
+  updateProfile: (data: DeliveryRiderProfileUpdateRequest) =>
+    request.put<any, DeliveryRiderResponse>('/delivery/riders/me/profile', data),
+  uploadAvatar: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request.post<any, DeliveryRiderResponse>('/delivery/riders/me/avatar', form, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
   availableOrders: () => request.get<any, DeliveryOrder[]>('/delivery/rider/orders/available'),
   riderOrders: () => request.get<any, DeliveryOrder[]>('/delivery/rider/orders/mine'),
   claimOrder: (id: number) => request.post<any, DeliveryOrder>(`/delivery/rider/orders/${id}/claim`),
   riderAction: (id: number, action: string) =>
     request.post<any, DeliveryOrder>(`/delivery/rider/orders/${id}/action`, null, { params: { action } }),
+  riderPerformance: (range: DeliveryPerformanceRange = '7d') =>
+    request.get<any, DeliveryRiderPerformance>('/delivery/rider/performance', { params: { range } }),
+  contactCustomer: (deliveryOrderId: number) =>
+    request.post<any, VirtualCallResponse>(`/delivery/rider/orders/${deliveryOrderId}/contact/customer`),
+  contactRider: (orderId: number) =>
+    request.post<any, VirtualCallResponse>(`/delivery/orders/${orderId}/contact/rider`),
   customerOrders: () => request.get<any, DeliveryOrder[]>('/delivery/orders/mine')
 }
 
@@ -659,8 +691,24 @@ export const merchantApi = {
   getMerchant: (id: number) =>
     request.get<any, MerchantResponse>(`/merchant/${id}`),
 
-  updateProfile: (id: number, data: { nickname?: string; phone?: string }) =>
+  updateProfile: (id: number, data: MerchantProfileUpdateRequest) =>
     request.put<any, MerchantResponse>(`/merchant/${id}/profile`, data),
+
+  uploadAvatar: (id: number, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request.post<any, MerchantResponse>(`/merchant/${id}/avatar`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+
+  uploadBusinessLicense: (id: number, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request.post<any, MerchantResponse>(`/merchant/${id}/business-license`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
 
   changePassword: (id: number, data: { oldPassword: string; newPassword: string }) =>
     request.put<any, { success: boolean; message: string }>(`/merchant/${id}/password`, data),

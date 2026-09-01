@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { deliveryApi } from '@/api'
 import { STATUS_LABELS, sizeText } from '@/api/types'
 import type { OrderItem, OrderRecord } from '@/api/types'
 
@@ -17,6 +18,8 @@ const visible = computed({
   get: () => props.modelValue,
   set: (v: boolean) => emit('update:modelValue', v),
 })
+
+const contactLoading = ref(false)
 
 const FULFILLMENT_LABELS: Record<string, string> = {
   TAKEAWAY: '到店自取',
@@ -69,6 +72,20 @@ async function copyOrderNo() {
     ElMessage.success('详细订单号已复制')
   } catch {
     ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+async function contactRider() {
+  if (!props.order?.id || contactLoading.value) return
+  contactLoading.value = true
+  try {
+    const result = await deliveryApi.contactRider(props.order.id)
+    if (result?.dialable) ElMessage.success(result.message || '已发起虚拟电话转接')
+    else ElMessage.info(result?.message || '虚拟电话中介服务暂未配置')
+  } catch (e: any) {
+    ElMessage.error(`联系骑手失败：${e.message}`)
+  } finally {
+    contactLoading.value = false
   }
 }
 </script>
@@ -147,6 +164,14 @@ async function copyOrderNo() {
           <span class="k">备注</span>
           <span class="v">{{ order.note }}</span>
         </div>
+      </div>
+
+      <div v-if="order.fulfillmentType === 'DELIVERY' && ['RIDER_ASSIGNED', 'DELIVERING'].includes(order.status)" class="contact-panel">
+        <div>
+          <b>需要联系配送员？</b>
+          <small>通过一次性虚拟电话转接，不展示真实号码。</small>
+        </div>
+        <el-button size="small" type="primary" :loading="contactLoading" @click="contactRider">联系骑手</el-button>
       </div>
 
       <div class="amount-block">
@@ -309,6 +334,38 @@ async function copyOrderNo() {
   padding-top: 10px;
   display: grid;
   gap: 6px;
+}
+
+.contact-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #cfe2d3;
+  border-radius: 10px;
+  background: #f4faf4;
+
+  b,
+  small {
+    display: block;
+  }
+
+  b {
+    color: var(--pine);
+    font-size: 12px;
+  }
+
+  small {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 10px;
+  }
+
+  :deep(.el-button) {
+    flex-shrink: 0;
+  }
 }
 
 .amount-row {

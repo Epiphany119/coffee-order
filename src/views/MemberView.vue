@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
-import { orderApi, favoriteApi, membershipApi, afterSaleApi, notificationApi, flashSaleApi, memberApi } from '@/api'
+import { orderApi, favoriteApi, membershipApi, afterSaleApi, notificationApi, flashSaleApi, memberApi, deliveryApi } from '@/api'
 import { STATUS_LABELS, CATEGORY_META, sizeText } from '@/api/types'
 import type { Product, RedeemItem, Voucher, FeedbackRecord, FlashSaleClaimRecord } from '@/api/types'
 import OrderDetailDialog from '@/components/OrderDetailDialog.vue'
@@ -10,6 +10,7 @@ import AfterSaleDialog from '@/components/AfterSaleDialog.vue'
 import FeedbackDialog from '@/components/FeedbackDialog.vue'
 import FeedbackRecordDialog from '@/components/FeedbackRecordDialog.vue'
 import PayDialog from '@/components/PayDialog.vue'
+import CustomerProfilePanel from '@/components/CustomerProfilePanel.vue'
 
 const store = useAppStore()
 
@@ -17,7 +18,7 @@ const emit = defineEmits<{
   'back': []
 }>()
 
-const activeTab = ref<'orders' | 'favorites' | 'points' | 'notifications' | 'flashClaims'>('orders')
+const activeTab = ref<'profile' | 'orders' | 'favorites' | 'points' | 'notifications' | 'flashClaims'>('orders')
 const notifications = ref<any[]>([])
 const flashClaims = ref<FlashSaleClaimRecord[]>([])
 let refreshTimer: number | undefined
@@ -114,6 +115,7 @@ async function redeem(item: RedeemItem) {
 // --- Orders ---
 const orders = ref<any[]>([])
 const orderFilter = ref('all')
+const contactRiderLoading = ref<number | null>(null)
 
 async function loadOrders() {
   if (!store.currentUser?.id) return
@@ -137,6 +139,24 @@ const detailOrder = ref<any>(null)
 function openDetail(o: any) {
   detailOrder.value = o
   detailVisible.value = true
+}
+
+function canContactRider(o: any) {
+  return o.fulfillmentType === 'DELIVERY' && ['RIDER_ASSIGNED', 'DELIVERING'].includes(o.status)
+}
+
+async function contactRider(o: any) {
+  if (!o?.id || contactRiderLoading.value === o.id) return
+  contactRiderLoading.value = o.id
+  try {
+    const result = await deliveryApi.contactRider(o.id)
+    if (result?.dialable) ElMessage.success(result.message || '已发起虚拟电话转接')
+    else ElMessage.info(result?.message || '虚拟电话中介服务暂未配置')
+  } catch (e: any) {
+    ElMessage.error(`联系骑手失败：${e.message}`)
+  } finally {
+    contactRiderLoading.value = null
+  }
 }
 
 /** 反馈建议弹窗（仅已完成/骑手已送达订单） */
@@ -304,7 +324,8 @@ function handleLogout() {
         </button>
         <div class="member-profile">
           <div class="avatar-circle">
-            {{ (store.currentUser?.nickname || store.currentUser?.username || 'U').slice(0, 1) }}
+            <img v-if="store.currentUser?.avatarUrl" :src="store.currentUser.avatarUrl" alt="顾客头像" />
+            <span v-else>{{ (store.currentUser?.nickname || store.currentUser?.username || 'U').slice(0, 1) }}</span>
           </div>
           <div class="member-info">
             <h2>{{ store.currentUser?.nickname || store.currentUser?.username }}</h2>
@@ -356,6 +377,9 @@ function handleLogout() {
     <!-- Tab nav -->
     <div class="tab-nav">
       <div class="tab-nav-inner">
+        <button type="button" :class="{ active: activeTab === 'profile' }" @click.stop="changeTab('profile')">
+          个人资料
+        </button>
         <button type="button" :class="{ active: activeTab === 'orders' }" @click.stop="changeTab('orders')">
           我的订单
         </button>
@@ -372,6 +396,10 @@ function handleLogout() {
           我的抢购 <i v-if="flashClaims.filter(c => c.status === 'CLAIMED').length">{{ flashClaims.filter(c => c.status === 'CLAIMED').length }}</i>
         </button>
       </div>
+    </div>
+
+    <div v-if="activeTab === 'profile'" class="tab-content">
+      <CustomerProfilePanel />
     </div>
 
     <div v-if="activeTab === 'flashClaims'" class="tab-content flash-claims-inner">
@@ -455,6 +483,14 @@ function handleLogout() {
                 size="small"
                 @click.stop="cancelOrder(o.id)"
               >取消订单</el-button>
+              <el-button
+                v-if="canContactRider(o)"
+                text
+                type="success"
+                size="small"
+                :loading="contactRiderLoading === o.id"
+                @click.stop="contactRider(o)"
+              >联系骑手</el-button>
               <template v-if="['COMPLETED', 'DELIVERED'].includes(o.status)">
                 <el-button text size="small" @click.stop="openFeedback(o)">反馈建议</el-button>
                 <el-button text size="small" @click.stop="openAfterSale(o)">售后</el-button>
@@ -609,6 +645,9 @@ function handleLogout() {
   justify-content: center;
   font-size: 22px;
   font-weight: bold;
+  overflow: hidden;
+
+  img { width: 100%; height: 100%; object-fit: cover; }
 }
 
 .member-info {

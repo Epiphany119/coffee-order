@@ -15,6 +15,11 @@ const routes: RouteRecordRaw[] = [
     name: 'delivery-rider',
     component: () => import('@/views/DeliveryRiderView.vue')
   },
+  {
+    path: '/delivery/profile',
+    name: 'delivery-rider-profile',
+    component: () => import('@/views/DeliveryRiderProfileView.vue')
+  },
   // ============ 商家端（独立界面，与用户端分离） ============
   {
     path: '/merchant/auth',
@@ -38,6 +43,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'after-sales', name: 'merchant-after-sales', component: () => import('@/views/MerchantAfterSalesView.vue') },
       { path: 'menu', name: 'merchant-menu', component: () => import('@/views/MerchantMenuView.vue') },
       { path: 'seats', name: 'merchant-seats', component: () => import('@/views/MerchantSeatsView.vue') },
+      { path: 'profile', name: 'merchant-profile', component: () => import('@/views/MerchantProfileView.vue') },
       { path: 'settings', name: 'merchant-settings', component: () => import('@/views/MerchantSettingsView.vue') }
     ]
   }

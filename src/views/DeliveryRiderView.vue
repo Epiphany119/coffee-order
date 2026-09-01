@@ -2,10 +2,17 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { deliveryApi } from '@/api'
-import type { DeliveryOrder, DeliveryRiderResponse } from '@/api/types'
+import type { DeliveryOrder, DeliveryPerformanceRange, DeliveryRiderPerformance, DeliveryRiderResponse } from '@/api/types'
 
 type AuthMode = 'login' | 'register'
 type OrderTab = 'available' | 'mine'
+
+const PERFORMANCE_RANGE_OPTIONS: Array<{ key: DeliveryPerformanceRange; label: string }> = [
+  { key: '7d', label: '近 7 天' },
+  { key: '14d', label: '近 14 天' },
+  { key: '28d', label: '一个月' },
+  { key: '12w', label: '一个季度' }
+]
 
 const RIDER_SESSION_KEY = 'fikaRider'
 
@@ -15,8 +22,12 @@ const orderTab = ref<OrderTab>('available')
 const authLoading = ref(false)
 const loading = ref(false)
 const refreshing = ref(false)
+const performanceLoading = ref(false)
+const contactLoading = ref<number | null>(null)
 const availableOrders = ref<DeliveryOrder[]>([])
 const riderOrders = ref<DeliveryOrder[]>([])
+const performance = ref<DeliveryRiderPerformance | null>(null)
+const performanceRange = ref<DeliveryPerformanceRange>('7d')
 const loginForm = ref({ username: '', password: '' })
 const registerForm = ref({ username: '', password: '', nickname: '', phone: '' })
 let refreshTimer: number | undefined
@@ -25,11 +36,15 @@ const isAuthed = computed(() => !!rider.value?.id && !!rider.value?.accessToken)
 const activeOrders = computed(() => riderOrders.value.filter(order => !['DELIVERED', 'CANCELED'].includes(order.status)).length)
 const deliveredOrders = computed(() => riderOrders.value.filter(order => order.status === 'DELIVERED').length)
 const currentOrders = computed(() => orderTab.value === 'available' ? availableOrders.value : riderOrders.value)
+const performanceMax = computed(() => Math.max(1, ...(performance.value?.daily || []).map(point => Number(point.amount || 0))))
 
 onMounted(async () => {
   await restoreRider()
   refreshTimer = window.setInterval(() => {
-    if (isAuthed.value) void loadOrders(true)
+    if (isAuthed.value) {
+      void loadOrders(true)
+      void loadPerformance(true)
+    }
   }, 8000)
 })
 
@@ -52,6 +67,7 @@ async function restoreRider() {
     rider.value = { ...snapshot, ...fresh, accessToken: snapshot.accessToken }
     persistRider()
     await loadOrders()
+    await loadPerformance()
   } catch (e: any) {
     clearRider()
     if (e?.message) ElMessage.info('配送员登录状态已失效，请重新登录')
@@ -77,6 +93,7 @@ async function doLogin() {
     persistRider()
     ElMessage.success(`欢迎回来，${result.nickname || result.username}`)
     await loadOrders()
+    await loadPerformance()
   } catch (e: any) {
     ElMessage.error(`登录失败：${e.message}`)
   } finally {
@@ -110,6 +127,7 @@ async function doRegister() {
     persistRider()
     ElMessage.success('配送员账号已创建')
     await loadOrders()
+    await loadPerformance()
   } catch (e: any) {
     ElMessage.error(`注册失败：${e.message}`)
   } finally {
@@ -126,6 +144,7 @@ function clearRider() {
   rider.value = null
   availableOrders.value = []
   riderOrders.value = []
+  performance.value = null
   try { localStorage.removeItem(RIDER_SESSION_KEY) } catch {}
 }
 
@@ -154,12 +173,37 @@ async function loadOrders(silent = false) {
   }
 }
 
+async function loadPerformance(silent = false) {
+  if (!isAuthed.value) return
+  if (!silent) performanceLoading.value = true
+  try {
+    performance.value = await deliveryApi.riderPerformance(performanceRange.value)
+  } catch (e: any) {
+    if (e?.message?.includes('登录') || e?.message?.includes('凭证')) clearRider()
+    if (!silent) ElMessage.error(`业绩加载失败：${e.message}`)
+  } finally {
+    performanceLoading.value = false
+  }
+}
+
+function switchPerformanceRange(range: DeliveryPerformanceRange) {
+  if (performanceRange.value === range) return
+  performanceRange.value = range
+  void loadPerformance()
+}
+
+async function refreshDashboard() {
+  await loadOrders()
+  await loadPerformance()
+}
+
 async function claim(order: DeliveryOrder) {
   try {
     await deliveryApi.claimOrder(order.deliveryOrderId || order.id)
     ElMessage.success(`已抢到订单 ${order.orderNo}`)
     orderTab.value = 'mine'
     await loadOrders()
+    await loadPerformance()
   } catch (e: any) {
     ElMessage.error(`抢单失败：${e.message}`)
     await loadOrders(true)
@@ -171,6 +215,7 @@ async function act(order: DeliveryOrder, action: string, successText: string) {
     await deliveryApi.riderAction(order.deliveryOrderId || order.id, action)
     ElMessage.success(successText)
     await loadOrders()
+    await loadPerformance()
   } catch (e: any) {
     ElMessage.error(`操作失败：${e.message}`)
     await loadOrders(true)
@@ -202,6 +247,40 @@ function formatTime(value: string | number[] | null | undefined) {
   if (Number.isNaN(date.getTime())) return String(value)
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
+
+function chartDay(day: string) {
+  if (day?.length !== 8) return day || '-'
+  const label = `${day.slice(4, 6)}/${day.slice(6, 8)}`
+  return performance.value?.bucket === 'WEEK' ? `${label} 周` : label
+}
+
+function chartBarHeight(amount: number) {
+  if (!amount) return '4%'
+  return `${Math.max(8, Math.round((amount / performanceMax.value) * 100))}%`
+}
+
+function formatMoney(value: number | null | undefined) {
+  return Number(value || 0).toFixed(2)
+}
+
+function canContactCustomer(order: DeliveryOrder) {
+  return orderTab.value === 'mine' && ['CLAIMED', 'PICKED_UP', 'DELIVERING'].includes(order.status)
+}
+
+async function contactCustomer(order: DeliveryOrder) {
+  const deliveryOrderId = order.deliveryOrderId || order.id
+  if (!deliveryOrderId || contactLoading.value === deliveryOrderId) return
+  contactLoading.value = deliveryOrderId
+  try {
+    const result = await deliveryApi.contactCustomer(deliveryOrderId)
+    if (result?.dialable) ElMessage.success(result.message || '已发起虚拟电话转接')
+    else ElMessage.info(result?.message || '虚拟电话中介服务暂未配置')
+  } catch (e: any) {
+    ElMessage.error(`联系顾客失败：${e.message}`)
+  } finally {
+    contactLoading.value = null
+  }
+}
 </script>
 
 <template>
@@ -213,6 +292,13 @@ function formatTime(value: string | number[] | null | undefined) {
       </router-link>
       <div class="header-right">
         <span class="platform-note">自有订单接入 · 第三方平台预留</span>
+        <router-link v-if="isAuthed" to="/delivery/profile" class="profile-link">
+          <span class="mini-avatar">
+            <img v-if="rider?.avatarUrl" :src="rider.avatarUrl" alt="配送员头像" />
+            <span v-else>{{ (rider?.nickname || rider?.username || 'R').slice(0, 1) }}</span>
+          </span>
+          个人资料
+        </router-link>
         <router-link to="/" class="back-link">返回顾客端 →</router-link>
       </div>
     </header>
@@ -269,16 +355,40 @@ function formatTime(value: string | number[] | null | undefined) {
         </div>
         <div class="dashboard-actions">
           <span class="online-dot"><i></i>在线接单中</span>
-          <button class="outline-btn" :disabled="refreshing" @click="loadOrders()">{{ refreshing ? '刷新中...' : '↻ 刷新订单' }}</button>
+          <button class="outline-btn" :disabled="refreshing || performanceLoading" @click="refreshDashboard">{{ refreshing || performanceLoading ? '刷新中...' : '↻ 刷新看板' }}</button>
           <button class="logout-btn" @click="logout">退出</button>
         </div>
       </section>
 
       <section class="stats-grid">
-        <div class="stat-card accent"><span class="stat-icon">⚡</span><div><small>当前待抢</small><b>{{ availableOrders.length }}</b><em>商家完成制作后进入</em></div></div>
-        <div class="stat-card"><span class="stat-icon">▣</span><div><small>配送中</small><b>{{ activeOrders }}</b><em>我的进行中订单</em></div></div>
-        <div class="stat-card"><span class="stat-icon">✓</span><div><small>已完成</small><b>{{ deliveredOrders }}</b><em>本窗口累计</em></div></div>
-        <div class="integration-card"><p>ORDER SOURCE</p><b>FIKA 自有订单</b><small>第三方平台接入位已预留</small></div>
+        <div class="stat-card accent"><span class="stat-icon">¥</span><div><small>{{ performance?.rangeLabel || '近 7 天' }}完成金额</small><b>¥{{ formatMoney(performance?.rangeAmount) }}</b><em>仅统计已送达配送单</em></div></div>
+        <div class="stat-card"><span class="stat-icon">✓</span><div><small>{{ performance?.rangeLabel || '近 7 天' }}完成单</small><b>{{ performance?.rangeDelivered ?? 0 }}</b><em>已完成配送</em></div></div>
+        <div class="stat-card"><span class="stat-icon">◌</span><div><small>平均订单金额</small><b>¥{{ formatMoney(performance?.averageOrderAmount) }}</b><em>完成金额 ÷ 完成单</em></div></div>
+        <div class="integration-card"><p>DELIVERY SCORE</p><b>累计完成 {{ performance?.totalDelivered ?? deliveredOrders }} 单</b><small>累计订单金额 ¥{{ formatMoney(performance?.totalDeliveredAmount) }} · 进行中 {{ performance?.activeOrders ?? activeOrders }} 单</small></div>
+      </section>
+
+      <section class="performance-panel">
+        <div class="panel-heading">
+          <div><p>DELIVERY PERFORMANCE</p><h2>{{ performance?.rangeLabel || '近 7 天' }}完成金额</h2></div>
+          <div class="range-switch">
+            <button v-for="option in PERFORMANCE_RANGE_OPTIONS" :key="option.key" class="range-btn" :class="{ active: performanceRange === option.key }" @click="switchPerformanceRange(option.key)">{{ option.label }}</button>
+          </div>
+        </div>
+        <div class="chart-meta"><span>按{{ performance?.bucket === 'WEEK' ? '周' : '天' }}汇总 · {{ performance?.daily?.length || 0 }} 个{{ performance?.bucket === 'WEEK' ? '周' : '日' }}</span><small>订单金额不等于骑手收入</small></div>
+        <div v-if="performanceLoading && !performance" class="performance-loading">正在同步业绩数据...</div>
+        <div v-else-if="performance?.daily?.length" class="bar-chart">
+          <div v-for="point in performance.daily" :key="point.day" class="bar-column" :title="`${chartDay(point.day)} 完成金额 ¥${formatMoney(point.amount)}`">
+            <span class="bar-value">¥{{ formatMoney(point.amount) }}</span>
+            <div class="bar-track"><i class="bar" :class="{ zero: point.amount <= 0 }" :style="{ height: chartBarHeight(point.amount) }"></i></div>
+            <small>{{ chartDay(point.day) }}</small>
+            <em class="bar-count">{{ point.delivered }} 单</em>
+          </div>
+        </div>
+        <div v-else class="performance-loading">暂无已送达订单</div>
+        <div class="performance-footer">
+          <span>{{ performance?.rangeLabel || '当前范围' }}完成 <b>¥{{ formatMoney(performance?.rangeAmount) }}</b> · {{ performance?.rangeDelivered ?? 0 }} 单</span>
+          <span>{{ performance?.deliveryFeeLabel || '配送费规则待接入' }}</span>
+        </div>
       </section>
 
       <section class="order-workspace">
@@ -295,7 +405,7 @@ function formatTime(value: string | number[] | null | undefined) {
           <span class="empty-symbol">☕</span>
           <b>{{ orderTab === 'available' ? '暂时没有待抢订单' : '还没有你的配送订单' }}</b>
           <p>{{ orderTab === 'available' ? '商家完成制作并发布任务后，订单会出现在这里。' : '抢到订单后，它会出现在这里。' }}</p>
-          <button v-if="orderTab === 'available'" class="outline-btn" @click="loadOrders()">再查一次</button>
+          <button v-if="orderTab === 'available'" class="outline-btn" @click="refreshDashboard">再查一次</button>
         </div>
         <div v-else class="order-list">
           <article v-for="order in currentOrders" :key="order.deliveryOrderId || order.id" class="order-card">
@@ -305,7 +415,7 @@ function formatTime(value: string | number[] | null | undefined) {
             </div>
             <div class="order-content">
               <div class="order-shop"><span class="shop-icon">F</span><div><b>{{ order.storeName }}</b><small>门店出餐 · {{ order.itemSummary }}</small></div></div>
-              <div class="order-address"><span>⌖</span><div><small>{{ order.addressLabel }} · {{ order.receiverName }} {{ order.receiverPhone }}</small><b>{{ order.detailAddress }}</b></div></div>
+              <div class="order-address"><span>⌖</span><div><small>{{ order.addressLabel }} · 收货人 {{ order.receiverName }}</small><b>{{ order.detailAddress }}</b></div></div>
               <div class="order-price"><small>订单金额</small><b>¥{{ Number(order.amount || 0).toFixed(2) }}</b></div>
             </div>
             <div v-if="order.note" class="order-note">备注：{{ order.note }}</div>
@@ -317,6 +427,9 @@ function formatTime(value: string | number[] | null | undefined) {
                 <button class="claim-btn" @click="claim(order)">立即抢单 <span>→</span></button>
               </template>
               <template v-else>
+                <button v-if="canContactCustomer(order)" class="contact-btn" :disabled="contactLoading === (order.deliveryOrderId || order.id)" @click="contactCustomer(order)">
+                  {{ contactLoading === (order.deliveryOrderId || order.id) ? '准备中...' : '联系顾客' }}
+                </button>
                 <button v-if="order.status === 'CLAIMED'" class="release-btn" @click="act(order, 'release', '订单已释放，可重新抢单')">释放订单</button>
                 <button v-if="orderAction(order)" class="claim-btn" @click="act(order, orderAction(order)!.action, orderAction(order)!.success)">{{ orderAction(order)!.text }} <span>→</span></button>
               </template>
@@ -335,6 +448,8 @@ function formatTime(value: string | number[] | null | undefined) {
 .header-right { display: flex; align-items: center; gap: 20px; }
 .platform-note { color: #839087; font-size: 11px; }
 .back-link { color: #50695c; font-size: 12px; font-weight: 700; &:hover { color: #f26d3d; } }
+.profile-link { display: inline-flex; align-items: center; gap: 7px; color: #50695c; font-size: 11px; font-weight: 700; &:hover { color: #f26d3d; } }
+.mini-avatar { width: 27px; height: 27px; display: grid; place-items: center; overflow: hidden; border-radius: 50%; color: #fff; background: #193f32; font-size: 11px; font-weight: 800; img { width: 100%; height: 100%; object-fit: cover; } }
 .auth-main { width: min(1120px, calc(100% - 48px)); min-height: calc(100vh - 76px); margin: 0 auto; display: grid; grid-template-columns: 1.1fr .8fr; align-items: center; gap: clamp(40px, 8vw, 120px); padding: 35px 0 80px; }
 .eyebrow { margin: 0 0 13px; color: #df6638; font-size: 11px; font-weight: 800; letter-spacing: .16em; }
 .auth-intro h1, .dashboard-heading h1 { margin: 0; color: #19342b; font-size: clamp(34px, 5vw, 62px); line-height: 1.1; letter-spacing: -.04em; }
@@ -362,6 +477,20 @@ function formatTime(value: string | number[] | null | undefined) {
 .accent .stat-icon { background: #f26d3d; }
 .stat-card div { min-width: 0; small, b, em { display: block; } small { color: #8a958e; font-size: 11px; } b { margin: 5px 0 1px; color: #19342b; font-size: 26px; line-height: 1; } em { color: #a2aaa4; font-size: 10px; font-style: normal; } }
 .integration-card { display: block; padding: 18px 20px; background: #19342b; color: #fffaf2; p { margin: 0 0 10px; color: #f18a61; font-size: 9px; font-weight: 800; letter-spacing: .14em; } b { display: block; font-size: 17px; } small { display: block; margin-top: 9px; color: #9fb4a7; font-size: 10px; } }
+.performance-panel { margin-bottom: 30px; padding: 20px 22px 16px; border: 1px solid #e5e1d8; border-radius: 16px; background: rgba(255, 254, 250, .82); }
+.panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; p { margin: 0 0 7px; color: #df6638; font-size: 9px; font-weight: 800; letter-spacing: .14em; } h2 { margin: 0; color: #19342b; font-size: 20px; letter-spacing: -.03em; } }
+.range-switch { display: flex; flex: none; gap: 3px; padding: 3px; border-radius: 999px; background: #f2eee6; }
+.range-btn { border: 0; border-radius: 999px; padding: 7px 12px; color: #87948b; background: transparent; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: .18s; &:hover { color: #3c5d4c; } &.active { color: #e96839; background: #fff; box-shadow: 0 2px 8px rgba(42, 61, 49, .08); } }
+.chart-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; color: #98a39b; font-size: 10px; small { color: #b0b7b1; font-size: 10px; } }
+.bar-chart { height: 235px; display: flex; align-items: stretch; gap: clamp(8px, 2vw, 24px); padding: 16px 8px 0; overflow-x: auto; }
+.bar-column { flex: 1 0 52px; min-width: 52px; max-width: 78px; height: 100%; display: flex; align-items: center; flex-direction: column; gap: 5px; }
+.bar-value { min-height: 15px; color: #53685d; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.bar-track { width: min(42px, 100%); flex: 1; min-height: 112px; display: flex; align-items: flex-end; border-radius: 9px 9px 4px 4px; background: #f1eee6; overflow: hidden; }
+.bar { display: block; width: 100%; min-height: 4px; border-radius: 9px 9px 4px 4px; background: linear-gradient(180deg, #f27a4a, #df5d31); transition: height .25s ease; &.zero { background: #e8e4db; } }
+.bar-column small { color: #98a39b; font-size: 10px; white-space: nowrap; }
+.bar-count { color: #b0b7b1; font-size: 9px; font-style: normal; white-space: nowrap; }
+.performance-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0ede6; color: #8b968f; font-size: 10px; b { color: #df6638; font-size: 13px; } }
+.performance-loading { min-height: 235px; display: grid; place-items: center; color: #8b968f; font-size: 11px; }
 .order-workspace { padding: 5px 0; }
 .workspace-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; border-bottom: 1px solid #e2dfd6; .workspace-toolbar > small { color: #a0aaa3; font-size: 10px; } }
 .workspace-tabs { display: flex; gap: 24px; button { position: relative; border: 0; padding: 0 0 13px; color: #89948d; background: none; font-size: 13px; font-weight: 700; cursor: pointer; span { display: inline-grid; place-items: center; min-width: 19px; height: 19px; margin-left: 4px; border-radius: 10px; color: #879289; background: #e7ece7; font-size: 10px; } &.active { color: #19342b; &::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; border-radius: 2px; background: #f26d3d; content: ''; } span { color: #fff; background: #f26d3d; } } } }
@@ -378,9 +507,10 @@ function formatTime(value: string | number[] | null | undefined) {
 .order-price { padding-left: 8px; border-left: 1px solid #eeeae2; text-align: right; white-space: nowrap; small, b { display: block; } small { color: #9ca49e; font-size: 10px; } b { margin-top: 5px; color: #ed6f3e; font-size: 18px; } }
 .order-note { margin-bottom: 11px; padding: 8px 9px; border-radius: 7px; color: #8d786d; background: #fff8f2; font-size: 10px; }
 .order-card-bottom { padding-top: 11px; border-top: 1px solid #f0ede6; small { color: #8d9990; font-size: 10px; } > span { flex: 1; } .claim-btn { padding: 9px 12px; font-size: 11px; } .claim-btn span { margin-left: 5px; font-size: 14px; } }
+.contact-btn { border: 1px solid #bcd2c2; border-radius: 9px; padding: 8px 10px; color: #3f7054; background: #f3faf4; font-size: 10px; font-weight: 800; cursor: pointer; &:hover { border-color: #7ea98b; background: #e9f5eb; } &:disabled { opacity: .55; cursor: not-allowed; } }
 .release-btn { padding: 8px 10px; color: #9a7a6d; border-color: #eadbd3; background: transparent; font-size: 10px; }
 .empty-state { min-height: 300px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; border: 1px dashed #d9ded7; border-radius: 16px; background: rgba(255, 254, 250, .45); color: #7c8980; .empty-symbol { font-size: 27px; opacity: .7; } b { color: #51655a; font-size: 13px; } p { margin: 0 0 8px; color: #a0aaa3; font-size: 11px; } .outline-btn { background: #fff; } }
 .loader { width: 23px; height: 23px; border: 2px solid #d8e1d9; border-top-color: #f26d3d; border-radius: 50%; animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 900px) { .auth-main { grid-template-columns: 1fr; max-width: 560px; gap: 35px; padding-top: 50px; } .auth-card { width: 100%; max-width: none; } .stats-grid { grid-template-columns: repeat(2, 1fr); } .integration-card { min-height: 100px; } .order-list { grid-template-columns: 1fr; } }
-@media (max-width: 620px) { .delivery-header, .auth-main, .dashboard-main { width: min(100% - 28px, 560px); } .delivery-header { height: 66px; } .platform-note { display: none; } .header-right { gap: 0; } .auth-main { min-height: auto; padding: 45px 0 60px; } .auth-intro h1 { font-size: 38px; } .flow-line { gap: 7px; font-size: 9px; div { gap: 4px; } i { font-size: 10px; } } .dashboard-main { padding-top: 31px; } .dashboard-heading { display: block; h1 { font-size: 34px; } } .dashboard-actions { margin-top: 20px; flex-wrap: wrap; } .stats-grid { grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 27px; } .stat-card, .integration-card { min-height: 100px; padding: 13px; } .stat-icon { width: 31px; height: 31px; } .stat-card div b { font-size: 22px; } .integration-card { grid-column: span 2; } .order-content { grid-template-columns: 1fr auto; gap: 12px; } .order-shop { grid-column: span 2; } .order-address { grid-column: span 2; } .order-price { grid-column: 2; grid-row: 1; } .order-card { padding: 14px 13px 12px; } .order-ident { gap: 5px; } .order-ident b { max-width: 105px; } .order-card-bottom { align-items: flex-end; } .order-card-bottom small { max-width: 125px; line-height: 1.5; } }
+@media (max-width: 620px) { .delivery-header, .auth-main, .dashboard-main { width: min(100% - 28px, 560px); } .delivery-header { height: 66px; } .platform-note { display: none; } .header-right { gap: 0; } .auth-main { min-height: auto; padding: 45px 0 60px; } .auth-intro h1 { font-size: 38px; } .flow-line { gap: 7px; font-size: 9px; div { gap: 4px; } i { font-size: 10px; } } .dashboard-main { padding-top: 31px; } .dashboard-heading { display: block; h1 { font-size: 34px; } } .dashboard-actions { margin-top: 20px; flex-wrap: wrap; } .stats-grid { grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 27px; } .stat-card, .integration-card { min-height: 100px; padding: 13px; } .stat-icon { width: 31px; height: 31px; } .stat-card div b { font-size: 22px; } .integration-card { grid-column: span 2; } .performance-panel { padding: 16px 13px 13px; } .panel-heading { display: block; .range-switch { max-width: 100%; margin-top: 12px; overflow-x: auto; } } .chart-meta { display: block; line-height: 1.6; small { display: block; margin-top: 3px; } } .bar-chart { height: 215px; gap: 8px; padding-right: 0; padding-left: 0; } .bar-column { min-width: 48px; } .performance-footer { align-items: flex-start; flex-direction: column; } .order-content { grid-template-columns: 1fr auto; gap: 12px; } .order-shop { grid-column: span 2; } .order-address { grid-column: span 2; } .order-price { grid-column: 2; grid-row: 1; } .order-card { padding: 14px 13px 12px; } .order-ident { gap: 5px; } .order-ident b { max-width: 105px; } .order-card-bottom { align-items: flex-end; } .order-card-bottom small { max-width: 125px; line-height: 1.5; } }
 </style>

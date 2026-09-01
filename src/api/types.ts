@@ -20,7 +20,24 @@ export interface AuthResponse {
   nickname: string | null
   totalSpent: number
   memberLevel: string | null
+  avatarUrl?: string | null
+  phone?: string | null
+  birthday?: string | null
+  wechatId?: string | null
+  qqNumber?: string | null
+  email?: string | null
+  otherInfo?: string | null
   accessToken?: string | null
+}
+
+export interface UserProfileUpdateRequest {
+  nickname: string
+  phone: string
+  birthday: string | null
+  wechatId: string
+  qqNumber: string
+  email: string
+  otherInfo: string
 }
 
 export interface StoreRecommendation {
@@ -371,7 +388,8 @@ export interface DeliveryOrder {
   note?: string | null
   addressLabel: string
   receiverName: string
-  receiverPhone: string
+  /** 顾客订单可见；骑手接口固定返回 null，避免暴露真实电话。 */
+  receiverPhone?: string | null
   detailAddress: string
   status: DeliveryOrderStatus | string
   statusLabel: string
@@ -401,8 +419,53 @@ export interface DeliveryRiderResponse {
   username: string | null
   nickname: string | null
   phone: string | null
+  avatarUrl?: string | null
+  birthday?: string | null
+  email?: string | null
+  otherInfo?: string | null
   status: string | null
   accessToken?: string | null
+}
+
+export interface DeliveryRiderProfileUpdateRequest {
+  nickname: string
+  phone: string
+  birthday: string | null
+  email: string
+  otherInfo: string
+}
+
+export type DeliveryPerformanceRange = '7d' | '14d' | '28d' | '12w'
+
+/** 配送员个人业绩；金额是已送达配送单的订单金额，不等同于骑手收入。 */
+export interface DeliveryRiderPerformance {
+  range: DeliveryPerformanceRange | string
+  rangeLabel: string
+  bucket: 'DAY' | 'WEEK' | string
+  rangeAssigned: number
+  rangeDelivered: number
+  rangeAmount: number
+  averageOrderAmount: number
+  todayAssigned: number
+  todayDelivered: number
+  activeOrders: number
+  weekDelivered: number
+  totalDelivered: number
+  totalDeliveredAmount: number
+  deliveryFeeConfigured: boolean
+  deliveryFeeLabel: string
+  daily: Array<{ day: string; delivered: number; amount: number }>
+}
+
+/** 虚拟电话中介会话；当前为未配置占位状态，不包含真实号码。 */
+export interface VirtualCallResponse {
+  status: 'NOT_CONFIGURED' | 'READY' | 'STARTED' | string
+  relayId: string
+  provider: string
+  oneTime: boolean
+  dialable: boolean
+  message: string
+  expiresAt: string | number[] | null
 }
 
 /** 售后单 */
@@ -671,6 +734,12 @@ export interface MerchantResponse {
   merchantNo: string
   nickname: string | null
   phone: string | null
+  avatarUrl?: string | null
+  operatorName?: string | null
+  email?: string | null
+  businessLicenseNo?: string | null
+  businessLicenseUrl?: string | null
+  otherInfo?: string | null
   /** 绑定的店名（入驻后非空） */
   storeName?: string | null
   status: MerchantStatus
@@ -693,6 +762,15 @@ export interface MerchantLoginRequest {
   password: string
   challengeId?: string
   challengeCode?: string
+}
+
+export interface MerchantProfileUpdateRequest {
+  nickname?: string
+  phone?: string
+  operatorName?: string
+  email?: string
+  businessLicenseNo?: string
+  otherInfo?: string
 }
 
 /** 商家端菜单新增/编辑请求（对应后端 MenuItemRequest） */

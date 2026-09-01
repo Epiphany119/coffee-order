@@ -138,7 +138,10 @@ async function switchStore(s: StoreResponse) {
       </template>
       <template v-else>
         <div class="member-trigger" @click="$emit('go-member')">
-          <div class="member-avatar">{{ firstChar }}</div>
+          <div class="member-avatar">
+            <img v-if="store.currentUser?.avatarUrl" :src="store.currentUser.avatarUrl" alt="顾客头像" />
+            <span v-else>{{ firstChar }}</span>
+          </div>
           <div>
             {{ nickname }}
             <small>{{ memberLevel }} · {{ fmtMoney(totalSpent) }}</small>
@@ -294,6 +297,9 @@ async function switchStore(s: StoreResponse) {
   display: grid;
   place-items: center;
   font-weight: bold;
+  overflow: hidden;
+
+  img { width: 100%; height: 100%; object-fit: cover; }
 }
 
 .store-tip {

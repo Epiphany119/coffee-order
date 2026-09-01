@@ -10,6 +10,9 @@ const router = useRouter()
 const route = useRoute()
 const mstore = useMerchantStore()
 const booting = ref(true)
+const merchantAvatarText = computed(() =>
+  (mstore.merchant?.operatorName || mstore.merchant?.nickname || mstore.merchant?.merchantNo || 'M').slice(0, 1).toUpperCase()
+)
 
 /** 侧边导航项（与路由 children 对应） */
 const navItems = [
@@ -19,6 +22,7 @@ const navItems = [
   { path: '/merchant/after-sales', label: '顾客关怀', icon: '◌' },
   { path: '/merchant/menu', label: '菜单灵感', icon: '☕' },
   { path: '/merchant/seats', label: '门店现场', icon: '▦' },
+  { path: '/merchant/profile', label: '个人资料', icon: '◎' },
   { path: '/merchant/settings', label: '我的小店', icon: '⚙' }
 ]
 
@@ -123,6 +127,13 @@ function goCenter() {
       <header class="m-topbar">
         <div class="m-page-title">{{ pageTitle }}</div>
         <div class="m-top-right" v-if="mstore.joinedStore">
+          <button class="m-profile-shortcut" type="button" title="打开个人资料" @click="navTo('/merchant/profile')">
+            <span class="m-mini-avatar">
+              <img v-if="mstore.merchant?.avatarUrl" :src="mstore.merchant.avatarUrl" alt="经营者头像" />
+              <span v-else>{{ merchantAvatarText }}</span>
+            </span>
+            <span>个人资料</span>
+          </button>
           <div class="m-store-name">{{ mstore.joinedStore.name }}</div>
           <div class="m-status-chip" :class="mstore.joinedStore.status === 'OPEN' ? 'open' : 'closed'" @click="toggleStatus">
             <span class="status-dot"></span>
@@ -270,6 +281,33 @@ function goCenter() {
     font-weight: 600;
     color: var(--ink);
   }
+}
+
+.m-profile-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 3px 4px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+  &:hover { color: var(--orange); }
+}
+
+.m-mini-avatar {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--pine);
+  font-size: 11px;
+  font-weight: 800;
+  img { width: 100%; height: 100%; object-fit: cover; }
 }
 
 .m-status-chip {
