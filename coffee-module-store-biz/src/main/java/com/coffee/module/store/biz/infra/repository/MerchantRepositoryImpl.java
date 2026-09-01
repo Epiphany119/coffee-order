@@ -75,6 +75,23 @@ public class MerchantRepositoryImpl implements MerchantRepository {
         return merchant;
     }
 
+    @Override
+    public void updateProfile(Merchant merchant) {
+        merchantMapper.updateProfile(merchant.getId(), merchant.getNickname(), merchant.getPhone(),
+                merchant.getOperatorName(), merchant.getEmail(), merchant.getBusinessLicenseNo(),
+                merchant.getOtherInfo());
+    }
+
+    @Override
+    public void updateAvatar(Long id, String avatarUrl) {
+        merchantMapper.updateAvatar(id, avatarUrl);
+    }
+
+    @Override
+    public void updateBusinessLicense(Long id, String licenseUrl) {
+        merchantMapper.updateBusinessLicense(id, licenseUrl);
+    }
+
     private Merchant toDomain(MerchantPO po) {
         Merchant m = new Merchant();
         m.setId(po.getId());
@@ -83,6 +100,12 @@ public class MerchantRepositoryImpl implements MerchantRepository {
         m.setPasswordHash(po.getPassword());
         m.setNickname(po.getNickname());
         m.setPhone(po.getPhone());
+        m.setAvatarUrl(po.getAvatarUrl());
+        m.setOperatorName(po.getOperatorName());
+        m.setEmail(po.getEmail());
+        m.setBusinessLicenseNo(po.getBusinessLicenseNo());
+        m.setBusinessLicenseUrl(po.getBusinessLicenseUrl());
+        m.setOtherInfo(po.getOtherInfo());
         m.setStoreName(po.getStoreName());
         m.setStoreId(po.getStoreId());
         m.setStatus(po.getStatus());
@@ -99,6 +122,12 @@ public class MerchantRepositoryImpl implements MerchantRepository {
         po.setPassword(m.getPasswordHash());
         po.setNickname(m.getNickname());
         po.setPhone(m.getPhone());
+        po.setAvatarUrl(m.getAvatarUrl());
+        po.setOperatorName(m.getOperatorName());
+        po.setEmail(m.getEmail());
+        po.setBusinessLicenseNo(m.getBusinessLicenseNo());
+        po.setBusinessLicenseUrl(m.getBusinessLicenseUrl());
+        po.setOtherInfo(m.getOtherInfo());
         po.setStoreName(m.getStoreName());
         po.setStoreId(m.getStoreId());
         po.setStatus(m.getStatus());

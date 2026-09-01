@@ -12,4 +12,6 @@ public interface UserRepository {
     User save(User user);
     void updatePassword(Long id, String passwordHash);
     void updateLastStore(Long id, Long storeId);
+    void updateProfile(User user);
+    void updateAvatar(Long id, String avatarUrl);
 }

@@ -6,7 +6,9 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @Mapper
 public interface DeliveryOrderMapper extends BaseMapper<DeliveryOrderPO> {
@@ -32,6 +34,42 @@ public interface DeliveryOrderMapper extends BaseMapper<DeliveryOrderPO> {
 
     @Select("SELECT * FROM delivery_order WHERE order_id = #{orderId}")
     DeliveryOrderPO selectByOrderId(@Param("orderId") Long orderId);
+
+    @Select("SELECT "
+            + "COALESCE(SUM(CASE WHEN claimed_at >= #{startAt} AND claimed_at < #{endAt} THEN 1 ELSE 0 END), 0) AS rangeAssigned, "
+            + "COALESCE(SUM(CASE WHEN status = 'DELIVERED' AND delivered_at >= #{startAt} AND delivered_at < #{endAt} THEN 1 ELSE 0 END), 0) AS rangeDelivered, "
+            + "ROUND(COALESCE(SUM(CASE WHEN status = 'DELIVERED' AND delivered_at >= #{startAt} AND delivered_at < #{endAt} THEN amount ELSE 0 END), 0), 2) AS rangeAmount, "
+            + "COALESCE(SUM(CASE WHEN claimed_at >= CURDATE() "
+            + "AND claimed_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY) THEN 1 ELSE 0 END), 0) AS todayAssigned, "
+            + "COALESCE(SUM(CASE WHEN status = 'DELIVERED' AND delivered_at >= CURDATE() "
+            + "AND delivered_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY) THEN 1 ELSE 0 END), 0) AS todayDelivered, "
+            + "COALESCE(SUM(CASE WHEN status IN ('CLAIMED', 'PICKED_UP', 'DELIVERING') THEN 1 ELSE 0 END), 0) AS activeOrders, "
+            + "COALESCE(SUM(CASE WHEN status = 'DELIVERED' AND delivered_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) "
+            + "AND delivered_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY) THEN 1 ELSE 0 END), 0) AS weekDelivered, "
+            + "COALESCE(SUM(CASE WHEN status = 'DELIVERED' THEN 1 ELSE 0 END), 0) AS totalDelivered, "
+            + "ROUND(COALESCE(SUM(CASE WHEN status = 'DELIVERED' THEN amount ELSE 0 END), 0), 2) AS totalDeliveredAmount "
+            + "FROM delivery_order WHERE rider_id = #{riderId}")
+    Map<String, Object> selectRiderPerformance(@Param("riderId") Long riderId,
+                                                @Param("startAt") LocalDateTime startAt,
+                                                @Param("endAt") LocalDateTime endAt);
+
+    @Select("SELECT DATE_FORMAT(delivered_at, '%Y%m%d') AS day, COUNT(*) AS delivered, "
+            + "ROUND(COALESCE(SUM(amount), 0), 2) AS amount "
+            + "FROM delivery_order WHERE rider_id = #{riderId} AND status = 'DELIVERED' "
+            + "AND delivered_at >= #{startAt} AND delivered_at < #{endAt} "
+            + "GROUP BY DATE_FORMAT(delivered_at, '%Y%m%d') ORDER BY day ASC")
+    List<Map<String, Object>> selectDailyDelivered(@Param("riderId") Long riderId,
+                                                    @Param("startAt") LocalDateTime startAt,
+                                                    @Param("endAt") LocalDateTime endAt);
+
+    @Select("SELECT DATE_FORMAT(DATE_SUB(DATE(delivered_at), INTERVAL WEEKDAY(delivered_at) DAY), '%Y%m%d') AS day, "
+            + "COUNT(*) AS delivered, ROUND(COALESCE(SUM(amount), 0), 2) AS amount "
+            + "FROM delivery_order WHERE rider_id = #{riderId} AND status = 'DELIVERED' "
+            + "AND delivered_at >= #{startAt} AND delivered_at < #{endAt} "
+            + "GROUP BY DATE_SUB(DATE(delivered_at), INTERVAL WEEKDAY(delivered_at) DAY) ORDER BY day ASC")
+    List<Map<String, Object>> selectWeeklyDelivered(@Param("riderId") Long riderId,
+                                                     @Param("startAt") LocalDateTime startAt,
+                                                     @Param("endAt") LocalDateTime endAt);
 
     @Update("UPDATE delivery_order d JOIN user_order o ON o.id = d.order_id "
             + "SET d.status = 'OPEN', d.updated_at = NOW() "

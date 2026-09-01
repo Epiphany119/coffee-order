@@ -26,4 +26,23 @@ public interface UserMapper extends BaseMapper<UserPO> {
 
     @Update("UPDATE coffee_user SET last_store_id = #{storeId} WHERE id = #{id}")
     void updateLastStore(@Param("id") Long id, @Param("storeId") Long storeId);
+
+    /**
+     * 资料页使用显式更新，允许用户把可选资料清空。
+     * MyBatis-Plus 的 updateById 默认会忽略 null，这里不能让旧的邮箱/联系方式残留。
+     */
+    @Update("UPDATE coffee_user SET nickname = #{nickname}, phone = #{phone}, birthday = #{birthday}, "
+            + "wechat_id = #{wechatId}, qq_number = #{qqNumber}, email = #{email}, other_info = #{otherInfo} "
+            + "WHERE id = #{id}")
+    void updateProfile(@Param("id") Long id,
+                       @Param("nickname") String nickname,
+                       @Param("phone") String phone,
+                       @Param("birthday") java.time.LocalDate birthday,
+                       @Param("wechatId") String wechatId,
+                       @Param("qqNumber") String qqNumber,
+                       @Param("email") String email,
+                       @Param("otherInfo") String otherInfo);
+
+    @Update("UPDATE coffee_user SET avatar_url = #{avatarUrl} WHERE id = #{id}")
+    void updateAvatar(@Param("id") Long id, @Param("avatarUrl") String avatarUrl);
 }

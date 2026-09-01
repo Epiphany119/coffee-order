@@ -1,6 +1,7 @@
 package com.coffee.module.auth.biz.domain;
 
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 
 /**
  * 用户领域对象
@@ -10,6 +11,13 @@ public class User {
     private String username;
     private String passwordHash;
     private String nickname;
+    private String avatarUrl;
+    private String phone;
+    private LocalDate birthday;
+    private String wechatId;
+    private String qqNumber;
+    private String email;
+    private String otherInfo;
     private Double totalSpent;
     private String role;
     private Long lastStoreId;
@@ -34,6 +42,20 @@ public class User {
     public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
     public String getNickname() { return nickname; }
     public void setNickname(String nickname) { this.nickname = nickname; }
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
+    public String getPhone() { return phone; }
+    public void setPhone(String phone) { this.phone = phone; }
+    public LocalDate getBirthday() { return birthday; }
+    public void setBirthday(LocalDate birthday) { this.birthday = birthday; }
+    public String getWechatId() { return wechatId; }
+    public void setWechatId(String wechatId) { this.wechatId = wechatId; }
+    public String getQqNumber() { return qqNumber; }
+    public void setQqNumber(String qqNumber) { this.qqNumber = qqNumber; }
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    public String getOtherInfo() { return otherInfo; }
+    public void setOtherInfo(String otherInfo) { this.otherInfo = otherInfo; }
     public Double getTotalSpent() { return totalSpent; }
     public void setTotalSpent(Double totalSpent) { this.totalSpent = totalSpent; }
     public String getRole() { return role; }

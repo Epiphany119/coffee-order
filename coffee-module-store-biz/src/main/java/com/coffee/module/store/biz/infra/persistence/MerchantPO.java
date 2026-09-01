@@ -21,6 +21,12 @@ public class MerchantPO {
     private String password;
     private String nickname;
     private String phone;
+    private String avatarUrl;
+    private String operatorName;
+    private String email;
+    private String businessLicenseNo;
+    private String businessLicenseUrl;
+    private String otherInfo;
     /** 绑定的店名（入驻时冗余写入，容错/展示用） */
     private String storeName;
     /** 绑定的店铺 id */
@@ -41,6 +47,18 @@ public class MerchantPO {
     public void setNickname(String nickname) { this.nickname = nickname; }
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
+    public String getOperatorName() { return operatorName; }
+    public void setOperatorName(String operatorName) { this.operatorName = operatorName; }
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    public String getBusinessLicenseNo() { return businessLicenseNo; }
+    public void setBusinessLicenseNo(String businessLicenseNo) { this.businessLicenseNo = businessLicenseNo; }
+    public String getBusinessLicenseUrl() { return businessLicenseUrl; }
+    public void setBusinessLicenseUrl(String businessLicenseUrl) { this.businessLicenseUrl = businessLicenseUrl; }
+    public String getOtherInfo() { return otherInfo; }
+    public void setOtherInfo(String otherInfo) { this.otherInfo = otherInfo; }
     public String getStoreName() { return storeName; }
     public void setStoreName(String storeName) { this.storeName = storeName; }
     public Long getStoreId() { return storeId; }

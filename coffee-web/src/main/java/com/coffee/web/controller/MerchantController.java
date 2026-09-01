@@ -13,7 +13,9 @@ import com.coffee.module.store.api.dto.StoreResponse;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.security.LoginChallengeService;
 import com.coffee.web.security.TokenService;
+import com.coffee.web.storage.LocalProfileImageStorage;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,14 +33,17 @@ public class MerchantController {
     private final OrderService orderService;
     private final TokenService tokenService;
     private final LoginChallengeService loginChallengeService;
+    private final LocalProfileImageStorage profileImageStorage;
 
     public MerchantController(MerchantService merchantService, StoreService storeService, OrderService orderService,
-                              TokenService tokenService, LoginChallengeService loginChallengeService) {
+                              TokenService tokenService, LoginChallengeService loginChallengeService,
+                              LocalProfileImageStorage profileImageStorage) {
         this.merchantService = merchantService;
         this.storeService = storeService;
         this.orderService = orderService;
         this.tokenService = tokenService;
         this.loginChallengeService = loginChallengeService;
+        this.profileImageStorage = profileImageStorage;
     }
 
     /** 商家注册 */
@@ -70,6 +75,24 @@ public class MerchantController {
                                           @RequestBody MerchantProfileUpdateRequest request) {
         AccessGuard.requireMerchant(id);
         return merchantService.updateProfile(id, request);
+    }
+
+    /** 上传经营者头像。 */
+    @PostMapping("/{id}/avatar")
+    public MerchantResponse uploadAvatar(@PathVariable("id") Long id,
+                                         @RequestParam("file") MultipartFile file) {
+        AccessGuard.requireMerchant(id);
+        String url = profileImageStorage.store("merchant", id, file);
+        return merchantService.updateAvatar(id, url);
+    }
+
+    /** 上传经营许可证图片，商家个人资料页可直接展示。 */
+    @PostMapping("/{id}/business-license")
+    public MerchantResponse uploadBusinessLicense(@PathVariable("id") Long id,
+                                                   @RequestParam("file") MultipartFile file) {
+        AccessGuard.requireMerchant(id);
+        String url = profileImageStorage.store("merchant-license", id, file);
+        return merchantService.updateBusinessLicense(id, url);
     }
 
     @PutMapping("/{id}/password")

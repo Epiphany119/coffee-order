@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.MissingRequestValueException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 /**
  * 全局异常处理
@@ -40,6 +41,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({MissingRequestValueException.class, MethodArgumentTypeMismatchException.class})
     public Result<Void> handleInvalidRequestParameter(Exception e) {
         return Result.error(400, "请求参数无效或缺失");
+    }
+
+    /** 文件在进入控制器前超过 Spring multipart 限制时，返回可直接展示给用户的提示。 */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public Result<Void> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException e) {
+        return Result.error(400, "上传文件不能超过 5MB，请压缩图片后重试");
     }
 
     @ExceptionHandler(Exception.class)

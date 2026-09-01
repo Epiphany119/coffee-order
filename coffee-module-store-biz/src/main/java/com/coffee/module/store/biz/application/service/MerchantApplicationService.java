@@ -19,6 +19,8 @@ import com.coffee.module.store.biz.infra.persistence.UserCredentialPO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.regex.Pattern;
+
 /**
  * 商家应用服务（注册 / 登录 / 信息）
  * <p>商家编号规则：sj-{时间戳后 6 位}，注册时自动生成，作为登录账号
@@ -35,6 +37,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class MerchantApplicationService implements MerchantService {
 
     private static final String NO_PREFIX = "sj-";
+    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]{1,64}@[^@\\s]{1,190}$");
 
     private final MerchantRepository merchantRepository;
     private final StoreRepository storeRepository;
@@ -99,8 +102,7 @@ public class MerchantApplicationService implements MerchantService {
         merchant.setStatus(MerchantStatus.ACTIVE);
         merchantRepository.save(merchant);
 
-        return MerchantResponse.ok(merchant.getId(), merchant.getMerchantNo(),
-                merchant.getNickname(), merchant.getPhone(), merchant.getStatus(), null);
+        return toResponse(merchant);
     }
 
     /**
@@ -148,8 +150,7 @@ public class MerchantApplicationService implements MerchantService {
         // 回填用户端账号绑定的商家编号（容错：表层面记录绑定关系）
         userCredentialMapper.updateMerchantNo(user.getId(), placed.getMerchantNo());
 
-        return MerchantResponse.ok(placed.getId(), placed.getMerchantNo(),
-                placed.getNickname(), placed.getPhone(), placed.getStatus(), placed.getStoreName());
+        return toResponse(placed);
     }
 
     @Override
@@ -173,32 +174,61 @@ public class MerchantApplicationService implements MerchantService {
             return MerchantResponse.fail("账号已被禁用");
         }
 
-        return MerchantResponse.ok(merchant.getId(), merchant.getMerchantNo(),
-                merchant.getNickname(), merchant.getPhone(), merchant.getStatus(), merchant.getStoreName());
+        return toResponse(merchant);
     }
 
     @Override
     public MerchantResponse getMerchant(Long merchantId) {
         Merchant merchant = merchantRepository.findById(merchantId)
                 .orElseThrow(() -> new ServiceException(400, "商家不存在"));
-        return MerchantResponse.ok(merchant.getId(), merchant.getMerchantNo(),
-                merchant.getNickname(), merchant.getPhone(), merchant.getStatus(), merchant.getStoreName());
+        return toResponse(merchant);
     }
 
     @Override
     @Transactional
     public MerchantResponse updateProfile(Long merchantId, MerchantProfileUpdateRequest request) {
+        if (request == null) throw new ServiceException(400, "资料请求不能为空");
         Merchant merchant = merchantRepository.findById(merchantId)
                 .orElseThrow(() -> new ServiceException(404, "商家不存在"));
-        String nickname = request == null || request.getNickname() == null ? "" : request.getNickname().trim();
-        String phone = request == null || request.getPhone() == null ? "" : request.getPhone().trim();
-        if (nickname.length() > 50) throw new ServiceException(400, "昵称不能超过 50 个字符");
-        if (phone.length() > 20) throw new ServiceException(400, "联系电话不能超过 20 个字符");
-        merchant.setNickname(nickname.isEmpty() ? null : nickname);
-        merchant.setPhone(phone.isEmpty() ? null : phone);
-        merchantRepository.save(merchant);
-        return MerchantResponse.ok(merchant.getId(), merchant.getMerchantNo(), merchant.getNickname(),
-                merchant.getPhone(), merchant.getStatus(), merchant.getStoreName());
+        if (request.getNickname() != null) merchant.setNickname(normalize(request.getNickname(), 50, "昵称"));
+        // 兼容现有 merchant.phone VARCHAR(20) 结构，避免资料页提交过长号码时由数据库截断。
+        if (request.getPhone() != null) merchant.setPhone(normalize(request.getPhone(), 20, "联系电话"));
+        if (request.getOperatorName() != null) {
+            merchant.setOperatorName(normalize(request.getOperatorName(), 50, "经营者姓名"));
+        }
+        if (request.getEmail() != null) {
+            String email = normalize(request.getEmail(), 120, "邮箱");
+            if (email != null && !EMAIL.matcher(email).matches()) {
+                throw new ServiceException(400, "请输入有效的邮箱地址");
+            }
+            merchant.setEmail(email);
+        }
+        if (request.getBusinessLicenseNo() != null) {
+            merchant.setBusinessLicenseNo(normalize(request.getBusinessLicenseNo(), 80, "许可证编号"));
+        }
+        if (request.getOtherInfo() != null) merchant.setOtherInfo(normalize(request.getOtherInfo(), 500, "其他信息"));
+        merchantRepository.updateProfile(merchant);
+        return toResponse(merchant);
+    }
+
+    @Override
+    @Transactional
+    public MerchantResponse updateAvatar(Long merchantId, String avatarUrl) {
+        Merchant merchant = merchantRepository.findById(merchantId)
+                .orElseThrow(() -> new ServiceException(404, "商家不存在"));
+        merchant.setAvatarUrl(validateImageUrl(avatarUrl, "头像"));
+        merchantRepository.updateAvatar(merchantId, merchant.getAvatarUrl());
+        return toResponse(merchant);
+    }
+
+    @Override
+    @Transactional
+    public MerchantResponse updateBusinessLicense(Long merchantId, String licenseUrl) {
+        Merchant merchant = merchantRepository.findById(merchantId)
+                .orElseThrow(() -> new ServiceException(404, "商家不存在"));
+        merchant.setBusinessLicenseUrl(validateImageUrl(licenseUrl, "经营许可证"));
+        merchantRepository.updateBusinessLicense(merchantId, merchant.getBusinessLicenseUrl());
+        return toResponse(merchant);
     }
 
     @Override
@@ -235,5 +265,35 @@ public class MerchantApplicationService implements MerchantService {
             suffix = (suffix + 1) % 1_000_000;
         } while (merchantRepository.existsByMerchantNo(no));
         return no;
+    }
+
+    private MerchantResponse toResponse(Merchant merchant) {
+        MerchantResponse response = MerchantResponse.ok(merchant.getId(), merchant.getMerchantNo(),
+                merchant.getNickname(), merchant.getPhone(), merchant.getStatus(), merchant.getStoreName());
+        response.setAvatarUrl(merchant.getAvatarUrl());
+        response.setOperatorName(merchant.getOperatorName());
+        response.setEmail(merchant.getEmail());
+        response.setBusinessLicenseNo(merchant.getBusinessLicenseNo());
+        response.setBusinessLicenseUrl(merchant.getBusinessLicenseUrl());
+        response.setOtherInfo(merchant.getOtherInfo());
+        return response;
+    }
+
+    private String normalize(String value, int maxLength, String field) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        if (normalized.isEmpty()) return null;
+        if (normalized.length() > maxLength) {
+            throw new ServiceException(400, field + "不能超过 " + maxLength + " 个字符");
+        }
+        return normalized;
+    }
+
+    private String validateImageUrl(String url, String field) {
+        String normalized = normalize(url, 500, field);
+        if (normalized == null || !normalized.startsWith("/uploads/")) {
+            throw new ServiceException(400, field + "地址无效");
+        }
+        return normalized;
     }
 }

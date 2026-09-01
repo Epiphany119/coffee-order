@@ -1,24 +1,23 @@
-package com.coffee.module.store.api.dto;
+package com.coffee.module.delivery.api.dto;
 
-/** 商家可自行维护的公开资料。 */
-public class MerchantProfileUpdateRequest {
+import java.time.LocalDate;
+
+/** 配送员个人资料更新请求。 */
+public class DeliveryRiderProfileUpdateRequest {
     private String nickname;
     private String phone;
-    private String operatorName;
+    private LocalDate birthday;
     private String email;
-    private String businessLicenseNo;
     private String otherInfo;
 
     public String getNickname() { return nickname; }
     public void setNickname(String nickname) { this.nickname = nickname; }
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
-    public String getOperatorName() { return operatorName; }
-    public void setOperatorName(String operatorName) { this.operatorName = operatorName; }
+    public LocalDate getBirthday() { return birthday; }
+    public void setBirthday(LocalDate birthday) { this.birthday = birthday; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
-    public String getBusinessLicenseNo() { return businessLicenseNo; }
-    public void setBusinessLicenseNo(String businessLicenseNo) { this.businessLicenseNo = businessLicenseNo; }
     public String getOtherInfo() { return otherInfo; }
     public void setOtherInfo(String otherInfo) { this.otherInfo = otherInfo; }
 }

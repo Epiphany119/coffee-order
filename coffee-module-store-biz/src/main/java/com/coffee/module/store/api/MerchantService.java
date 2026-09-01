@@ -28,5 +28,9 @@ public interface MerchantService {
 
     MerchantResponse updateProfile(Long merchantId, MerchantProfileUpdateRequest request);
 
+    MerchantResponse updateAvatar(Long merchantId, String avatarUrl);
+
+    MerchantResponse updateBusinessLicense(Long merchantId, String licenseUrl);
+
     void changePassword(Long merchantId, MerchantPasswordChangeRequest request);
 }

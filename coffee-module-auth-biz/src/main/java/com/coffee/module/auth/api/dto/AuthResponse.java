@@ -2,6 +2,8 @@ package com.coffee.module.auth.api.dto;
 
 import com.coffee.module.member.api.dto.MemberLevelDTO;
 
+import java.time.LocalDate;
+
 /**
  * 认证响应（注册/登录/用户信息通用）
  */
@@ -13,6 +15,13 @@ public class AuthResponse {
     private String nickname;
     private Double totalSpent;
     private String memberLevel;
+    private String avatarUrl;
+    private String phone;
+    private LocalDate birthday;
+    private String wechatId;
+    private String qqNumber;
+    private String email;
+    private String otherInfo;
     /** Bearer 会话令牌；仅注册/登录成功时返回。 */
     private String accessToken;
 
@@ -53,6 +62,20 @@ public class AuthResponse {
     public void setTotalSpent(Double totalSpent) { this.totalSpent = totalSpent; }
     public String getMemberLevel() { return memberLevel; }
     public void setMemberLevel(String memberLevel) { this.memberLevel = memberLevel; }
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
+    public String getPhone() { return phone; }
+    public void setPhone(String phone) { this.phone = phone; }
+    public LocalDate getBirthday() { return birthday; }
+    public void setBirthday(LocalDate birthday) { this.birthday = birthday; }
+    public String getWechatId() { return wechatId; }
+    public void setWechatId(String wechatId) { this.wechatId = wechatId; }
+    public String getQqNumber() { return qqNumber; }
+    public void setQqNumber(String qqNumber) { this.qqNumber = qqNumber; }
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    public String getOtherInfo() { return otherInfo; }
+    public void setOtherInfo(String otherInfo) { this.otherInfo = otherInfo; }
     public String getAccessToken() { return accessToken; }
     public void setAccessToken(String accessToken) { this.accessToken = accessToken; }
 }

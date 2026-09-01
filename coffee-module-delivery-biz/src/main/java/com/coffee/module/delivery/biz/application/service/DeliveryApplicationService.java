@@ -2,14 +2,18 @@ package com.coffee.module.delivery.biz.application.service;
 
 import com.coffee.common.core.exception.ServiceException;
 import com.coffee.common.core.security.PasswordEncoder;
+import com.coffee.module.delivery.api.DeliveryContactParty;
 import com.coffee.module.delivery.api.DeliveryService;
 import com.coffee.module.delivery.api.dto.DeliveryAddressRequest;
 import com.coffee.module.delivery.api.dto.DeliveryAddressResponse;
 import com.coffee.module.delivery.api.dto.DeliveryOrderCreateRequest;
 import com.coffee.module.delivery.api.dto.DeliveryOrderResponse;
 import com.coffee.module.delivery.api.dto.DeliveryRiderLoginRequest;
+import com.coffee.module.delivery.api.dto.DeliveryRiderPerformanceResponse;
+import com.coffee.module.delivery.api.dto.DeliveryRiderProfileUpdateRequest;
 import com.coffee.module.delivery.api.dto.DeliveryRiderRegisterRequest;
 import com.coffee.module.delivery.api.dto.DeliveryRiderResponse;
+import com.coffee.module.delivery.api.dto.VirtualCallResponse;
 import com.coffee.module.delivery.api.event.DeliveryOrderStatusChangedEvent;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryAddressMapper;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryAddressPO;
@@ -17,14 +21,22 @@ import com.coffee.module.delivery.biz.infra.persistence.DeliveryOrderMapper;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryOrderPO;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryRiderMapper;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryRiderPO;
+import com.coffee.module.delivery.biz.service.VirtualCallRelayService;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /** 外卖模块应用服务。 */
@@ -33,20 +45,24 @@ public class DeliveryApplicationService implements DeliveryService {
     private static final int MAX_ADDRESS_COUNT = 20;
     private static final Pattern RIDER_USERNAME = Pattern.compile("[\\p{L}0-9_.-]{3,64}");
     private static final Pattern PHONE = Pattern.compile("[0-9+\\- ()]{6,30}");
+    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]{1,64}@[^@\\s]{1,190}$");
 
     private final DeliveryAddressMapper addressMapper;
     private final DeliveryOrderMapper orderMapper;
     private final DeliveryRiderMapper riderMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final VirtualCallRelayService virtualCallRelayService;
 
     public DeliveryApplicationService(DeliveryAddressMapper addressMapper,
                                       DeliveryOrderMapper orderMapper,
                                       DeliveryRiderMapper riderMapper,
-                                      ApplicationEventPublisher eventPublisher) {
+                                      ApplicationEventPublisher eventPublisher,
+                                      VirtualCallRelayService virtualCallRelayService) {
         this.addressMapper = addressMapper;
         this.orderMapper = orderMapper;
         this.riderMapper = riderMapper;
         this.eventPublisher = eventPublisher;
+        this.virtualCallRelayService = virtualCallRelayService;
     }
 
     // ======================== 顾客地址 ========================
@@ -208,14 +224,14 @@ public class DeliveryApplicationService implements DeliveryService {
     @Override
     @Transactional(readOnly = true)
     public List<DeliveryOrderResponse> listAvailableOrders() {
-        return orderMapper.selectAvailable().stream().map(this::toOrderResponse).toList();
+        return orderMapper.selectAvailable().stream().map(po -> toOrderResponse(po, true)).toList();
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<DeliveryOrderResponse> listRiderOrders(Long riderId) {
         requireActiveRider(riderId);
-        return orderMapper.selectByRiderId(riderId).stream().map(this::toOrderResponse).toList();
+        return orderMapper.selectByRiderId(riderId).stream().map(po -> toOrderResponse(po, true)).toList();
     }
 
     @Override
@@ -239,7 +255,7 @@ public class DeliveryApplicationService implements DeliveryService {
         DeliveryOrderPO claimed = requireOrder(deliveryOrderId);
         eventPublisher.publishEvent(DeliveryOrderStatusChangedEvent.changed(
                 claimed.getId(), claimed.getOrderId(), current.getStatus(), claimed.getStatus(), riderId));
-        return toOrderResponse(claimed);
+        return toOrderResponse(claimed, true);
     }
 
     @Override
@@ -265,7 +281,7 @@ public class DeliveryApplicationService implements DeliveryService {
         DeliveryOrderPO latest = requireOrder(deliveryOrderId);
         eventPublisher.publishEvent(DeliveryOrderStatusChangedEvent.changed(
                 latest.getId(), latest.getOrderId(), current.getStatus(), latest.getStatus(), riderId));
-        return toOrderResponse(latest);
+        return toOrderResponse(latest, true);
     }
 
     // ======================== 配送员账号 ========================
@@ -326,6 +342,134 @@ public class DeliveryApplicationService implements DeliveryService {
         return toRiderResponse(requireActiveRider(riderId));
     }
 
+    @Override
+    @Transactional
+    public DeliveryRiderResponse updateRiderProfile(Long riderId, DeliveryRiderProfileUpdateRequest request) {
+        if (request == null) throw new ServiceException(400, "资料请求不能为空");
+        DeliveryRiderPO rider = requireActiveRider(riderId);
+        if (request.getNickname() != null) {
+            String nickname = normalizeProfile(request.getNickname(), 50, "昵称");
+            if (nickname == null) throw new ServiceException(400, "昵称不能为空");
+            rider.setNickname(nickname);
+        }
+        if (request.getPhone() != null) {
+            String phone = normalizeProfile(request.getPhone(), 30, "联系电话");
+            if (phone != null && !PHONE.matcher(phone).matches()) {
+                throw new ServiceException(400, "请输入有效的联系电话");
+            }
+            rider.setPhone(phone);
+        }
+        if (request.getBirthday() != null && request.getBirthday().isAfter(LocalDate.now())) {
+            throw new ServiceException(400, "生日不能晚于今天");
+        }
+        rider.setBirthday(request.getBirthday());
+        if (request.getEmail() != null) {
+            String email = normalizeProfile(request.getEmail(), 120, "邮箱");
+            if (email != null && !EMAIL.matcher(email).matches()) {
+                throw new ServiceException(400, "请输入有效的邮箱地址");
+            }
+            rider.setEmail(email);
+        }
+        if (request.getOtherInfo() != null) rider.setOtherInfo(normalizeProfile(request.getOtherInfo(), 500, "其他信息"));
+        rider.setUpdatedAt(LocalDateTime.now());
+        riderMapper.updateProfile(rider.getId(), rider.getNickname(), rider.getPhone(), rider.getBirthday(),
+                rider.getEmail(), rider.getOtherInfo());
+        return toRiderResponse(rider);
+    }
+
+    @Override
+    @Transactional
+    public DeliveryRiderResponse updateRiderAvatar(Long riderId, String avatarUrl) {
+        DeliveryRiderPO rider = requireActiveRider(riderId);
+        String normalized = normalizeProfile(avatarUrl, 500, "头像");
+        if (normalized == null || !normalized.startsWith("/uploads/")) {
+            throw new ServiceException(400, "头像地址无效");
+        }
+        rider.setAvatarUrl(normalized);
+        rider.setUpdatedAt(LocalDateTime.now());
+        riderMapper.updateAvatar(rider.getId(), rider.getAvatarUrl());
+        return toRiderResponse(rider);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public DeliveryRiderPerformanceResponse getRiderPerformance(Long riderId) {
+        return getRiderPerformance(riderId, "7d");
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public DeliveryRiderPerformanceResponse getRiderPerformance(Long riderId, String range) {
+        requireActiveRider(riderId);
+        PerformanceWindow window = resolvePerformanceWindow(range);
+        Map<String, Object> summary = orderMapper.selectRiderPerformance(
+                riderId, window.startAt(), window.endAt());
+        DeliveryRiderPerformanceResponse response = new DeliveryRiderPerformanceResponse();
+        response.setRange(window.key());
+        response.setRangeLabel(window.label());
+        response.setBucket(window.bucket());
+        response.setRangeAssigned(metric(summary, "rangeAssigned"));
+        int rangeDelivered = metric(summary, "rangeDelivered");
+        BigDecimal rangeAmount = money(summary, "rangeAmount");
+        response.setRangeDelivered(rangeDelivered);
+        response.setRangeAmount(rangeAmount);
+        response.setAverageOrderAmount(rangeDelivered == 0
+                ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
+                : rangeAmount.divide(BigDecimal.valueOf(rangeDelivered), 2, RoundingMode.HALF_UP));
+        response.setTodayAssigned(metric(summary, "todayAssigned"));
+        response.setTodayDelivered(metric(summary, "todayDelivered"));
+        response.setActiveOrders(metric(summary, "activeOrders"));
+        response.setWeekDelivered(metric(summary, "weekDelivered"));
+        response.setTotalDelivered(metric(summary, "totalDelivered"));
+        response.setTotalDeliveredAmount(money(summary, "totalDeliveredAmount"));
+        response.setDeliveryFeeConfigured(false);
+        response.setDeliveryFeeLabel("配送费规则待接入");
+
+        List<Map<String, Object>> rows = "WEEK".equals(window.bucket())
+                ? orderMapper.selectWeeklyDelivered(riderId, window.startAt(), window.endAt())
+                : orderMapper.selectDailyDelivered(riderId, window.startAt(), window.endAt());
+        Map<String, DeliveryRiderPerformanceResponse.DailyPoint> byDay = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            Object day = value(row, "day");
+            if (day != null) {
+                String dayKey = String.valueOf(day);
+                byDay.put(dayKey, new DeliveryRiderPerformanceResponse.DailyPoint(
+                        dayKey, metric(row, "delivered"), money(row, "amount")));
+            }
+        }
+        List<DeliveryRiderPerformanceResponse.DailyPoint> daily = new ArrayList<>();
+        for (int index = 0; index < window.bucketCount(); index++) {
+            LocalDate day = "WEEK".equals(window.bucket())
+                    ? window.startDate().plusWeeks(index)
+                    : window.startDate().plusDays(index);
+            String dayKey = day.format(DateTimeFormatter.BASIC_ISO_DATE);
+            daily.add(byDay.getOrDefault(dayKey,
+                    new DeliveryRiderPerformanceResponse.DailyPoint(dayKey, 0, BigDecimal.ZERO.setScale(2))));
+        }
+        response.setDaily(daily);
+        return response;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public VirtualCallResponse requestCustomerCall(Long orderId, Long userId) {
+        requireUserId(userId);
+        DeliveryOrderPO current = requireOrderByOrderId(orderId);
+        if (!userId.equals(current.getUserId())) throw new ServiceException(403, "无权联系该订单的配送员");
+        ensureContactable(current);
+        return virtualCallRelayService.start(current, DeliveryContactParty.CUSTOMER);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public VirtualCallResponse requestRiderCall(Long deliveryOrderId, Long riderId) {
+        requireActiveRider(riderId);
+        DeliveryOrderPO current = requireOrder(deliveryOrderId);
+        if (!riderId.equals(current.getRiderId())) throw new ServiceException(403, "这笔订单不属于当前配送员");
+        ensureContactable(current);
+        return virtualCallRelayService.start(current, DeliveryContactParty.RIDER);
+    }
+
     private DeliveryAddressPO requireOwnedAddress(Long userId, Long addressId) {
         if (addressId == null || addressId <= 0) throw new ServiceException(400, "地址无效");
         DeliveryAddressPO po = addressMapper.selectOwned(userId, addressId);
@@ -338,6 +482,78 @@ public class DeliveryApplicationService implements DeliveryService {
         DeliveryOrderPO po = orderMapper.selectById(deliveryOrderId);
         if (po == null) throw new ServiceException(404, "配送单不存在");
         return po;
+    }
+
+    private DeliveryOrderPO requireOrderByOrderId(Long orderId) {
+        if (orderId == null || orderId <= 0) throw new ServiceException(400, "订单无效");
+        DeliveryOrderPO po = orderMapper.selectByOrderId(orderId);
+        if (po == null) throw new ServiceException(404, "配送单不存在");
+        return po;
+    }
+
+    private void ensureContactable(DeliveryOrderPO order) {
+        if (!List.of("CLAIMED", "PICKED_UP", "DELIVERING").contains(order.getStatus())) {
+            throw new ServiceException(409, "骑手尚未接单，暂不能发起联系");
+        }
+    }
+
+    private int metric(Map<String, Object> row, String key) {
+        Object value = value(row, key);
+        return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    private BigDecimal money(Map<String, Object> row, String key) {
+        Object value = value(row, key);
+        if (value == null) return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        try {
+            return new BigDecimal(String.valueOf(value)).setScale(2, RoundingMode.HALF_UP);
+        } catch (NumberFormatException ignored) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+    }
+
+    private Object value(Map<String, Object> row, String key) {
+        if (row == null) return null;
+        Object value = row.get(key);
+        if (value == null) value = row.get(key.toUpperCase(Locale.ROOT));
+        if (value == null) value = row.get(toSnakeCase(key));
+        if (value == null) value = row.get(toSnakeCase(key).toUpperCase(Locale.ROOT));
+        return value;
+    }
+
+    private String toSnakeCase(String value) {
+        return value.replaceAll("([a-z])([A-Z])", "$1_$2").toLowerCase(Locale.ROOT);
+    }
+
+    private PerformanceWindow resolvePerformanceWindow(String rawRange) {
+        String range = rawRange == null ? "" : rawRange.trim().toLowerCase(Locale.ROOT);
+        LocalDate today = LocalDate.now();
+        return switch (range) {
+            case "14d", "14" -> dayWindow("14d", "近 14 天", 14, today);
+            case "28d", "30d", "month", "1m" -> dayWindow("28d", "近 1 个月", 28, today);
+            case "12w", "90d", "quarter", "3m" -> {
+                LocalDate thisMonday = today.minusDays(today.getDayOfWeek().getValue() - 1L);
+                LocalDate start = thisMonday.minusWeeks(11);
+                yield new PerformanceWindow("12w", "近 1 个季度", "WEEK", start, thisMonday.plusWeeks(1), 12);
+            }
+            case "7d", "7", "" -> dayWindow("7d", "近 7 天", 7, today);
+            default -> dayWindow("7d", "近 7 天", 7, today);
+        };
+    }
+
+    private PerformanceWindow dayWindow(String key, String label, int days, LocalDate today) {
+        return new PerformanceWindow(key, label, "DAY", today.minusDays(days - 1L), today.plusDays(1), days);
+    }
+
+    private record PerformanceWindow(String key, String label, String bucket,
+                                     LocalDate startDate, LocalDate endDateExclusive, int bucketCount) {
+        private LocalDateTime startAt() {
+            return startDate.atStartOfDay();
+        }
+
+        private LocalDateTime endAt() {
+            return endDateExclusive.atStartOfDay();
+        }
     }
 
     private DeliveryRiderPO requireActiveRider(Long riderId) {
@@ -384,12 +600,16 @@ public class DeliveryApplicationService implements DeliveryService {
     }
 
     private DeliveryOrderResponse toOrderResponse(DeliveryOrderPO po) {
+        return toOrderResponse(po, false);
+    }
+
+    private DeliveryOrderResponse toOrderResponse(DeliveryOrderPO po, boolean riderView) {
         DeliveryOrderResponse response = new DeliveryOrderResponse();
         response.setId(po.getId());
         response.setDeliveryOrderId(po.getId());
         response.setOrderId(po.getOrderId());
         response.setOrderNo(po.getOrderNo());
-        response.setUserId(po.getUserId());
+        response.setUserId(riderView ? null : po.getUserId());
         response.setStoreId(po.getStoreId());
         response.setStoreName(po.getStoreName());
         response.setAmount(po.getAmount());
@@ -397,7 +617,7 @@ public class DeliveryApplicationService implements DeliveryService {
         response.setNote(po.getNote());
         response.setAddressLabel(po.getAddressLabel());
         response.setReceiverName(po.getReceiverName());
-        response.setReceiverPhone(po.getReceiverPhone());
+        response.setReceiverPhone(riderView ? null : po.getReceiverPhone());
         response.setDetailAddress(po.getDetailAddress());
         response.setStatus(po.getStatus());
         response.setStatusLabel(statusLabel(po.getStatus()));
@@ -412,7 +632,13 @@ public class DeliveryApplicationService implements DeliveryService {
     }
 
     private DeliveryRiderResponse toRiderResponse(DeliveryRiderPO po) {
-        return DeliveryRiderResponse.ok(po.getId(), po.getUsername(), po.getNickname(), po.getPhone(), po.getStatus());
+        DeliveryRiderResponse response = DeliveryRiderResponse.ok(
+                po.getId(), po.getUsername(), po.getNickname(), po.getPhone(), po.getStatus());
+        response.setAvatarUrl(po.getAvatarUrl());
+        response.setBirthday(po.getBirthday());
+        response.setEmail(po.getEmail());
+        response.setOtherInfo(po.getOtherInfo());
+        return response;
     }
 
     private String statusLabel(String status) {
@@ -443,6 +669,16 @@ public class DeliveryApplicationService implements DeliveryService {
 
     private String normalizePhone(String value) {
         return trim(value, 30);
+    }
+
+    private String normalizeProfile(String value, int maxLength, String field) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        if (normalized.isEmpty()) return null;
+        if (normalized.length() > maxLength) {
+            throw new ServiceException(400, field + "不能超过 " + maxLength + " 个字符");
+        }
+        return normalized;
     }
 
     private void validatePassword(String password) {

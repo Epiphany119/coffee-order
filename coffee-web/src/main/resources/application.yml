@@ -4,6 +4,12 @@ server:
 spring:
   application:
     name: coffee-web
+  servlet:
+    multipart:
+      # 个人头像、商家经营许可证的业务校验上限为 5MB；这里要同步放开容器默认的 1MB 限制。
+      max-file-size: ${COFFEE_UPLOAD_MAX_FILE_SIZE:5MB}
+      # 预留 multipart 请求头开销，避免恰好 5MB 的图片被请求总大小拦截。
+      max-request-size: ${COFFEE_UPLOAD_MAX_REQUEST_SIZE:6MB}
   datasource:
     # 默认仅提供本机地址，账号、密码必须由环境变量注入。
     url: ${COFFEE_DB_URL:jdbc:mysql://127.0.0.1:3306/coffee_order_pro?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}

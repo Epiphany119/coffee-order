@@ -5,8 +5,11 @@ import com.coffee.module.delivery.api.dto.DeliveryAddressResponse;
 import com.coffee.module.delivery.api.dto.DeliveryOrderCreateRequest;
 import com.coffee.module.delivery.api.dto.DeliveryOrderResponse;
 import com.coffee.module.delivery.api.dto.DeliveryRiderLoginRequest;
+import com.coffee.module.delivery.api.dto.DeliveryRiderPerformanceResponse;
+import com.coffee.module.delivery.api.dto.DeliveryRiderProfileUpdateRequest;
 import com.coffee.module.delivery.api.dto.DeliveryRiderRegisterRequest;
 import com.coffee.module.delivery.api.dto.DeliveryRiderResponse;
+import com.coffee.module.delivery.api.dto.VirtualCallResponse;
 
 import java.util.List;
 
@@ -49,4 +52,22 @@ public interface DeliveryService {
     DeliveryRiderResponse login(DeliveryRiderLoginRequest request);
 
     DeliveryRiderResponse getRider(Long riderId);
+
+    /** 更新配送员个人资料。 */
+    DeliveryRiderResponse updateRiderProfile(Long riderId, DeliveryRiderProfileUpdateRequest request);
+
+    /** 更新配送员头像地址。 */
+    DeliveryRiderResponse updateRiderAvatar(Long riderId, String avatarUrl);
+
+    /** 获取当前配送员自己的业绩看板数据。 */
+    DeliveryRiderPerformanceResponse getRiderPerformance(Long riderId);
+
+    /** 获取当前配送员指定范围的业绩看板数据：7d/14d/28d/12w。 */
+    DeliveryRiderPerformanceResponse getRiderPerformance(Long riderId, String range);
+
+    /** 顾客通过订单主键请求联系骑手；真实号码由后续虚拟电话服务中介。 */
+    VirtualCallResponse requestCustomerCall(Long orderId, Long userId);
+
+    /** 骑手通过配送单主键请求联系顾客；永远不返回顾客真实手机号。 */
+    VirtualCallResponse requestRiderCall(Long deliveryOrderId, Long riderId);
 }

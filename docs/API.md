@@ -5,9 +5,9 @@
 
 ## 接口目录
 
-> 全部 76 个接口索引，点击跳转到对应章节；模块概览见 [三、接口总览](#三接口总览)。
+> 全部接口索引，点击跳转到对应章节；模块概览见 [三、接口总览](#三接口总览)。
 
-### 四、认证模块（7 个）
+### 四、认证模块（9 个）
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
@@ -18,6 +18,8 @@
 | 4.5 | [查询用户信息](#45-查询用户信息) | `GET /api/auth/user/{id}` |
 | 4.6 | [查询用户店铺偏好](#46-查询用户店铺偏好) | `GET /api/auth/user/{id}/preference` |
 | 4.7 | [保存用户店铺偏好](#47-保存用户店铺偏好) | `PUT /api/auth/user/{id}/preference` |
+| 4.8 | [更新用户个人资料](#48-更新用户个人资料) | `PUT /api/auth/user/{id}/profile` |
+| 4.9 | [上传用户头像](#49-上传用户头像) | `POST /api/auth/user/{id}/avatar` |
 
 ### 五、游客模块（1 个）
 
@@ -38,15 +40,18 @@
 | 6.7 | [删除店铺](#67-删除店铺) | `DELETE /api/store/{id}` |
 | 6.8 | [绑定商家到店铺](#68-绑定商家到店铺) | `POST /api/store/{id}/bind` |
 
-### 七、商家模块（5 个）
+### 七、商家模块（8 个）
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
 | 7.1 | [商家注册](#71-商家注册) | `POST /api/merchant/register` |
 | 7.2 | [商家登录](#72-商家登录) | `POST /api/merchant/login` |
 | 7.3 | [商家信息](#73-商家信息) | `GET /api/merchant/{id}` |
-| 7.4 | [商家名下店铺](#74-商家名下店铺) | `GET /api/merchant/{id}/stores` |
-| 7.5 | [经营数据看板](#75-经营数据看板) | `GET /api/merchant/{merchantId}/dashboard` |
+| 7.4 | [更新商家个人资料](#74-更新商家个人资料) | `PUT /api/merchant/{id}/profile` |
+| 7.5 | [上传经营者头像](#75-上传经营者头像) | `POST /api/merchant/{id}/avatar` |
+| 7.6 | [上传经营许可证](#76-上传经营许可证) | `POST /api/merchant/{id}/business-license` |
+| 7.7 | [商家名下店铺](#77-商家名下店铺) | `GET /api/merchant/{id}/stores` |
+| 7.8 | [经营数据看板](#78-经营数据看板) | `GET /api/merchant/{merchantId}/dashboard` |
 
 ### 八、商家菜单管理模块（6 个）
 
@@ -163,16 +168,20 @@
 |---|---|---|
 | 19.1 | [生成点单方案](#191-生成点单方案) | `POST /api/customer-agent/plan` |
 
-### 二十、外卖配送模块（12 个）
+### 二十、外卖配送模块（17 个）
 
 | 接口 | 方法与路径 |
 |---|---|
 | 顾客地址列表/新增/编辑/删除 | `GET/POST/PUT/DELETE /api/delivery/addresses`（地址按登录顾客隔离） |
 | 配送员注册/登录/当前账号 | `POST /api/delivery/riders/register`、`POST /api/delivery/riders/login`、`GET /api/delivery/riders/me` |
+| 配送员个人资料/头像 | `PUT /api/delivery/riders/me/profile`、`POST /api/delivery/riders/me/avatar` |
 | 待抢订单 | `GET /api/delivery/rider/orders/available`（配送员令牌；仅已支付外卖订单） |
 | 我的配送单 | `GET /api/delivery/rider/orders/mine`（配送员令牌） |
 | 抢单 | `POST /api/delivery/rider/orders/{id}/claim`（CAS，只允许一人成功） |
 | 配送状态操作 | `POST /api/delivery/rider/orders/{id}/action?action=pickup\|deliver\|complete\|release` |
+| 配送员个人业绩 | `GET /api/delivery/rider/performance?range=7d\|14d\|28d\|12w`（金额、单量与趋势） |
+| 配送员联系顾客 | `POST /api/delivery/rider/orders/{id}/contact/customer`（虚拟电话中介框架） |
+| 顾客联系配送员 | `POST /api/delivery/orders/{orderId}/contact/rider`（虚拟电话中介框架） |
 | 顾客外卖单 | `GET /api/delivery/orders/mine`（登录顾客令牌） |
 
 ### 二十一、健康检查（1 个）
@@ -258,10 +267,10 @@ Authorization: Bearer {accessToken}
 
 | # | 模块 | 接口数 | 响应格式 | 章节 |
 |---|---|---|---|---|
-| 1 | 认证 | 7 | B | [四](#四认证模块) |
+| 1 | 认证 | 9 | B | [四](#四认证模块) |
 | 2 | 游客 | 1 | B | [五](#五游客模块) |
 | 3 | 店铺管理 | 8 | B | [六](#六店铺管理模块) |
-| 4 | 商家 | 5 | B | [七](#七商家模块) |
+| 4 | 商家 | 8 | B | [七](#七商家模块) |
 | 5 | 商家菜单管理 | 6 | B | [八](#八商家菜单管理模块) |
 | 6 | 座位 | 6 | B | [九](#九座位模块) |
 | 7 | 订单 | 8 | A | [十](#十订单模块) |
@@ -274,7 +283,7 @@ Authorization: Bearer {accessToken}
 | 14 | 发现、秒杀与消息 | 6 | B / A | [十七](#十七发现秒杀与消息模块) |
 | 15 | 店长增长 Agent | 4 | A | [十八](#十八店长增长-agent) |
 | 16 | 顾客点单 Agent | 1 | A | [十九](#十九顾客点单-agent) |
-| 17 | 外卖配送 | 12 | A | [二十](#二十外卖配送模块) |
+| 17 | 外卖配送 | 17 | A | [二十](#二十外卖配送模块) |
 | 18 | 健康检查 | 1 | 纯文本 | [二十一](#二十一健康检查) |
 
 ## 四、认证模块
@@ -489,6 +498,38 @@ Authorization: Bearer {accessToken}
 { "success": true, "message": "偏好已保存" }
 ```
 
+### 4.8 更新用户个人资料
+
+**`PUT /api/auth/user/{id}/profile`**
+
+作用：保存当前登录顾客的个人资料。接口只允许修改令牌对应的用户，空字符串会被规范化为空值，因此可以清除可选资料。
+
+请求体：
+
+```json
+{
+  "nickname": "爱丽丝",
+  "phone": "13800000000",
+  "birthday": "1998-05-20",
+  "wechatId": "alice_fika",
+  "qqNumber": "123456789",
+  "email": "alice@example.com",
+  "otherInfo": "偏好少冰"
+}
+```
+
+校验规则：生日不能晚于当天；电话和邮箱按格式校验；昵称 50 字符、微信号 80 字符、QQ 20 字符、其他信息 500 字符以内。
+
+成功响应：`AuthResponse`，包含更新后的资料字段和新的用户访问令牌。
+
+### 4.9 上传用户头像
+
+**`POST /api/auth/user/{id}/avatar`**
+
+请求格式：`multipart/form-data`，字段名 `file`。仅允许 JPG、PNG、WEBP，单张不超过 5MB。文件保存到服务端上传目录，数据库只保存 `/uploads/...` 站内相对地址。
+
+成功响应：`AuthResponse`，其中 `avatarUrl` 为头像地址。
+
 ## 五、游客模块
 
 > 响应格式：**B**。接口前缀 `/api/guest`。
@@ -686,6 +727,12 @@ Authorization: Bearer {accessToken}
 | merchantNo | string | 商家编号（`sj-` 前缀，商家登录账号） |
 | nickname | string | 商家昵称 |
 | phone | string | 联系电话 |
+| avatarUrl | string | 经营者头像站内地址 |
+| operatorName | string | 经营者姓名 |
+| email | string | 商家邮箱 |
+| businessLicenseNo | string | 经营许可证编号 |
+| businessLicenseUrl | string | 经营许可证图片站内地址 |
+| otherInfo | string | 商家其他资料 |
 | storeName | string | 绑定店名（未入驻为 null） |
 | status | string | `ACTIVE` 正常 / `DISABLED` 已禁用 |
 
@@ -768,7 +815,40 @@ Authorization: Bearer {accessToken}
 
 成功响应（200）：`MerchantResponse`。
 
-### 7.4 商家名下店铺
+### 7.4 更新商家个人资料
+
+**`PUT /api/merchant/{id}/profile`**
+
+作用：保存经营者昵称、姓名、联系方式、邮箱、许可证编号和其他商家资料。仅允许当前商家修改自己的资料，空字符串可以清除可选字段。
+
+请求体示例：
+
+```json
+{
+  "nickname": "FIKA 陆家嘴店",
+  "operatorName": "王先生",
+  "phone": "021-88888888",
+  "email": "owner@example.com",
+  "businessLicenseNo": "91310000XXXX",
+  "otherInfo": "每日 09:00-21:00 营业"
+}
+```
+
+成功响应：`MerchantResponse`。
+
+### 7.5 上传经营者头像
+
+**`POST /api/merchant/{id}/avatar`**
+
+请求格式：`multipart/form-data`，字段名 `file`。仅允许 JPG、PNG、WEBP，单张不超过 5MB；成功后返回包含 `avatarUrl` 的 `MerchantResponse`。
+
+### 7.6 上传经营许可证
+
+**`POST /api/merchant/{id}/business-license`**
+
+请求格式：`multipart/form-data`，字段名 `file`。仅允许 JPG、PNG、WEBP，单张不超过 5MB；成功后返回包含 `businessLicenseUrl` 的 `MerchantResponse`，商家个人资料页可直接展示。
+
+### 7.7 商家名下店铺
 
 **`GET /api/merchant/{id}/stores`**
 
@@ -778,7 +858,7 @@ Authorization: Bearer {accessToken}
 
 成功响应（200）：`StoreResponse[]`。
 
-### 7.5 经营数据看板
+### 7.8 经营数据看板
 
 **`GET /api/merchant/{merchantId}/dashboard?range=7d`**
 
@@ -2329,6 +2409,8 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 待抢订单只返回 `OPEN` 且对应主订单为 `READY_FOR_DELIVERY` 的配送单；响应包含门店、商品摘要、收货地址快照、金额和配送状态。
 
+骑手响应会隐藏顾客真实手机号和用户内部 id；骑手仅可看到收货人称呼、地址标签、详细地址、商品摘要和顾客备注。顾客手机号只用于服务端地址快照和后续中介转接，不会透传给骑手。
+
 ### 20.6 抢单与状态操作
 
 **`POST /api/delivery/rider/orders/{id}/claim`**
@@ -2344,11 +2426,62 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 | `complete` | `DELIVERING` | `DELIVERED` |
 | `release` | `CLAIMED` | `OPEN` |
 
-### 20.7 顾客外卖配送单
+### 20.7 配送员个人业绩
+
+**`GET /api/delivery/rider/performance`**
+
+返回当前登录配送员自己的业绩数据，不接受外部 rider id。通过 `range` 查询参数切换看板范围：`7d` 近 7 天、`14d` 近 14 天、`28d` 近 1 个月、`12w` 近 1 个季度；不传时默认 `7d`。`7d/14d/28d` 按自然日返回趋势，`12w` 按周返回趋势。
+
+金额口径为该配送员已送达配送单的订单金额，不等同于骑手收入；配送费规则接入后再替换为实际结算金额。
+
+```json
+{
+  "range": "7d",
+  "rangeLabel": "近 7 天",
+  "bucket": "DAY",
+  "rangeAssigned": 3,
+  "rangeDelivered": 2,
+  "rangeAmount": 52.80,
+  "averageOrderAmount": 26.40,
+  "todayAssigned": 3,
+  "todayDelivered": 2,
+  "activeOrders": 1,
+  "weekDelivered": 12,
+  "totalDelivered": 86,
+  "totalDeliveredAmount": 4820.60,
+  "deliveryFeeConfigured": false,
+  "deliveryFeeLabel": "配送费规则待接入",
+  "daily": [
+    { "day": "20260826", "delivered": 0, "amount": 0.00 },
+    { "day": "20260901", "delivered": 2, "amount": 52.80 }
+  ]
+}
+```
+
+`daily` 会补齐所选范围内的所有日/周，即使当天没有完成配送也会返回 `0`，前端可以直接绘制连续趋势图。
+
+### 20.8 虚拟电话联系框架
+
+**`POST /api/delivery/rider/orders/{id}/contact/customer`**
+**`POST /api/delivery/orders/{orderId}/contact/rider`**
+
+两端均通过自身身份发起联系：骑手只能联系自己已接单的配送单，顾客只能联系自己的外卖主订单，且订单必须处于已接单/已取餐/配送中的可联系阶段。当前默认实现只生成 5 分钟有效的一次性 `relayId`，返回 `NOT_CONFIGURED`，不返回真实手机号，也不发起真实通话；后续接入第三方虚拟号码中介时替换应用层适配器即可。
+
+### 20.9 顾客外卖配送单
 
 **`GET /api/delivery/orders/mine`**
 
 登录顾客查询自己的配送单及状态，地址字段来自下单时的快照。
+
+### 20.10 配送员个人资料
+
+**`PUT /api/delivery/riders/me/profile`**
+
+保存当前登录配送员的昵称、电话、生日、邮箱和其他资料；只能修改自己的账号，生日不能晚于当天，空字符串可清除可选字段。
+
+**`POST /api/delivery/riders/me/avatar`**
+
+请求格式：`multipart/form-data`，字段名 `file`。仅允许 JPG、PNG、WEBP，单张不超过 5MB。接口只返回站内相对地址，不会把骑手真实资料暴露给顾客。
 
 ## 二十一、健康检查
 

@@ -26,4 +26,7 @@ public interface MerchantRepository {
     void deleteByUsername(String username);
 
     Merchant save(Merchant merchant);
+    void updateProfile(Merchant merchant);
+    void updateAvatar(Long id, String avatarUrl);
+    void updateBusinessLicense(Long id, String licenseUrl);
 }

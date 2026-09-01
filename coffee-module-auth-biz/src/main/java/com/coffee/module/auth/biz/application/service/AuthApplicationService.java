@@ -13,6 +13,9 @@ import com.coffee.common.core.exception.ServiceException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.util.regex.Pattern;
+
 /**
  * 认证应用服务
  * <p>
@@ -24,6 +27,9 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class AuthApplicationService implements AuthService {
+
+    private static final Pattern PHONE = Pattern.compile("^[0-9+()\\-\\s]{6,30}$");
+    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]{1,64}@[^@\\s]{1,190}$");
 
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository tokenRepository;
@@ -61,8 +67,7 @@ public class AuthApplicationService implements AuthService {
         String hash = PasswordEncoder.encode(rawPassword);
         User user = User.register(username, hash, request.getNickname());
         userRepository.save(user);
-        return AuthResponse.ok(user.getId(), user.getUsername(), user.getNickname(),
-                user.getTotalSpent() != null ? user.getTotalSpent() : 0.0);
+        return toResponse(user);
     }
 
     // ======================== 登录 ========================
@@ -85,8 +90,7 @@ public class AuthApplicationService implements AuthService {
             return AuthResponse.fail("用户名或密码错误");
         }
 
-        return AuthResponse.ok(user.getId(), user.getUsername(), user.getNickname(),
-                user.getTotalSpent() != null ? user.getTotalSpent() : 0.0);
+        return toResponse(user);
     }
 
     /**
@@ -122,8 +126,57 @@ public class AuthApplicationService implements AuthService {
         if (user == null) {
             return AuthResponse.fail("用户不存在");
         }
-        return AuthResponse.ok(user.getId(), user.getUsername(), user.getNickname(),
-                user.getTotalSpent() != null ? user.getTotalSpent() : 0.0);
+        return toResponse(user);
+    }
+
+    // ======================== 个人资料 ========================
+
+    @Override
+    @Transactional
+    public AuthResponse updateProfile(Long id, UserProfileUpdateRequest request) {
+        if (request == null) throw new ServiceException(400, "资料请求不能为空");
+        User user = userRepository.findById(id);
+        if (user == null) throw new ServiceException(404, "用户不存在");
+
+        String nickname = trim(request.getNickname(), 50);
+        String phone = trim(request.getPhone(), 30);
+        String wechatId = trim(request.getWechatId(), 80);
+        String qqNumber = trim(request.getQqNumber(), 20);
+        String email = trim(request.getEmail(), 120);
+        String otherInfo = trim(request.getOtherInfo(), 500);
+        if (phone != null && !PHONE.matcher(phone).matches()) {
+            throw new ServiceException(400, "请输入有效的联系电话");
+        }
+        if (email != null && !EMAIL.matcher(email).matches()) {
+            throw new ServiceException(400, "请输入有效的邮箱地址");
+        }
+        if (request.getBirthday() != null && request.getBirthday().isAfter(LocalDate.now())) {
+            throw new ServiceException(400, "生日不能晚于今天");
+        }
+
+        user.setNickname(nickname);
+        user.setPhone(phone);
+        user.setBirthday(request.getBirthday());
+        user.setWechatId(wechatId);
+        user.setQqNumber(qqNumber);
+        user.setEmail(email);
+        user.setOtherInfo(otherInfo);
+        userRepository.updateProfile(user);
+        return toResponse(user);
+    }
+
+    @Override
+    @Transactional
+    public AuthResponse updateAvatar(Long id, String avatarUrl) {
+        User user = userRepository.findById(id);
+        if (user == null) throw new ServiceException(404, "用户不存在");
+        String normalized = trim(avatarUrl, 500);
+        if (normalized == null || !normalized.startsWith("/uploads/")) {
+            throw new ServiceException(400, "头像地址无效");
+        }
+        user.setAvatarUrl(normalized);
+        userRepository.updateAvatar(id, normalized);
+        return toResponse(user);
     }
 
     // ======================== 店铺偏好 ========================
@@ -205,9 +258,29 @@ public class AuthApplicationService implements AuthService {
         // 获取用户信息用于响应
         User user = userRepository.findById(resetToken.getUserId());
 
-        return AuthResponse.ok(resetToken.getUserId(),
-                user != null ? user.getUsername() : "",
-                user != null ? user.getNickname() : "",
-                user != null && user.getTotalSpent() != null ? user.getTotalSpent() : 0.0);
+        return user == null ? AuthResponse.fail("用户不存在") : toResponse(user);
+    }
+
+    private AuthResponse toResponse(User user) {
+        AuthResponse response = AuthResponse.ok(user.getId(), user.getUsername(), user.getNickname(),
+                user.getTotalSpent() != null ? user.getTotalSpent() : 0.0);
+        response.setAvatarUrl(user.getAvatarUrl());
+        response.setPhone(user.getPhone());
+        response.setBirthday(user.getBirthday());
+        response.setWechatId(user.getWechatId());
+        response.setQqNumber(user.getQqNumber());
+        response.setEmail(user.getEmail());
+        response.setOtherInfo(user.getOtherInfo());
+        return response;
+    }
+
+    private String trim(String value, int maxLength) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        if (normalized.isEmpty()) return null;
+        if (normalized.length() > maxLength) {
+            throw new ServiceException(400, "资料内容不能超过 " + maxLength + " 个字符");
+        }
+        return normalized;
     }
 }

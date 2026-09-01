@@ -2,6 +2,8 @@ package com.coffee.module.delivery.api.dto;
 
 import lombok.Data;
 
+import java.time.LocalDate;
+
 /** 配送员登录/注册响应。 */
 @Data
 public class DeliveryRiderResponse {
@@ -11,6 +13,10 @@ public class DeliveryRiderResponse {
     private String username;
     private String nickname;
     private String phone;
+    private String avatarUrl;
+    private LocalDate birthday;
+    private String email;
+    private String otherInfo;
     private String status;
     private String accessToken;
 

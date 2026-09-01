@@ -5,8 +5,10 @@ import com.coffee.module.auth.api.dto.*;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.security.LoginChallengeService;
 import com.coffee.web.security.TokenService;
+import com.coffee.web.storage.LocalProfileImageStorage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -21,13 +23,16 @@ public class AuthController {
     private final AuthService authService;
     private final TokenService tokenService;
     private final LoginChallengeService loginChallengeService;
+    private final LocalProfileImageStorage profileImageStorage;
     private final boolean exposeResetToken;
 
     public AuthController(AuthService authService, TokenService tokenService, LoginChallengeService loginChallengeService,
+                          LocalProfileImageStorage profileImageStorage,
                           @Value("${coffee.auth.expose-reset-token:false}") boolean exposeResetToken) {
         this.authService = authService;
         this.tokenService = tokenService;
         this.loginChallengeService = loginChallengeService;
+        this.profileImageStorage = profileImageStorage;
         this.exposeResetToken = exposeResetToken;
     }
 
@@ -74,6 +79,23 @@ public class AuthController {
     public AuthResponse getUserInfo(@PathVariable Long id) {
         AccessGuard.requireUser(id);
         return withToken(authService.getUserInfo(id));
+    }
+
+    /** 更新顾客个人资料。 */
+    @PutMapping("/user/{id}/profile")
+    public AuthResponse updateProfile(@PathVariable Long id,
+                                      @RequestBody UserProfileUpdateRequest request) {
+        AccessGuard.requireUser(id);
+        return withToken(authService.updateProfile(id, request));
+    }
+
+    /** 上传顾客头像；图片只返回站内相对地址，不把文件内容存进数据库。 */
+    @PostMapping("/user/{id}/avatar")
+    public AuthResponse uploadAvatar(@PathVariable Long id,
+                                     @RequestParam("file") MultipartFile file) {
+        AccessGuard.requireUser(id);
+        String url = profileImageStorage.store("user", id, file);
+        return withToken(authService.updateAvatar(id, url));
     }
 
     /** 用户店铺偏好：GET /api/auth/user/{id}/preference */

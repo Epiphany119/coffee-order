@@ -22,6 +22,12 @@ public interface AuthService {
      */
     AuthResponse getUserInfo(Long id);
 
+    /** 更新顾客个人资料。 */
+    AuthResponse updateProfile(Long id, UserProfileUpdateRequest request);
+
+    /** 更新顾客头像地址。 */
+    AuthResponse updateAvatar(Long id, String avatarUrl);
+
     /**
      * 忘记密码 — 生成重置令牌；由 Web 层根据环境策略决定是否展示
      */
