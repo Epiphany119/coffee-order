@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.idea/
+.vscode/
+*.log
+.DS_Store
+
+# 本地环境变量（个人 IP 配置，不进 git）
+.env.development.local
+.env.production.local
+.env.local
+
+# 构建产物
+*.local
