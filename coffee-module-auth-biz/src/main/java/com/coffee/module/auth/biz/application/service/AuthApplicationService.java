@@ -29,15 +29,17 @@ import java.util.regex.Pattern;
 public class AuthApplicationService implements AuthService {
 
     private static final Pattern PHONE = Pattern.compile("^[0-9+()\\-\\s]{6,30}$");
-    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]{1,64}@[^@\\s]{1,190}$");
 
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository tokenRepository;
+    private final EmailVerificationService emailVerificationService;
 
     public AuthApplicationService(UserRepository userRepository,
-                                  PasswordResetTokenRepository tokenRepository) {
+                                  PasswordResetTokenRepository tokenRepository,
+                                  EmailVerificationService emailVerificationService) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
+        this.emailVerificationService = emailVerificationService;
     }
 
     // ======================== 注册 ========================
@@ -93,6 +95,106 @@ public class AuthApplicationService implements AuthService {
         return toResponse(user);
     }
 
+    // ======================== 邮箱登录与注册 ========================
+
+    @Override
+    public int sendEmailCode(EmailCodeRequest request) {
+        if (request == null) {
+            throw new ServiceException(400, "请求不能为空");
+        }
+        if (request.getPurpose() != EmailCodePurpose.LOGIN && request.getPurpose() != EmailCodePurpose.REGISTER) {
+            throw new ServiceException(400, "验证码用途无效");
+        }
+        return emailVerificationService.send(request.getEmail(), request.getPurpose());
+    }
+
+    @Override
+    public int sendEmailBindCode(Long userId, String email) {
+        if (userId == null || userRepository.findById(userId) == null) {
+            throw new ServiceException(404, "用户不存在");
+        }
+        return emailVerificationService.send(email, EmailCodePurpose.BIND);
+    }
+
+    @Override
+    @Transactional
+    public AuthResponse emailLogin(EmailLoginRequest request) {
+        if (request == null) return AuthResponse.fail("请求不能为空");
+        String email = emailVerificationService.normalizeEmail(request.getEmail());
+        if (!emailVerificationService.verify(email, EmailCodePurpose.LOGIN, request.getCode())) {
+            return AuthResponse.fail("验证码错误、已过期或已使用，请重新获取");
+        }
+        User user = userRepository.findByEmail(email);
+        return user == null
+                ? AuthResponse.fail("该邮箱尚未创建账户，请选择邮箱注册")
+                : toResponse(user);
+    }
+
+    @Override
+    @Transactional
+    public AuthResponse emailRegister(EmailRegisterRequest request) {
+        if (request == null) return AuthResponse.fail("请求不能为空");
+        String email = emailVerificationService.normalizeEmail(request.getEmail());
+        String username = request.getUsername() == null ? "" : request.getUsername().trim();
+        String rawPassword = request.getPassword();
+        if (username.length() < 2 || username.length() > 50) {
+            return AuthResponse.fail("账户名长度需要在2到50个字符之间");
+        }
+        if (rawPassword == null || rawPassword.isBlank()) {
+            return AuthResponse.fail("密码不能为空");
+        }
+        try {
+            PasswordValidator.validate(rawPassword);
+        } catch (IllegalArgumentException ex) {
+            return AuthResponse.fail(ex.getMessage());
+        }
+        if (userRepository.existsByUsername(username)) {
+            return AuthResponse.fail("用户名已存在");
+        }
+        if (userRepository.existsByEmail(email)) {
+            return AuthResponse.fail("该邮箱已创建账户，请选择邮箱登录");
+        }
+        if (!emailVerificationService.verify(email, EmailCodePurpose.REGISTER, request.getCode())) {
+            return AuthResponse.fail("验证码错误、已过期或已使用，请重新获取");
+        }
+
+        User user = User.register(username, PasswordEncoder.encode(rawPassword), request.getNickname());
+        user.setEmail(email);
+        userRepository.save(user);
+        return toResponse(user);
+    }
+
+    @Override
+    @Transactional
+    public AuthResponse bindEmail(Long userId, EmailBindRequest request) {
+        if (request == null) return AuthResponse.fail("请求不能为空");
+        User user = userRepository.findById(userId);
+        if (user == null) throw new ServiceException(404, "用户不存在");
+
+        String email = emailVerificationService.normalizeEmail(request.getEmail());
+        User existing = userRepository.findByEmail(email);
+        if (existing != null && !userId.equals(existing.getId())) {
+            return AuthResponse.fail("该邮箱已绑定其他账户");
+        }
+        if (!emailVerificationService.verify(email, EmailCodePurpose.BIND, request.getCode())) {
+            return AuthResponse.fail("验证码错误、已过期或已使用，请重新获取");
+        }
+
+        user.setEmail(email);
+        userRepository.updateEmail(userId, email);
+        return toResponse(user);
+    }
+
+    @Override
+    @Transactional
+    public AuthResponse unbindEmail(Long userId) {
+        User user = userRepository.findById(userId);
+        if (user == null) throw new ServiceException(404, "用户不存在");
+        userRepository.updateEmail(userId, null);
+        user.setEmail(null);
+        return toResponse(user);
+    }
+
     /**
      * 验密：先 BCrypt，失败则尝试明文（旧用户），比对成功则自动升级
      */
@@ -142,13 +244,9 @@ public class AuthApplicationService implements AuthService {
         String phone = trim(request.getPhone(), 30);
         String wechatId = trim(request.getWechatId(), 80);
         String qqNumber = trim(request.getQqNumber(), 20);
-        String email = trim(request.getEmail(), 120);
         String otherInfo = trim(request.getOtherInfo(), 500);
         if (phone != null && !PHONE.matcher(phone).matches()) {
             throw new ServiceException(400, "请输入有效的联系电话");
-        }
-        if (email != null && !EMAIL.matcher(email).matches()) {
-            throw new ServiceException(400, "请输入有效的邮箱地址");
         }
         if (request.getBirthday() != null && request.getBirthday().isAfter(LocalDate.now())) {
             throw new ServiceException(400, "生日不能晚于今天");
@@ -159,7 +257,6 @@ public class AuthApplicationService implements AuthService {
         user.setBirthday(request.getBirthday());
         user.setWechatId(wechatId);
         user.setQqNumber(qqNumber);
-        user.setEmail(email);
         user.setOtherInfo(otherInfo);
         userRepository.updateProfile(user);
         return toResponse(user);

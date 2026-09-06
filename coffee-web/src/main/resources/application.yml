@@ -16,6 +16,34 @@ spring:
     username: ${COFFEE_DB_USERNAME}
     password: ${COFFEE_DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+  # QQ SMTP 公共占位配置；local profile 会由 application-local.yml 覆盖账号和授权码。
+  # 非 local 环境优先读取 COFFEE_MAIL_*，兼容 travel-agent 已使用的 QQ_MAIL_*，不放真实凭证。
+  mail:
+    host: ${COFFEE_MAIL_HOST:${QQ_MAIL_HOST:smtp.qq.com}}
+    port: ${COFFEE_MAIL_PORT:${QQ_MAIL_PORT:465}}
+    username: ${COFFEE_MAIL_USERNAME:${QQ_MAIL_USERNAME:}}
+    password: ${COFFEE_MAIL_PASSWORD:${QQ_MAIL_PASSWORD:}}
+    protocol: smtp
+    default-encoding: UTF-8
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.auth.mechanisms: LOGIN
+      mail.smtp.starttls.enable: false
+      mail.smtp.ssl.enable: true
+      mail.smtp.ssl.trust: smtp.qq.com
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
+      mail.smtp.from: ${spring.mail.username}
+      mail.smtp.allow8bitmime: true
+      mail.mime.charset: UTF-8
+  data:
+    redis:
+      # 邮箱验证码优先写 Redis；服务会自动以 MySQL 作为丢失/不可用时的校验兜底。
+      host: ${COFFEE_REDIS_HOST:127.0.0.1}
+      port: ${COFFEE_REDIS_PORT:6379}
+      password: ${COFFEE_REDIS_PASSWORD:}
+      timeout: ${COFFEE_REDIS_TIMEOUT:2s}
   cache:
     type: simple
   cloud:
@@ -79,6 +107,15 @@ coffee:
     token-secret: ${COFFEE_AUTH_TOKEN_SECRET:}
     token-expires-seconds: ${COFFEE_AUTH_TOKEN_EXPIRES_SECONDS:28800}
     expose-reset-token: ${COFFEE_AUTH_EXPOSE_RESET_TOKEN:false}
+    email-code:
+      expires-seconds: ${COFFEE_EMAIL_CODE_EXPIRES_SECONDS:300}
+      cooldown-seconds: ${COFFEE_EMAIL_CODE_COOLDOWN_SECONDS:60}
+      max-attempts: ${COFFEE_EMAIL_CODE_MAX_ATTEMPTS:5}
+      # 10 分钟窗口最多成功申请 5 次，第 6 次开始冷却 10 分钟。
+      window-seconds: ${COFFEE_EMAIL_CODE_WINDOW_SECONDS:600}
+      max-requests-per-window: ${COFFEE_EMAIL_CODE_MAX_REQUESTS_PER_WINDOW:5}
+      lock-seconds: ${COFFEE_EMAIL_CODE_LOCK_SECONDS:600}
+      cleanup-interval-ms: ${COFFEE_EMAIL_CODE_CLEANUP_INTERVAL_MS:60000}
   payment:
     callback-secret: ${COFFEE_PAYMENT_CALLBACK_SECRET:}
     mock-callback-enabled: ${COFFEE_PAYMENT_MOCK_CALLBACK_ENABLED:false}

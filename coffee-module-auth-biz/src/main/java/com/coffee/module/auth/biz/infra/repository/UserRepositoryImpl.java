@@ -31,8 +31,19 @@ public class UserRepositoryImpl implements UserRepository {
     }
 
     @Override
+    public User findByEmail(String email) {
+        UserPO po = userMapper.selectByEmail(email);
+        return po != null ? toDomain(po) : null;
+    }
+
+    @Override
     public boolean existsByUsername(String username) {
         return userMapper.countByUsername(username) > 0;
+    }
+
+    @Override
+    public boolean existsByEmail(String email) {
+        return userMapper.countByEmail(email) > 0;
     }
 
     @Override
@@ -60,7 +71,12 @@ public class UserRepositoryImpl implements UserRepository {
     @Override
     public void updateProfile(User user) {
         userMapper.updateProfile(user.getId(), user.getNickname(), user.getPhone(), user.getBirthday(),
-                user.getWechatId(), user.getQqNumber(), user.getEmail(), user.getOtherInfo());
+                user.getWechatId(), user.getQqNumber(), user.getOtherInfo());
+    }
+
+    @Override
+    public void updateEmail(Long id, String email) {
+        userMapper.updateEmail(id, email);
     }
 
     @Override

@@ -9,7 +9,6 @@ public class UserProfileUpdateRequest {
     private LocalDate birthday;
     private String wechatId;
     private String qqNumber;
-    private String email;
     private String otherInfo;
 
     public String getNickname() { return nickname; }
@@ -22,8 +21,6 @@ public class UserProfileUpdateRequest {
     public void setWechatId(String wechatId) { this.wechatId = wechatId; }
     public String getQqNumber() { return qqNumber; }
     public void setQqNumber(String qqNumber) { this.qqNumber = qqNumber; }
-    public String getEmail() { return email; }
-    public void setEmail(String email) { this.email = email; }
     public String getOtherInfo() { return otherInfo; }
     public void setOtherInfo(String otherInfo) { this.otherInfo = otherInfo; }
 }

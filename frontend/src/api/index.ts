@@ -3,6 +3,11 @@ import type {
   AuthRequest,
   LoginChallenge,
   AuthResponse,
+  EmailCodeRequest,
+  EmailCodeResponse,
+  EmailLoginRequest,
+  EmailBindRequest,
+  EmailRegisterRequest,
   UserProfileUpdateRequest,
   ForgotPasswordRequest,
   ForgotPasswordResponse,
@@ -50,6 +55,7 @@ import type {
   , DeliveryPerformanceRange
   , VirtualCallResponse
   , MerchantProfileUpdateRequest
+  , BusinessAgentAnswer
 } from './types'
 
 // ============================================================
@@ -194,7 +200,7 @@ function isMerchantApiPath(path: string): boolean {
   return path.startsWith('/merchant/')
     || path === '/store'
     || path.startsWith('/store/')
-    || path.startsWith('/business-agent/')
+    || path.startsWith('/business-agent/knowledge')
     || path.startsWith('/seat/list')
     || path === '/orders'
     || (path.startsWith('/orders/') && path.includes('/action'))
@@ -211,6 +217,9 @@ request.interceptors.request.use(async (config) => {
   // 否则后端会在进入登录控制器前校验到已过期 Token，表现为“重新登录也登录不上”。
   const publicSessionRequest = path === '/auth/login'
     || path === '/auth/register'
+    || path === '/auth/email/send-code'
+    || path === '/auth/email/login'
+    || path === '/auth/email/register'
     || path === '/auth/forgot-password'
     || path === '/auth/reset-password'
     || path === '/auth/login-challenge'
@@ -227,7 +236,15 @@ request.interceptors.request.use(async (config) => {
   const customerAgentRequest = path.startsWith('/customer-agent/')
   const riderRequest = isDeliveryRiderApiPath(path)
   // 商家端订单、座位、店铺接口也必须使用商家令牌；用户与商家同时登录时不能误带用户令牌。
-  const merchantRequest = !customerAgentRequest && !riderRequest && isMerchantApiPath(path)
+  let businessAgentMerchantRequest = false
+  if (path === '/business-agent/ask') {
+    try {
+      const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data
+      businessAgentMerchantRequest = body?.scene === 'merchant'
+    } catch {}
+  }
+  const merchantRequest = !customerAgentRequest && !riderRequest
+    && (isMerchantApiPath(path) || businessAgentMerchantRequest)
   // customer-agent 路径跳过商家 token，确保使用正确的身份
   const token = readAccessToken(merchantRequest, customerAgentRequest || riderRequest, riderRequest)
   if (token) config.headers.Authorization = `Bearer ${token}`
@@ -252,9 +269,16 @@ request.interceptors.response.use(
     if (err.response?.status === 401) {
       try {
         const path = err.config?.url || ''
+        let merchantBusinessAgent = false
+        if (path === '/business-agent/ask') {
+          try {
+            const body = typeof err.config?.data === 'string' ? JSON.parse(err.config.data) : err.config?.data
+            merchantBusinessAgent = body?.scene === 'merchant'
+          } catch {}
+        }
         const authDomain = isDeliveryRiderApiPath(path)
           ? 'rider'
-          : isMerchantApiPath(path) ? 'merchant' : 'user'
+          : isMerchantApiPath(path) || merchantBusinessAgent ? 'merchant' : 'user'
         if (authDomain === 'rider') {
           localStorage.removeItem('fikaRider')
         } else if (authDomain === 'merchant') {
@@ -283,6 +307,24 @@ export const authApi = {
 
   register: (data: AuthRequest) =>
     request.post<any, AuthResponse>('/auth/register', data),
+
+  sendEmailCode: (data: EmailCodeRequest) =>
+    request.post<any, EmailCodeResponse>('/auth/email/send-code', data),
+
+  emailLogin: (data: EmailLoginRequest) =>
+    request.post<any, AuthResponse>('/auth/email/login', data),
+
+  emailRegister: (data: EmailRegisterRequest) =>
+    request.post<any, AuthResponse>('/auth/email/register', data),
+
+  sendEmailBindCode: (id: number, email: string) =>
+    request.post<any, EmailCodeResponse>(`/auth/user/${id}/email/send-code`, { email }),
+
+  bindEmail: (id: number, data: EmailBindRequest) =>
+    request.put<any, AuthResponse>(`/auth/user/${id}/email`, data),
+
+  unbindEmail: (id: number) =>
+    request.delete<any, AuthResponse>(`/auth/user/${id}/email`),
 
   forgotPassword: (data: ForgotPasswordRequest) =>
     request.post<any, ForgotPasswordResponse>('/auth/forgot-password', data),
@@ -337,6 +379,10 @@ export const menuApi = {
 
 /** 商家端 AI 知识库：菜单事实同步与人工维护的运营规则都会写入 MySQL，并同步向量到 Milvus。 */
 export const businessAgentApi = {
+  ask: (data: { scene: 'customer' | 'merchant'; storeId?: number | null; sessionId?: string; message: string }) =>
+    request.post<any, BusinessAgentAnswer>('/business-agent/ask', data),
+  readRun: (runId: string) =>
+    request.get<any, Record<string, unknown>>(`/business-agent/runs/${runId}`),
   syncMenuKnowledge: (storeId: number) =>
     request.post<any, { accepted: boolean; count: number; message: string }>('/business-agent/knowledge/bootstrap/menu', { storeId }),
   createKnowledge: (data: { storeId: number; title: string; content: string; source: string }) =>

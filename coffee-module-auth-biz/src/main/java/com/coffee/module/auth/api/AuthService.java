@@ -17,6 +17,27 @@ public interface AuthService {
      */
     AuthResponse login(LoginRequest request);
 
+    /** 发送登录或注册用途的邮箱验证码。 */
+    /**
+     * @return 本次发送成功后的再次发送冷却秒数
+     */
+    int sendEmailCode(EmailCodeRequest request);
+
+    /** 给已登录顾客发送绑定邮箱验证码。 */
+    int sendEmailBindCode(Long userId, String email);
+
+    /** 已注册会员使用邮箱验证码登录。 */
+    AuthResponse emailLogin(EmailLoginRequest request);
+
+    /** 邮箱验证码校验通过后创建会员账号。 */
+    AuthResponse emailRegister(EmailRegisterRequest request);
+
+    /** 校验绑定用途验证码后绑定邮箱。 */
+    AuthResponse bindEmail(Long userId, EmailBindRequest request);
+
+    /** 直接解绑当前顾客邮箱。 */
+    AuthResponse unbindEmail(Long userId);
+
     /**
      * 获取用户信息
      */

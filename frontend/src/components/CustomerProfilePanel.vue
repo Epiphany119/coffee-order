@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { authApi } from '@/api'
 import { useAppStore } from '@/stores/app'
@@ -12,14 +12,21 @@ const form = reactive<UserProfileUpdateRequest>({
   birthday: null,
   wechatId: '',
   qqNumber: '',
-  email: '',
   otherInfo: ''
 })
+const emailForm = reactive({ email: '', code: '' })
 const saving = ref(false)
 const uploading = ref(false)
+const emailCodeSending = ref(false)
+const emailBinding = ref(false)
+const emailUnbinding = ref(false)
+const emailCountdown = ref(0)
+const emailBindingOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+let emailTimer: ReturnType<typeof window.setInterval> | undefined
 
 const avatarUrl = computed(() => store.currentUser?.avatarUrl || '')
+const boundEmail = computed(() => store.currentUser?.email || '')
 const avatarText = computed(() =>
   (store.currentUser?.nickname || store.currentUser?.username || 'U').slice(0, 1).toUpperCase()
 )
@@ -32,7 +39,6 @@ function syncFromUser() {
   form.birthday = user.birthday || null
   form.wechatId = user.wechatId || ''
   form.qqNumber = user.qqNumber || ''
-  form.email = user.email || ''
   form.otherInfo = user.otherInfo || ''
 }
 
@@ -47,6 +53,109 @@ function mergeSession(response: AuthResponse) {
 }
 
 onMounted(syncFromUser)
+
+onBeforeUnmount(() => {
+  if (emailTimer) window.clearInterval(emailTimer)
+})
+
+function startEmailCountdown(seconds: number) {
+  if (emailTimer) window.clearInterval(emailTimer)
+  emailCountdown.value = Math.max(1, Math.ceil(seconds))
+  const timer = window.setInterval(() => {
+    if (emailCountdown.value <= 1) {
+      emailCountdown.value = 0
+      window.clearInterval(timer)
+      emailTimer = undefined
+      return
+    }
+    emailCountdown.value -= 1
+  }, 1000)
+  emailTimer = timer
+}
+
+function clearEmailCountdown() {
+  if (emailTimer) window.clearInterval(emailTimer)
+  emailTimer = undefined
+  emailCountdown.value = 0
+}
+
+function validEmail(value: string) {
+  return /^[^@\s]{1,64}@[^@\s]{1,190}$/.test(value.trim())
+}
+
+async function sendEmailBindCode() {
+  const userId = store.currentUser?.id
+  const email = emailForm.email.trim()
+  if (!userId || !validEmail(email)) {
+    ElMessage.warning('请输入有效的邮箱地址')
+    return
+  }
+  emailCodeSending.value = true
+  try {
+    const result = await authApi.sendEmailBindCode(userId, email)
+    if (!result.success) {
+      ElMessage.error(result.message || '绑定验证码发送失败')
+      return
+    }
+    startEmailCountdown(result.cooldownSeconds || 60)
+    ElMessage.success('绑定验证码已发送，请查收邮箱')
+  } catch (e: any) {
+    ElMessage.error(`发送失败：${e.message}`)
+  } finally {
+    emailCodeSending.value = false
+  }
+}
+
+async function bindEmail() {
+  const userId = store.currentUser?.id
+  const email = emailForm.email.trim()
+  const code = emailForm.code.trim()
+  if (!userId || !validEmail(email) || !/^\d{6}$/.test(code)) {
+    ElMessage.warning('请输入邮箱和 6 位验证码')
+    return
+  }
+  emailBinding.value = true
+  try {
+    const result = await authApi.bindEmail(userId, { email, code })
+    if (!result.success) {
+      ElMessage.error(result.message || '邮箱绑定失败')
+      return
+    }
+    mergeSession(result)
+    emailForm.email = ''
+    emailForm.code = ''
+    emailBindingOpen.value = false
+    clearEmailCountdown()
+    ElMessage.success('邮箱绑定成功')
+  } catch (e: any) {
+    ElMessage.error(`绑定失败：${e.message}`)
+  } finally {
+    emailBinding.value = false
+  }
+}
+
+async function unbindEmail() {
+  const userId = store.currentUser?.id
+  if (!userId || !boundEmail.value) return
+  emailUnbinding.value = true
+  try {
+    const result = await authApi.unbindEmail(userId)
+    if (!result.success) {
+      ElMessage.error(result.message || '邮箱解绑失败')
+      return
+    }
+    mergeSession(result)
+    emailForm.email = ''
+    emailForm.code = ''
+    emailBindingOpen.value = false
+    clearEmailCountdown()
+    ElMessage.success('邮箱已解绑')
+  } catch (e: any) {
+    ElMessage.error(`解绑失败：${e.message}`)
+  } finally {
+    emailUnbinding.value = false
+  }
+}
 
 async function saveProfile() {
   if (!store.currentUser?.id) return
@@ -125,9 +234,56 @@ async function uploadAvatar(event: Event) {
           <label>昵称<input v-model="form.nickname" maxlength="50" placeholder="怎么称呼你" /></label>
           <label>联系电话<input v-model="form.phone" maxlength="30" inputmode="tel" placeholder="用于订单联系，可选" /></label>
           <label>生日<input v-model="form.birthday" type="date" /></label>
-          <label>邮箱<input v-model="form.email" type="email" maxlength="120" placeholder="name@example.com" /></label>
           <label>微信号<input v-model="form.wechatId" maxlength="80" placeholder="可选" /></label>
           <label>QQ 号<input v-model="form.qqNumber" maxlength="20" inputmode="numeric" placeholder="可选" /></label>
+        </div>
+
+        <div class="form-section-title email-section-title">
+          <span>邮箱安全</span>
+          <small>独立验证，保护账号登录与找回</small>
+        </div>
+        <div class="email-security-card" :class="{ 'is-bound': boundEmail }">
+          <div class="email-security-main">
+            <span class="email-security-icon" aria-hidden="true">✉</span>
+            <div class="email-security-copy">
+              <div class="email-security-title">
+                <b>{{ boundEmail ? '邮箱已绑定' : '暂未绑定邮箱' }}</b>
+                <span :class="['email-status-pill', { 'is-bound': boundEmail }]">{{ boundEmail ? '已验证' : '建议绑定' }}</span>
+              </div>
+              <small>{{ boundEmail || '绑定后可使用邮箱验证码登录与找回账号' }}</small>
+            </div>
+          </div>
+          <button v-if="boundEmail" class="unbind-email-btn" type="button" :disabled="emailUnbinding" @click="unbindEmail">
+            {{ emailUnbinding ? '解绑中...' : '解绑邮箱' }}
+          </button>
+          <button v-else class="email-entry-btn" type="button" :aria-expanded="emailBindingOpen" @click="emailBindingOpen = !emailBindingOpen">
+            {{ emailBindingOpen ? '收起' : '绑定邮箱' }}
+            <span aria-hidden="true">{{ emailBindingOpen ? '⌃' : '›' }}</span>
+          </button>
+        </div>
+
+        <div v-if="!boundEmail && emailBindingOpen" class="email-bind-card">
+          <div class="email-bind-heading">
+            <div>
+              <b>验证邮箱并完成绑定</b>
+              <small>一次验证即可生效，验证码仅用于本次绑定</small>
+            </div>
+            <span class="email-flow-pill">一次验证</span>
+          </div>
+          <div class="email-bind-grid">
+            <label>邮箱<input v-model="emailForm.email" type="email" maxlength="120" autocomplete="email" placeholder="name@example.com" /></label>
+            <label>验证码
+              <div class="email-code-row">
+                <input v-model="emailForm.code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" />
+                <button class="email-send-code-btn" type="button" :disabled="emailCodeSending || emailCountdown > 0" @click="sendEmailBindCode">
+                  {{ emailCodeSending ? '发送中...' : emailCountdown > 0 ? `${emailCountdown}s 后重试` : '获取验证码' }}
+                </button>
+              </div>
+            </label>
+          </div>
+          <button class="bind-email-btn" type="button" :disabled="emailBinding" @click="bindEmail">
+            {{ emailBinding ? '验证中...' : '验证并绑定邮箱' }}
+          </button>
         </div>
 
         <div class="form-section-title">更多信息</div>
@@ -166,9 +322,44 @@ async function uploadAvatar(event: Event) {
 .profile-form input, .profile-form textarea { width: 100%; box-sizing: border-box; border: 1px solid #e3e2da; border-radius: 9px; outline: none; padding: 11px 12px; color: #294136; background: #fff; font: inherit; font-size: 12px; resize: vertical; }
 .profile-form input:focus, .profile-form textarea:focus { border-color: #9cb4a2; box-shadow: 0 0 0 3px rgba(102, 146, 116, .1); }
 .full-field { display: grid; }
+.email-section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.email-section-title small { color: #a5aea7; font-size: 10px; font-weight: 400; }
+.email-security-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 16px; border: 1px solid #eadbca; border-radius: 14px; background: linear-gradient(112deg, #fffaf4, #fffdf9); }
+.email-security-card.is-bound { border-color: #d9e8dc; background: linear-gradient(112deg, #f7fcf7, #fbfdf9); }
+.email-security-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.email-security-icon { display: grid; width: 36px; height: 36px; flex: none; place-items: center; border: 1px solid #efd8c7; border-radius: 11px; color: #c86f4c; background: #fff3e9; font-size: 17px; }
+.is-bound .email-security-icon { border-color: #cee3d3; color: #4d9563; background: #eaf6ed; }
+.email-security-copy { min-width: 0; }
+.email-security-title { display: flex; align-items: center; gap: 8px; }
+.email-security-title b { color: #3a5144; font-size: 12px; }
+.email-security-copy > small { display: block; max-width: 360px; margin-top: 5px; overflow: hidden; color: #89968e; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.email-status-pill { flex: none; border-radius: 999px; padding: 4px 7px; color: #a87c5b; background: #f8eadc; font-size: 9px; font-weight: 700; }
+.email-status-pill.is-bound { color: #4b8c5c; background: #e6f3e8; }
+.email-entry-btn, .unbind-email-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; min-width: 84px; border-radius: 8px; padding: 9px 12px; font-size: 11px; font-weight: 700; cursor: pointer; }
+.email-entry-btn { border: 1px solid #d8e5da; color: #347050; background: #f2f9f3; }
+.email-entry-btn:hover { border-color: #9cbea5; background: #e7f4e9; }
+.unbind-email-btn { border: 1px solid #e5cfc5; color: #bd6548; background: #fffaf7; }
+.unbind-email-btn:hover { border-color: #d99b86; background: #fff3ed; }
+.unbind-email-btn:disabled { opacity: .55; cursor: wait; }
+.email-bind-card { padding: 16px; border: 1px solid #eadbca; border-radius: 14px; background: #fffaf4; }
+.email-bind-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; margin-bottom: 14px; }
+.email-bind-heading b, .email-bind-heading small { display: block; }
+.email-bind-heading b { color: #4a5d51; font-size: 12px; }
+.email-bind-heading small { margin-top: 4px; color: #9a8b7c; font-size: 10px; }
+.email-flow-pill { flex: none; border-radius: 999px; padding: 5px 8px; color: #a87c5b; background: #f8eadc; font-size: 10px; font-weight: 700; }
+.email-bind-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 14px; }
+.email-bind-grid label { min-width: 0; }
+.email-code-row { display: flex; gap: 8px; align-items: center; }
+.email-code-row input { min-width: 0; flex: 1; }
+.email-send-code-btn { flex: 0 0 104px; border: 1px solid #d7e4da; border-radius: 8px; padding: 10px 8px; color: #337051; background: #f2f9f3; font-size: 10px; white-space: nowrap; cursor: pointer; }
+.email-send-code-btn:hover:not(:disabled) { border-color: #9cbea5; background: #e9f4eb; }
+.email-send-code-btn:disabled { color: #9aa59e; background: #f4f5f2; cursor: not-allowed; }
+.bind-email-btn { width: 100%; margin-top: 12px; border: 0; border-radius: 8px; padding: 10px 14px; color: #fff; background: #194234; font-size: 11px; font-weight: 800; cursor: pointer; }
+.bind-email-btn:hover { background: #2b604b; }
+.bind-email-btn:disabled { opacity: .55; cursor: wait; }
 .profile-actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 8px; padding-top: 17px; border-top: 1px solid #f0ede6; color: #9aa59e; font-size: 10px; }
 .save-profile-btn { border: 0; border-radius: 9px; padding: 11px 20px; color: #fff; background: #194234; font-size: 12px; font-weight: 800; cursor: pointer; }
 .save-profile-btn:hover { background: #2b604b; }
 .save-profile-btn:disabled { opacity: .55; cursor: wait; }
-@media (max-width: 640px) { .customer-profile-panel { width: min(100% - 28px, 560px); padding-top: 22px; } .profile-intro { display: block; } .profile-security { width: fit-content; margin-top: 14px; text-align: left; } .profile-card { padding: 17px; } .profile-grid { grid-template-columns: 1fr; } .profile-actions { align-items: flex-start; flex-direction: column; } .save-profile-btn { width: 100%; } }
+@media (max-width: 640px) { .customer-profile-panel { width: min(100% - 28px, 560px); padding-top: 22px; } .profile-intro { display: block; } .profile-security { width: fit-content; margin-top: 14px; text-align: left; } .profile-card { padding: 17px; } .profile-grid, .email-bind-grid { grid-template-columns: 1fr; } .email-section-title { align-items: flex-start; flex-direction: column; gap: 4px; } .email-security-card { align-items: flex-start; flex-direction: column; } .email-security-main { width: 100%; } .email-entry-btn, .unbind-email-btn { width: 100%; } .profile-actions { align-items: flex-start; flex-direction: column; } .save-profile-btn, .bind-email-btn { width: 100%; } }
 </style>

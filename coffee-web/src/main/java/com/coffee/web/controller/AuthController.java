@@ -54,6 +54,52 @@ public class AuthController {
         return withToken(authService.login(request));
     }
 
+    /** 向用户邮箱发送一次性登录或注册验证码。 */
+    @PostMapping("/email/send-code")
+    public Map<String, Object> sendEmailCode(@RequestBody EmailCodeRequest request) {
+        int cooldownSeconds = authService.sendEmailCode(request);
+        return Map.of("success", true, "message", "验证码已发送，请查收邮箱", "cooldownSeconds", cooldownSeconds);
+    }
+
+    /** 已登录顾客绑定邮箱专用的验证码入口；验证码用途固定为 BIND。 */
+    @PostMapping("/user/{id}/email/send-code")
+    public Map<String, Object> sendEmailBindCode(@PathVariable Long id,
+                                                  @RequestBody EmailCodeRequest request) {
+        AccessGuard.requireUser(id);
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        int cooldownSeconds = authService.sendEmailBindCode(id, request.getEmail());
+        return Map.of("success", true, "message", "绑定验证码已发送，请查收邮箱", "cooldownSeconds", cooldownSeconds);
+    }
+
+    /** 已创建账户的用户可仅凭邮箱验证码登录。 */
+    @PostMapping("/email/login")
+    public AuthResponse emailLogin(@RequestBody EmailLoginRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        return withToken(authService.emailLogin(request));
+    }
+
+    /** 使用邮箱验证码创建会员账户。 */
+    @PostMapping("/email/register")
+    public AuthResponse emailRegister(@RequestBody EmailRegisterRequest request) {
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        return withToken(authService.emailRegister(request));
+    }
+
+    /** 验证绑定用途验证码后写入当前顾客邮箱。 */
+    @PutMapping("/user/{id}/email")
+    public AuthResponse bindEmail(@PathVariable Long id, @RequestBody EmailBindRequest request) {
+        AccessGuard.requireUser(id);
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        return withToken(authService.bindEmail(id, request));
+    }
+
+    /** 解绑当前顾客邮箱，不需要再次输入验证码。 */
+    @DeleteMapping("/user/{id}/email")
+    public AuthResponse unbindEmail(@PathVariable Long id) {
+        AccessGuard.requireUser(id);
+        return withToken(authService.unbindEmail(id));
+    }
+
     @PostMapping("/forgot-password")
     public Map<String, Object> forgotPassword(@RequestBody ForgotPasswordRequest request) {
         if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");

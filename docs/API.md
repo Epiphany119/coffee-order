@@ -7,19 +7,25 @@
 
 > 全部接口索引，点击跳转到对应章节；模块概览见 [三、接口总览](#三接口总览)。
 
-### 四、认证模块（9 个）
+### 四、认证模块（15 个）
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
 | 4.1 | [用户注册](#41-用户注册) | `POST /api/auth/register` |
 | 4.2 | [用户登录](#42-用户登录) | `POST /api/auth/login` |
-| 4.3 | [忘记密码](#43-忘记密码申请重置令牌) | `POST /api/auth/forgot-password` |
-| 4.4 | [重置密码](#44-重置密码) | `POST /api/auth/reset-password` |
-| 4.5 | [查询用户信息](#45-查询用户信息) | `GET /api/auth/user/{id}` |
-| 4.6 | [查询用户店铺偏好](#46-查询用户店铺偏好) | `GET /api/auth/user/{id}/preference` |
-| 4.7 | [保存用户店铺偏好](#47-保存用户店铺偏好) | `PUT /api/auth/user/{id}/preference` |
-| 4.8 | [更新用户个人资料](#48-更新用户个人资料) | `PUT /api/auth/user/{id}/profile` |
-| 4.9 | [上传用户头像](#49-上传用户头像) | `POST /api/auth/user/{id}/avatar` |
+| 4.3 | [发送邮箱验证码](#43-发送邮箱验证码) | `POST /api/auth/email/send-code` |
+| 4.4 | [邮箱验证码登录](#44-邮箱验证码登录) | `POST /api/auth/email/login` |
+| 4.5 | [邮箱验证码注册](#45-邮箱验证码注册) | `POST /api/auth/email/register` |
+| 4.6 | [忘记密码](#46-忘记密码申请重置令牌) | `POST /api/auth/forgot-password` |
+| 4.7 | [重置密码](#47-重置密码) | `POST /api/auth/reset-password` |
+| 4.8 | [查询用户信息](#48-查询用户信息) | `GET /api/auth/user/{id}` |
+| 4.9 | [查询用户店铺偏好](#49-查询用户店铺偏好) | `GET /api/auth/user/{id}/preference` |
+| 4.10 | [保存用户店铺偏好](#410-保存用户店铺偏好) | `PUT /api/auth/user/{id}/preference` |
+| 4.11 | [更新用户个人资料](#411-更新用户个人资料) | `PUT /api/auth/user/{id}/profile` |
+| 4.12 | [上传用户头像](#412-上传用户头像) | `POST /api/auth/user/{id}/avatar` |
+| 4.13 | [发送绑定邮箱验证码](#413-发送绑定邮箱验证码) | `POST /api/auth/user/{id}/email/send-code` |
+| 4.14 | [绑定邮箱](#414-绑定邮箱) | `PUT /api/auth/user/{id}/email` |
+| 4.15 | [解绑邮箱](#415-解绑邮箱) | `DELETE /api/auth/user/{id}/email` |
 
 ### 五、游客模块（1 个）
 
@@ -339,7 +345,7 @@ Authorization: Bearer {accessToken}
 |---|---|
 | 用户名不能为空 | username 缺失 |
 | 密码不能为空 | password 缺失 |
-| 密码至少需要8个字符 / 密码必须包含至少一个字母 / 密码必须包含至少一个数字 | 密码强度校验不通过（`PasswordValidator`） |
+| 密码至少需要6个字符 / 密码必须包含至少一个字母 / 密码必须包含至少一个数字 | 密码强度校验不通过（`PasswordValidator`） |
 | 用户名已存在 | 用户名被占用 |
 
 ### 4.2 用户登录
@@ -369,7 +375,97 @@ Authorization: Bearer {accessToken}
 |---|---|
 | 用户名或密码错误 | 参数缺失 / 用户不存在 / 密码不匹配（不区分提示） |
 
-### 4.3 忘记密码（申请重置令牌）
+### 4.3 发送邮箱验证码
+
+**`POST /api/auth/email/send-code`**
+
+作用：向指定邮箱发送一次性验证码。`LOGIN` 与 `REGISTER` 验证码相互隔离，不能跨用途使用。
+
+请求体（`EmailCodeRequest`）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| email | string | ✅ | 接收验证码的邮箱 |
+| purpose | string | ✅ | `LOGIN`（邮箱登录）或 `REGISTER`（邮箱注册） |
+
+请求示例：
+
+```json
+{ "email": "alice@qq.com", "purpose": "LOGIN" }
+```
+
+成功响应（200）：
+
+```json
+{ "success": true, "message": "验证码已发送，请查收邮箱", "cooldownSeconds": 60 }
+```
+
+安全与频率规则：验证码默认 5 分钟有效、最多校验 5 次；验证码哈希同时写入 Redis 和 MySQL，Redis 丢失或不可用时由 MySQL 校验兜底。成功使用、过期或错误次数耗尽后都会删除 MySQL 临时记录，并同步删除 Redis key；Redis key 自带同样的 TTL。单邮箱每次发送至少间隔 60 秒；不论从登录还是注册入口申请，10 分钟窗口内成功申请第 6 次时，该邮箱冷却 10 分钟。
+
+失败响应（格式 A 错误体）：
+
+| code | message | 场景 |
+|---|---|---|
+| 400 | 请输入有效的邮箱地址 | email 格式无效 |
+| 429 | 请 N 秒后再获取验证码 / 请求过于频繁 | 单次间隔或 10 分钟冷却未结束 |
+| 502 | 验证码邮件发送失败，请稍后再试 | QQ SMTP 发送失败 |
+
+### 4.4 邮箱验证码登录
+
+**`POST /api/auth/email/login`**
+
+作用：已绑定邮箱的会员使用一次性验证码登录。验证码成功后立即作废，响应会签发正常用户访问令牌。
+
+请求体（`EmailLoginRequest`）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| email | string | ✅ | 已注册邮箱 |
+| code | string | ✅ | 6 位 `LOGIN` 验证码 |
+
+请求示例：
+
+```json
+{ "email": "alice@qq.com", "code": "123456" }
+```
+
+成功响应（200）：同 4.1（额外包含 `accessToken`）。
+
+失败响应（HTTP 200，格式 B，`success=false`）：`验证码错误、已过期或已使用，请重新获取`；若邮箱未绑定账户则返回 `该邮箱尚未创建账户，请选择邮箱注册`。
+
+### 4.5 邮箱验证码注册
+
+**`POST /api/auth/email/register`**
+
+作用：先验证邮箱，再创建一个绑定该邮箱的会员账户；成功后自动登录。
+
+请求体（`EmailRegisterRequest`）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| email | string | ✅ | 要绑定的邮箱 |
+| code | string | ✅ | 6 位 `REGISTER` 验证码 |
+| username | string | ✅ | 2-50 字符，系统内唯一 |
+| password | string | ✅ | 至少 6 位，同时含字母和数字 |
+| nickname | string | ❌ | 昵称，缺省取 username |
+
+请求示例：
+
+```json
+{
+  "email": "alice@qq.com",
+  "code": "123456",
+  "username": "alice",
+  "password": "alice2026",
+  "nickname": "爱丽丝"
+}
+```
+
+成功响应（200）：同 4.1（额外包含 `accessToken`）。
+
+失败响应（HTTP 200，格式 B，`success=false`）：`用户名已存在`、`该邮箱已创建账户，请选择邮箱登录`、`验证码错误、已过期或已使用，请重新获取` 或密码强度提示。
+
+### 4.6 忘记密码（申请重置令牌）
 
 **`POST /api/auth/forgot-password`**
 
@@ -398,7 +494,7 @@ Authorization: Bearer {accessToken}
 
 | 字段 | 说明 |
 |---|---|
-| token | 可选，重置令牌（30 分钟有效），提交 4.4 时使用；仅本地显式开启 `expose-reset-token` 时返回 |
+| token | 可选，重置令牌（30 分钟有效），提交 4.7 时使用；仅本地显式开启 `expose-reset-token` 时返回 |
 
 失败响应（格式 A 错误体）：
 
@@ -406,7 +502,7 @@ Authorization: Bearer {accessToken}
 |---|---|---|
 | 400 | 请输入用户名 | username 缺失 |
 
-### 4.4 重置密码
+### 4.7 重置密码
 
 **`POST /api/auth/reset-password`**
 
@@ -416,7 +512,7 @@ Authorization: Bearer {accessToken}
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| token | string | ✅ | 4.3 获取的重置令牌 |
+| token | string | ✅ | 4.6 获取的重置令牌 |
 | newPassword | string | ✅ | 新密码 |
 
 请求示例：
@@ -433,10 +529,10 @@ Authorization: Bearer {accessToken}
 |---|---|
 | 令牌不能为空 | token 缺失 |
 | 新密码不能为空 | newPassword 缺失 |
-| 密码至少需要8个字符 / 密码必须包含至少一个字母 / 密码必须包含至少一个数字 | 密码强度校验不通过 |
+| 密码至少需要6个字符 / 密码必须包含至少一个字母 / 密码必须包含至少一个数字 | 密码强度校验不通过 |
 | 令牌无效或已过期 | 令牌不存在 / 已使用 / 超 30 分钟 |
 
-### 4.5 查询用户信息
+### 4.8 查询用户信息
 
 **`GET /api/auth/user/{id}`**
 
@@ -456,7 +552,7 @@ Authorization: Bearer {accessToken}
 |---|---|
 | 用户不存在 | 用户 id 无效 |
 
-### 4.6 查询用户店铺偏好
+### 4.9 查询用户店铺偏好
 
 **`GET /api/auth/user/{id}/preference`**
 
@@ -474,7 +570,7 @@ Authorization: Bearer {accessToken}
 |---|---|
 | lastStoreId | 上次选店 id；无偏好时为 `null` |
 
-### 4.7 保存用户店铺偏好
+### 4.10 保存用户店铺偏好
 
 **`PUT /api/auth/user/{id}/preference`**
 
@@ -498,7 +594,7 @@ Authorization: Bearer {accessToken}
 { "success": true, "message": "偏好已保存" }
 ```
 
-### 4.8 更新用户个人资料
+### 4.11 更新用户个人资料
 
 **`PUT /api/auth/user/{id}/profile`**
 
@@ -513,22 +609,69 @@ Authorization: Bearer {accessToken}
   "birthday": "1998-05-20",
   "wechatId": "alice_fika",
   "qqNumber": "123456789",
-  "email": "alice@example.com",
   "otherInfo": "偏好少冰"
 }
 ```
 
-校验规则：生日不能晚于当天；电话和邮箱按格式校验；昵称 50 字符、微信号 80 字符、QQ 20 字符、其他信息 500 字符以内。
+校验规则：生日不能晚于当天；电话按格式校验；昵称 50 字符、微信号 80 字符、QQ 20 字符、其他信息 500 字符以内。邮箱不在普通资料接口中直接修改，必须使用 4.13～4.15 的邮箱绑定接口完成验证、绑定或解绑。
 
 成功响应：`AuthResponse`，包含更新后的资料字段和新的用户访问令牌。
 
-### 4.9 上传用户头像
+### 4.12 上传用户头像
 
 **`POST /api/auth/user/{id}/avatar`**
 
 请求格式：`multipart/form-data`，字段名 `file`。仅允许 JPG、PNG、WEBP，单张不超过 5MB。文件保存到服务端上传目录，数据库只保存 `/uploads/...` 站内相对地址。
 
 成功响应：`AuthResponse`，其中 `avatarUrl` 为头像地址。
+
+### 4.13 发送绑定邮箱验证码
+
+**`POST /api/auth/user/{id}/email/send-code`**
+
+作用：为当前登录顾客发送绑定邮箱验证码。接口会将验证码用途固定为 `BIND`，不能使用登录或注册验证码代替。
+
+鉴权：需要当前用户的 `Bearer accessToken`，且路径中的 `id` 必须与令牌用户一致。
+
+请求体：
+
+```json
+{ "email": "alice@qq.com" }
+```
+
+成功响应（200）：
+
+```json
+{ "success": true, "message": "绑定验证码已发送，请查收邮箱", "cooldownSeconds": 60 }
+```
+
+邮箱验证码的有效期、Redis/MySQL 双写兜底和发送频率限制与 4.3 一致。
+
+### 4.14 绑定邮箱
+
+**`PUT /api/auth/user/{id}/email`**
+
+作用：校验一次绑定验证码。验证码验证成功后才会将邮箱写入当前顾客账号，并立即作废该验证码。
+
+鉴权：需要当前用户的 `Bearer accessToken`，且路径中的 `id` 必须与令牌用户一致。
+
+请求体：
+
+```json
+{ "email": "alice@qq.com", "code": "123456" }
+```
+
+成功响应：`AuthResponse`，包含已绑定的 `email` 和新的用户访问令牌。
+
+如果该邮箱已被其他账号绑定，或验证码错误、过期、已使用，接口会拒绝本次绑定。
+
+### 4.15 解绑邮箱
+
+**`DELETE /api/auth/user/{id}/email`**
+
+作用：清除当前顾客账号的绑定邮箱。已登录且拥有该账号权限时可直接解绑，不再要求输入验证码或二次确认。
+
+成功响应：`AuthResponse`，其中 `email` 为 `null`，并包含新的用户访问令牌。
 
 ## 五、游客模块
 
@@ -2235,6 +2378,9 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 | signals | 经营信号数组（订单、营业额、履约、秒杀库存） |
 | snapshot | 原始统计快照：`todayOrders`、`todayRevenue`、`pendingOrders`、`weekRevenue`、`flashSaleStock` |
 | suggestedAction | 待确认动作：`actionType`、`title`、`summary`、`reason`、`proposal` |
+| toolCalls | 本次诊断实际调用的只读工具、状态、耗时和返回条数 |
+| executionPlan | Agent 展示给店长的受控执行步骤 |
+| requiresConfirmation | 是否需要店长确认后才能进入写操作链路 |
 | engine | 当前执行引擎标识：`FIKA Growth Agent · rule-tools` |
 
 `actionType` 当前只允许 `NOTIFY_MEMBERS`（站内通知）和 `CREATE_VOUCHERS`（发券并通知）。规则引擎可替换为 LLM Function Calling，但 LLM 只能选择受控工具，不能获得直接写库权限。
@@ -2278,6 +2424,32 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 成功响应：`data` 为数组，包含 `id`、`actionType`、`title`、`status`、`createdAt`、`executedAt`。
 
 > 使用前先执行 [V20260831_12_runtime_consistency.sql](../sql/migrations/V20260831_12_runtime_consistency.sql) 创建审计表及相关运行时表。
+
+### 18.5 统一只读 Agent 与运行轨迹
+
+**`POST /api/business-agent/ask`**
+
+作用：根据 `scene` 在顾客或商家范围内生成结构化计划，并执行当前场景允许的只读工具。模型输出会经过工具白名单、场景和只读属性校验；该接口不会直接下单、扣款、发券或修改库存。
+
+请求体：
+
+```json
+{
+  "scene": "merchant",
+  "storeId": 5,
+  "message": "最近复购下降，但今天待制作订单很多，应该怎么做？"
+}
+```
+
+成功响应的 `data` 包含 `runId`、`structuredPlan`、`tools`、`answer` 和 `engine`。`structuredPlan.steps` 中的每一步包含 `tool`、受限 `arguments` 和 `purpose`；`tools` 中包含 `callId`、`latencyMs`、`readOnly`、`success` 和返回数据。
+
+**`POST /api/business-agent/stream`**
+
+以 SSE 推送 `status`、`plan`、`tools`、`delta` 和 `done` 事件；`plan` 与 `done` 事件均携带 `runId`。
+
+**`GET /api/business-agent/runs/{runId}`**
+
+仅返回当前身份自己的 Agent 运行轨迹。执行 [V20260906_17_agent_observability.sql](../sql/migrations/V20260906_17_agent_observability.sql) 后，响应会包含运行状态和按顺序排列的工具调用记录；未执行迁移时只提示审计不可用，不影响只读 Agent 降级回答。
 
 ## 十九、顾客点单 Agent
 

@@ -144,7 +144,7 @@
 
 ### 2.12 其他运行时表
 
-`user_location` 保存登录用户最近一次定位；`flash_sale_activity` / `flash_sale_claim` 保存秒杀活动与一次性资格；`agent_knowledge_document`、`agent_menu_embedding`、`agent_conversation`、`agent_conversation_message` 保存 Agent 的可追溯知识、向量缓存与身份隔离会话；`growth_agent_action` 保存商家 Agent 操作审计；`event_consume_log`、`user_notification` 分别用于消息消费幂等和站内通知。
+`user_location` 保存登录用户最近一次定位；`flash_sale_activity` / `flash_sale_claim` 保存秒杀活动与一次性资格；`email_verification_code` 保存邮箱注册、登录和绑定验证码的 BCrypt 哈希、过期时间和错误次数，`email_verification_rate_limit` 保存按邮箱整体隔离的短期发送计数与冷却时间；用户邮箱由成功的绑定验证码流程写入，解绑时清空；`agent_knowledge_document`、`agent_menu_embedding`、`agent_conversation`、`agent_conversation_message` 保存 Agent 的可追溯知识、向量缓存与身份隔离会话；`agent_run` / `agent_tool_call` 保存 Agent 计划、工具调用耗时与运行状态；`growth_agent_action` 保存商家 Agent 操作审计；`event_consume_log`、`user_notification` 分别用于消息消费幂等和站内通知。
 
 ## 三、核心设计模式
 
@@ -158,6 +158,6 @@
 
 - 备份产物：`sql_backup/`（mysqldump 结构备份，命名 `structure_backup_YYYYMMDD.sql`）。
 - **新环境部署** = 建库 + 导入最新结构备份 + 手工导入共享数据 + 启动后端。种子店铺（21 家）与店铺座位由启动器（`StoreDataInitializer`/`SeatDataInitializer`）自动补齐；但**共享商品/共享类目无自动初始化器**——`store_id = 0` 的 50 个商品（41 个常规 + 9 个凑单品）与 5 个类目为存量数据，需从现有开发库导出（`SELECT ... WHERE store_id = 0` 的 `menu_item`/`menu_category` 行）或自行初始化，否则商家端菜单为空。
-- 当前系统**无自动 DDL**（MyBatis-Plus 不做建表，Agent 服务也不在请求过程中建表），表结构变更需手工执行迁移并重新导出备份。请按版本顺序执行 `V20260831_12_runtime_consistency.sql`、`V20260831_13_delivery_module.sql`、`V20260901_15_delivery_rider_performance_contact.sql` 和 `V20260901_16_profile_center.sql`；其中 V16 使用 `information_schema` 动态 DDL，兼容 MySQL 5.7+/8.0+ 且可重复执行，只增加资料字段，不删除或覆盖历史资料。
+- 当前系统**无自动 DDL**（MyBatis-Plus 不做建表，Agent 服务也不在请求过程中建表），表结构变更需手工执行迁移并重新导出备份。请按版本顺序执行 `V20260831_12_runtime_consistency.sql`、`V20260831_13_delivery_module.sql`、`V20260901_15_delivery_rider_performance_contact.sql`、`V20260901_16_profile_center.sql` 和 `V20260906_18_email_auth.sql`；其中 V18 创建邮箱验证码临时表和发送限流状态表。验证码哈希双写 Redis/MySQL，使用、过期或错误次数耗尽后删除 MySQL 临时记录，Redis key 同时删除并通过 TTL 自动兜底失效；Redis 丢失时不会影响 MySQL 校验兜底。V16 使用 `information_schema` 动态 DDL，兼容 MySQL 5.7+/8.0+ 且可重复执行，只增加资料字段，不删除或覆盖历史资料。
 - 迁移前建议预检：`SELECT order_id, COUNT(*) FROM payment GROUP BY order_id HAVING COUNT(*) > 1`；`SELECT user_id, order_id, COUNT(*) FROM after_sale GROUP BY user_id, order_id HAVING COUNT(*) > 1`；`SELECT user_id, product_code, COUNT(*) FROM user_favorite WHERE user_id IS NOT NULL GROUP BY user_id, product_code HAVING COUNT(*) > 1`；游客收藏将 `user_id` 换为 `guest_id`；菜单、店铺、商家编号也应分别检查 `(store_id, code)`、`merchant_id`、`merchant_no` 重复。
 - 历史重构记录：`product`/`product_category` → `menu_item`/`menu_category`（2026-08）；`guest_order` 并入 `user_order`；座位单表 → 三表（`seat_template`/`store`/`seat`）。

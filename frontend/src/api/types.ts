@@ -6,6 +6,35 @@ export interface AuthRequest {
   challengeCode?: string
 }
 
+export type EmailCodePurpose = 'LOGIN' | 'REGISTER'
+
+export interface EmailCodeRequest {
+  email: string
+  purpose: EmailCodePurpose
+}
+
+export interface EmailCodeResponse {
+  success: boolean
+  message: string
+  cooldownSeconds: number
+}
+
+export interface EmailLoginRequest {
+  email: string
+  code: string
+}
+
+export interface EmailBindRequest {
+  email: string
+  code: string
+}
+
+export interface EmailRegisterRequest extends EmailLoginRequest {
+  username: string
+  password: string
+  nickname?: string
+}
+
 export interface LoginChallenge {
   challengeId: string
   imageDataUrl: string
@@ -36,7 +65,6 @@ export interface UserProfileUpdateRequest {
   birthday: string | null
   wechatId: string
   qqNumber: string
-  email: string
   otherInfo: string
 }
 
@@ -197,12 +225,61 @@ export interface GrowthAgentAnalysis {
   signals: GrowthAgentSignal[]
   understanding?: string
   dataSources?: string[]
+  executionPlan?: string[]
+  toolCalls?: GrowthAgentToolCall[]
+  requiresConfirmation?: boolean
+  planningMode?: string
+  analysisId?: string
   suggestedAction: GrowthAgentProposal
   snapshot: { todayOrders: number; todayRevenue: number; pendingOrders: number; weekRevenue: number; flashSaleStock: number }
   storeId: number
   storeName: string
   engine: string
   disclaimer: string
+}
+
+export interface GrowthAgentToolCall {
+  name: string
+  readOnly: boolean
+  status: string
+  latencyMs: number
+  resultCount: number
+  note: string
+}
+
+export interface BusinessAgentPlanStep {
+  tool: string
+  arguments: Record<string, unknown>
+  purpose: string
+}
+
+export interface BusinessAgentPlan {
+  intent: string
+  steps: BusinessAgentPlanStep[]
+  requiresConfirmation: boolean
+  rationale: string
+  source: string
+}
+
+export interface BusinessAgentToolResult {
+  name: string
+  success: boolean
+  data: Record<string, unknown>[]
+  note: string
+  callId: string
+  latencyMs: number
+  readOnly: boolean
+  arguments: Record<string, unknown>
+}
+
+export interface BusinessAgentAnswer {
+  sessionId: string
+  plan: string[]
+  tools: BusinessAgentToolResult[]
+  answer: string
+  engine: string
+  runId: string
+  structuredPlan: BusinessAgentPlan
 }
 
 export interface GrowthAgentAction {

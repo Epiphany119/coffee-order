@@ -5,6 +5,8 @@ import com.coffee.common.core.result.Result;
 import com.coffee.web.agent.BusinessAgentOrchestrator;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.security.RequestIdentity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -32,6 +34,12 @@ public class BusinessAgentController {
         return Result.success(execute(request));
     }
 
+    /** 仅允许当前身份读取自己的 Agent 运行轨迹，便于排查工具调用和面试演示。 */
+    @GetMapping("/runs/{runId}")
+    public Result<Map<String, Object>> readRun(@PathVariable String runId) {
+        return Result.success(orchestrator.readRun(AccessGuard.currentIdentity(), runId));
+    }
+
     @PostMapping("/knowledge/documents")
     public Result<Map<String, Object>> upsertKnowledge(@RequestBody KnowledgeRequest request) {
         if (request == null) throw new ServiceException(400, "缺少知识文档");
@@ -55,12 +63,17 @@ public class BusinessAgentController {
             try {
                 emitter.send(SseEmitter.event().name("status").data(Map.of("stage", "planning")));
                 BusinessAgentOrchestrator.AgentAnswer result = orchestrator.execute(identity, request.scene, request.storeId, request.sessionId, request.message);
-                emitter.send(SseEmitter.event().name("plan").data(Map.of("sessionId", result.sessionId(), "steps", result.plan())));
+                emitter.send(SseEmitter.event().name("plan").data(Map.of(
+                        "sessionId", result.sessionId(),
+                        "runId", result.runId(),
+                        "steps", result.plan(),
+                        "structuredPlan", result.structuredPlan())));
                 emitter.send(SseEmitter.event().name("tools").data(result.tools()));
                 for (int index = 0; index < result.answer().length(); index += 8) {
                     emitter.send(SseEmitter.event().name("delta").data(result.answer().substring(index, Math.min(index + 8, result.answer().length()))));
                 }
-                emitter.send(SseEmitter.event().name("done").data(Map.of("sessionId", result.sessionId())));
+                emitter.send(SseEmitter.event().name("done").data(Map.of(
+                        "sessionId", result.sessionId(), "runId", result.runId())));
                 emitter.complete();
             } catch (Exception e) {
                 try { emitter.send(SseEmitter.event().name("error").data(Map.of("message", "Agent 服务暂时不可用，请稍后重试"))); } catch (IOException ignored) { }

@@ -4,8 +4,11 @@ import com.coffee.common.core.result.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.MissingRequestValueException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
@@ -36,6 +39,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public Result<Void> handleUnreadableMessage(HttpMessageNotReadableException e) {
         return Result.error(400, "请求体格式无效");
+    }
+
+    /** 浏览器直接打开只允许 POST 的接口时，返回明确的 405，而不是记为未处理的 500。 */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)
+    public Result<Void> handleUnsupportedMethod(HttpRequestMethodNotSupportedException e) {
+        return Result.error(405, "当前接口不支持 GET，请使用 POST 请求");
     }
 
     @ExceptionHandler({MissingRequestValueException.class, MethodArgumentTypeMismatchException.class})

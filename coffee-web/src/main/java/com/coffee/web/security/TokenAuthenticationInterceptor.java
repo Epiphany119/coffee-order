@@ -68,6 +68,9 @@ public class TokenAuthenticationInterceptor implements HandlerInterceptor {
         if (path.startsWith("/api/pay/callback/")) return true;
         return "/api/auth/login".equals(path)
                 || "/api/auth/register".equals(path)
+                || "/api/auth/email/send-code".equals(path)
+                || "/api/auth/email/login".equals(path)
+                || "/api/auth/email/register".equals(path)
                 || "/api/auth/forgot-password".equals(path)
                 || "/api/auth/reset-password".equals(path)
                 || "/api/merchant/login".equals(path)
