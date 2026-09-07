@@ -107,6 +107,25 @@ public class AuthController {
         return withToken(authService.unbindEmail(id, email));
     }
 
+    /** 当前登录用户使用已绑定邮箱完成密码操作的二次身份验证。 */
+    @PostMapping("/user/{id}/password/send-code")
+    public Map<String, Object> sendPasswordVerificationCode(@PathVariable Long id,
+                                                             @RequestBody EmailCodeRequest request) {
+        AccessGuard.requireUser(id);
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        int cooldownSeconds = authService.sendPasswordVerificationCode(id, request.getEmail());
+        return Map.of("success", true, "message", "身份验证码已发送，请查收邮箱", "cooldownSeconds", cooldownSeconds);
+    }
+
+    /** 设置或修改密码；成功后不续签令牌，客户端必须清除当前登录状态。 */
+    @PutMapping("/user/{id}/password")
+    public AuthResponse updatePassword(@PathVariable Long id,
+                                       @RequestBody UserPasswordUpdateRequest request) {
+        AccessGuard.requireUser(id);
+        if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
+        return authService.updatePassword(id, request);
+    }
+
     @PostMapping("/forgot-password")
     public Map<String, Object> forgotPassword(@RequestBody ForgotPasswordRequest request) {
         if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");

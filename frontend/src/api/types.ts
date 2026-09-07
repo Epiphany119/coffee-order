@@ -36,6 +36,16 @@ export interface EmailBindRequest {
   code: string
 }
 
+export interface UserPasswordUpdateRequest {
+  /** 有密码时默认使用原密码验证；切换邮箱验证时不传。 */
+  currentPassword?: string
+  /** 必须是当前账号已经绑定的邮箱。 */
+  email?: string
+  emailCode?: string
+  newPassword: string
+  confirmPassword: string
+}
+
 export interface EmailRegisterRequest extends EmailLoginRequest {
   username: string
   password: string
@@ -65,6 +75,8 @@ export interface AuthResponse {
   qqNumber?: string | null
   email?: string | null
   emails?: string[] | null
+  /** 仅表示是否已设置密码，不包含任何密码敏感信息。 */
+  passwordSet?: boolean
   otherInfo?: string | null
   accessToken?: string | null
 }

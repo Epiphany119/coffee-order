@@ -267,6 +267,9 @@ public class AuthApplicationService implements AuthService {
         if (!emails.contains(email)) {
             return AuthResponse.fail("该邮箱未绑定在当前账户");
         }
+        if (emails.size() == 1 && !hasPassword(user)) {
+            return AuthResponse.fail("请先设置登录密码，再解绑最后一个邮箱");
+        }
 
         userEmailRepository.delete(userId, email);
         List<String> remaining = userEmailRepository.findEmailsByUserId(userId);
@@ -278,12 +281,85 @@ public class AuthApplicationService implements AuthService {
         return toResponse(user);
     }
 
+    // ======================== 登录密码安全 ========================
+
+    @Override
+    public int sendPasswordVerificationCode(Long userId, String rawEmail) {
+        User user = userRepository.findById(userId);
+        if (user == null) throw new ServiceException(404, "用户不存在");
+        String email = requireBoundEmail(userId, rawEmail);
+        return emailVerificationService.send(email, EmailCodePurpose.PASSWORD_CHANGE);
+    }
+
+    @Override
+    @Transactional
+    public AuthResponse updatePassword(Long userId, UserPasswordUpdateRequest request) {
+        if (request == null) return AuthResponse.fail("请求不能为空");
+        User user = userRepository.findById(userId);
+        if (user == null) throw new ServiceException(404, "用户不存在");
+
+        String newPassword = request.getNewPassword();
+        String confirmPassword = request.getConfirmPassword();
+        if (newPassword == null || newPassword.isBlank()) {
+            return AuthResponse.fail("请输入新密码");
+        }
+        if (!newPassword.equals(confirmPassword)) {
+            return AuthResponse.fail("两次输入的密码不一致");
+        }
+        try {
+            PasswordValidator.validate(newPassword);
+        } catch (IllegalArgumentException ex) {
+            return AuthResponse.fail(ex.getMessage());
+        }
+
+        boolean hadPassword = hasPassword(user);
+        String currentPassword = request.getCurrentPassword();
+        if (hadPassword && currentPassword != null && !currentPassword.isBlank()) {
+            if (!verifyPassword(currentPassword, user)) {
+                return AuthResponse.fail("原密码错误，请重新输入或使用邮箱验证");
+            }
+        } else {
+            String email;
+            try {
+                email = requireBoundEmail(userId, request.getEmail());
+            } catch (ServiceException ex) {
+                return AuthResponse.fail(ex.getMessage());
+            }
+            if (!emailVerificationService.verify(
+                    email, EmailCodePurpose.PASSWORD_CHANGE, request.getEmailCode())) {
+                return AuthResponse.fail("验证码错误、已过期或已使用，请重新获取");
+            }
+        }
+
+        if (hadPassword && passwordMatches(newPassword, user.getPasswordHash())) {
+            return AuthResponse.fail("新密码不能与原密码相同");
+        }
+
+        String newHash = PasswordEncoder.encode(newPassword);
+        userRepository.updatePassword(userId, newHash);
+        user.setPasswordHash(newHash);
+        tokenRepository.invalidatePreviousTokens(userId);
+
+        AuthResponse response = toResponse(user);
+        response.setMessage(hadPassword ? "密码修改成功，请重新登录" : "密码设置成功，请重新登录");
+        return response;
+    }
+
+    private String requireBoundEmail(Long userId, String rawEmail) {
+        String email = emailVerificationService.normalizeEmail(rawEmail);
+        UserEmailRepository.UserEmailBinding binding = userEmailRepository.findByEmail(email);
+        if (binding == null || !userId.equals(binding.userId())) {
+            throw new ServiceException(403, "只能使用当前账户已绑定的邮箱进行验证");
+        }
+        return email;
+    }
+
     /**
      * 验密：先 BCrypt，失败则尝试明文（旧用户），比对成功则自动升级
      */
     private boolean verifyPassword(String rawPassword, User user) {
         String stored = user.getPasswordHash();
-        if (stored == null) {
+        if (stored == null || stored.isBlank()) {
             return false;
         }
 
@@ -301,6 +377,17 @@ public class AuthApplicationService implements AuthService {
         }
 
         return false;
+    }
+
+    private boolean passwordMatches(String rawPassword, String stored) {
+        if (rawPassword == null || stored == null || stored.isBlank()) return false;
+        return stored.startsWith("$2")
+                ? PasswordEncoder.matches(rawPassword, stored)
+                : stored.equals(rawPassword);
+    }
+
+    private boolean hasPassword(User user) {
+        return user != null && user.getPasswordHash() != null && !user.getPasswordHash().isBlank();
     }
 
     // ======================== 用户信息 ========================
@@ -452,6 +539,7 @@ public class AuthApplicationService implements AuthService {
         response.setQqNumber(user.getQqNumber());
         response.setEmail(user.getEmail());
         response.setEmails(user.getEmails());
+        response.setPasswordSet(hasPassword(user));
         response.setOtherInfo(user.getOtherInfo());
         return response;
     }

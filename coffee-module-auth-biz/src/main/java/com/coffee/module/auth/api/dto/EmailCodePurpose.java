@@ -4,5 +4,6 @@ package com.coffee.module.auth.api.dto;
 public enum EmailCodePurpose {
     LOGIN,
     REGISTER,
-    BIND
+    BIND,
+    PASSWORD_CHANGE
 }

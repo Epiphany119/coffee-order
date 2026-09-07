@@ -9,6 +9,7 @@ import type {
   EmailLoginRequest,
   EmailBindRequest,
   EmailRegisterRequest,
+  UserPasswordUpdateRequest,
   UserProfileUpdateRequest,
   ForgotPasswordRequest,
   ForgotPasswordResponse,
@@ -388,6 +389,12 @@ export const authApi = {
 
   unbindEmail: (id: number, email?: string) =>
     request.delete<any, AuthResponse>(`/auth/user/${id}/email`, email ? { params: { email } } : undefined),
+
+  sendPasswordVerificationCode: (id: number, email: string) =>
+    request.post<any, EmailCodeResponse>(`/auth/user/${id}/password/send-code`, { email }),
+
+  updatePassword: (id: number, data: UserPasswordUpdateRequest) =>
+    request.put<any, AuthResponse>(`/auth/user/${id}/password`, data),
 
   forgotPassword: (data: ForgotPasswordRequest) =>
     request.post<any, ForgotPasswordResponse>('/auth/forgot-password', data),

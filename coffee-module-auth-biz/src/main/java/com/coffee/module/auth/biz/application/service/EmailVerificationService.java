@@ -254,6 +254,7 @@ public class EmailVerificationService {
         return switch (purpose) {
             case REGISTER -> "创建会员账户";
             case BIND -> "绑定邮箱";
+            case PASSWORD_CHANGE -> "更新登录密码";
             case LOGIN -> "登录";
         };
     }

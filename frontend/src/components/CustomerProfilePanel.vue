@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { authApi } from '@/api'
 import { useAppStore } from '@/stores/app'
-import type { AuthResponse, UserProfileUpdateRequest } from '@/api/types'
+import type { AuthResponse, UserPasswordUpdateRequest, UserProfileUpdateRequest } from '@/api/types'
 
 const store = useAppStore()
 const form = reactive<UserProfileUpdateRequest>({
@@ -26,8 +26,24 @@ const emailBindingCheckState = ref<'idle' | 'checking' | 'available' | 'bound' |
 const emailBindingCheckMessage = ref('')
 const emailUnbindConfirmOpen = ref(false)
 const emailUnbindTarget = ref('')
+const passwordDialogOpen = ref(false)
+const passwordSaving = ref(false)
+const passwordCodeSending = ref(false)
+const passwordCountdown = ref(0)
+const passwordVerifyMode = ref<'current' | 'email'>('current')
+const showCurrentPassword = ref(false)
+const showNewPassword = ref(false)
+const showConfirmPassword = ref(false)
+const passwordForm = reactive({
+  currentPassword: '',
+  email: '',
+  emailCode: '',
+  newPassword: '',
+  confirmPassword: ''
+})
 const fileInput = ref<HTMLInputElement | null>(null)
 let emailTimer: ReturnType<typeof window.setInterval> | undefined
+let passwordTimer: ReturnType<typeof window.setInterval> | undefined
 
 const MAX_EMAIL_BINDINGS = 3
 const avatarUrl = computed(() => store.currentUser?.avatarUrl || '')
@@ -40,6 +56,24 @@ const boundEmails = computed(() => {
 const avatarText = computed(() =>
   (store.currentUser?.nickname || store.currentUser?.username || 'U').slice(0, 1).toUpperCase()
 )
+const passwordSet = computed(() => store.currentUser?.passwordSet === true)
+const passwordChecks = computed(() => ({
+  length: passwordForm.newPassword.length >= 6,
+  letter: /[a-zA-Z]/.test(passwordForm.newPassword),
+  digit: /[0-9]/.test(passwordForm.newPassword)
+}))
+const passwordStrong = computed(() =>
+  passwordChecks.value.length && passwordChecks.value.letter && passwordChecks.value.digit
+)
+const passwordConfirmMatches = computed(() =>
+  passwordForm.confirmPassword.length > 0 && passwordForm.confirmPassword === passwordForm.newPassword
+)
+const passwordFormReady = computed(() => {
+  const identityReady = passwordVerifyMode.value === 'current'
+    ? passwordSet.value && passwordForm.currentPassword.length > 0
+    : validEmail(passwordForm.email) && /^\d{6}$/.test(passwordForm.emailCode)
+  return identityReady && passwordStrong.value && passwordConfirmMatches.value
+})
 
 function syncFromUser() {
   const user = store.currentUser
@@ -66,6 +100,7 @@ onMounted(syncFromUser)
 
 onBeforeUnmount(() => {
   if (emailTimer) window.clearInterval(emailTimer)
+  if (passwordTimer) window.clearInterval(passwordTimer)
 })
 
 function startEmailCountdown(seconds: number) {
@@ -87,6 +122,21 @@ function clearEmailCountdown() {
   if (emailTimer) window.clearInterval(emailTimer)
   emailTimer = undefined
   emailCountdown.value = 0
+}
+
+function startPasswordCountdown(seconds: number) {
+  if (passwordTimer) window.clearInterval(passwordTimer)
+  passwordCountdown.value = Math.max(1, Math.ceil(seconds))
+  const timer = window.setInterval(() => {
+    if (passwordCountdown.value <= 1) {
+      passwordCountdown.value = 0
+      window.clearInterval(timer)
+      passwordTimer = undefined
+      return
+    }
+    passwordCountdown.value -= 1
+  }, 1000)
+  passwordTimer = timer
 }
 
 function validEmail(value: string) {
@@ -232,6 +282,112 @@ function openUnbindEmailConfirm(email: string) {
 function closeUnbindEmailConfirm() {
   if (!emailUnbinding.value) {
     emailUnbindConfirmOpen.value = false
+  }
+}
+
+function resetPasswordForm() {
+  passwordForm.currentPassword = ''
+  passwordForm.email = boundEmails.value[0] || ''
+  passwordForm.emailCode = ''
+  passwordForm.newPassword = ''
+  passwordForm.confirmPassword = ''
+  showCurrentPassword.value = false
+  showNewPassword.value = false
+  showConfirmPassword.value = false
+}
+
+function openPasswordDialog() {
+  if (!passwordSet.value && boundEmails.value.length === 0) {
+    ElMessage.warning('请先绑定邮箱，完成身份验证后再设置密码')
+    return
+  }
+  resetPasswordForm()
+  passwordVerifyMode.value = passwordSet.value ? 'current' : 'email'
+  passwordDialogOpen.value = true
+}
+
+function closePasswordDialog() {
+  if (!passwordSaving.value) passwordDialogOpen.value = false
+}
+
+function switchPasswordVerifyMode(mode: 'current' | 'email') {
+  if (mode === 'email' && boundEmails.value.length === 0) {
+    ElMessage.warning('当前账号没有可用于验证的绑定邮箱')
+    return
+  }
+  passwordVerifyMode.value = mode
+  passwordForm.currentPassword = ''
+  passwordForm.emailCode = ''
+}
+
+async function sendPasswordVerificationCode() {
+  const userId = store.currentUser?.id
+  if (!userId || !validEmail(passwordForm.email)) {
+    ElMessage.warning('请选择当前账号已绑定的邮箱')
+    return
+  }
+  passwordCodeSending.value = true
+  try {
+    const result = await authApi.sendPasswordVerificationCode(userId, passwordForm.email)
+    if (!result.success) {
+      ElMessage.error(result.message || '身份验证码发送失败')
+      return
+    }
+    startPasswordCountdown(result.cooldownSeconds || 60)
+    ElMessage.success('身份验证码已发送，请查收邮箱')
+  } catch (e: any) {
+    ElMessage.error(`发送失败：${e.message}`)
+  } finally {
+    passwordCodeSending.value = false
+  }
+}
+
+async function updateLoginPassword() {
+  const userId = store.currentUser?.id
+  if (!userId) return
+  if (!passwordStrong.value) {
+    ElMessage.warning('新密码至少 6 位，并且同时包含字母和数字')
+    return
+  }
+  if (!passwordConfirmMatches.value) {
+    ElMessage.warning('两次输入的密码不一致')
+    return
+  }
+  if (passwordVerifyMode.value === 'current' && !passwordForm.currentPassword) {
+    ElMessage.warning('请输入原密码完成身份验证')
+    return
+  }
+  if (passwordVerifyMode.value === 'email'
+      && (!validEmail(passwordForm.email) || !/^\d{6}$/.test(passwordForm.emailCode))) {
+    ElMessage.warning('请选择绑定邮箱并输入 6 位验证码')
+    return
+  }
+
+  const request: UserPasswordUpdateRequest = {
+    newPassword: passwordForm.newPassword,
+    confirmPassword: passwordForm.confirmPassword
+  }
+  if (passwordVerifyMode.value === 'current') {
+    request.currentPassword = passwordForm.currentPassword
+  } else {
+    request.email = passwordForm.email
+    request.emailCode = passwordForm.emailCode
+  }
+
+  passwordSaving.value = true
+  try {
+    const result = await authApi.updatePassword(userId, request)
+    if (!result.success) {
+      ElMessage.error(result.message || '密码更新失败')
+      return
+    }
+    passwordDialogOpen.value = false
+    ElMessage.success(result.message || '密码已更新，请重新登录')
+    store.logout()
+  } catch (e: any) {
+    ElMessage.error(`密码更新失败：${e.message}`)
+  } finally {
+    passwordSaving.value = false
   }
 }
 
@@ -391,6 +547,28 @@ async function uploadAvatar(event: Event) {
           </button>
         </div>
 
+        <div class="form-section-title email-section-title">
+          <span>账号安全</span>
+          <small>敏感操作需要再次验证身份</small>
+        </div>
+        <div class="password-security-card" :class="{ 'is-set': passwordSet }">
+          <div class="email-security-main">
+            <span class="password-security-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="3" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2" /></svg>
+            </span>
+            <div class="email-security-copy">
+              <div class="email-security-title">
+                <b>{{ passwordSet ? '登录密码已设置' : '暂未设置登录密码' }}</b>
+                <span :class="['password-status-pill', { 'is-set': passwordSet }]">{{ passwordSet ? '已保护' : '待完善' }}</span>
+              </div>
+              <small>{{ passwordSet ? '可使用用户名、FIKA 账号号码或绑定邮箱配合密码登录' : '设置后可使用用户名或 FIKA 账号号码登录' }}</small>
+            </div>
+          </div>
+          <button class="password-entry-btn" type="button" @click="openPasswordDialog">
+            {{ passwordSet ? '修改密码' : '设置密码' }} <span aria-hidden="true">›</span>
+          </button>
+        </div>
+
         <div class="form-section-title">更多信息</div>
         <label class="full-field">其他信息<textarea v-model="form.otherInfo" maxlength="500" rows="4" placeholder="例如：口味偏好、称呼习惯等（可选）"></textarea></label>
 
@@ -400,6 +578,100 @@ async function uploadAvatar(event: Event) {
         </div>
       </form>
     </div>
+
+    <Teleport to="body">
+      <div v-if="passwordDialogOpen" class="password-dialog-backdrop" @click.self="closePasswordDialog">
+        <section class="password-dialog" role="dialog" aria-modal="true" aria-labelledby="password-dialog-title">
+          <button class="password-dialog-close" type="button" aria-label="关闭密码窗口" :disabled="passwordSaving" @click="closePasswordDialog">×</button>
+          <header class="password-dialog-header">
+            <span class="password-dialog-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="3" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2" /></svg>
+            </span>
+            <div>
+              <p>ACCOUNT SECURITY</p>
+              <h3 id="password-dialog-title">{{ passwordSet ? '修改登录密码' : '创建登录密码' }}</h3>
+              <small>{{ passwordSet ? '完成身份验证后设置新密码' : '先验证绑定邮箱，确保是你本人操作' }}</small>
+            </div>
+          </header>
+
+          <div v-if="passwordSet && boundEmails.length" class="password-verify-tabs" role="tablist" aria-label="身份验证方式">
+            <button type="button" :class="{ active: passwordVerifyMode === 'current' }" @click="switchPasswordVerifyMode('current')">原密码验证</button>
+            <button type="button" :class="{ active: passwordVerifyMode === 'email' }" @click="switchPasswordVerifyMode('email')">邮箱验证码</button>
+          </div>
+
+          <div v-if="passwordVerifyMode === 'current'" class="password-dialog-section">
+            <label>原密码
+              <div class="security-password-field">
+                <input v-model="passwordForm.currentPassword" :type="showCurrentPassword ? 'text' : 'password'" maxlength="72" autocomplete="current-password" placeholder="输入当前登录密码" />
+                <button type="button" :aria-label="showCurrentPassword ? '隐藏原密码' : '显示原密码'" @click="showCurrentPassword = !showCurrentPassword">
+                  <svg v-if="showCurrentPassword" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10.7 10.7 0 0 1 12 4.9c6.5 0 9.8 7.1 9.8 7.1a18.3 18.3 0 0 1-3.1 4.1M6.3 6.3C3.8 8.1 2.2 12 2.2 12S5.5 19.1 12 19.1c1.1 0 2.1-.2 3-.5" /></svg>
+                  <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M2.2 12S5.5 4.9 12 4.9 21.8 12 21.8 12 18.5 19.1 12 19.1 2.2 12 2.2 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+                </button>
+              </div>
+            </label>
+            <button v-if="boundEmails.length" class="forgot-current-password" type="button" @click="switchPasswordVerifyMode('email')">忘记原密码？使用邮箱验证</button>
+          </div>
+
+          <div v-else class="password-dialog-section">
+            <div class="password-email-note">
+              <span aria-hidden="true">✓</span>
+              验证码只会发送到当前账号已验证的邮箱
+            </div>
+            <label>验证邮箱
+              <select v-model="passwordForm.email" autocomplete="email">
+                <option v-for="email in boundEmails" :key="email" :value="email">{{ email }}</option>
+              </select>
+            </label>
+            <label>邮箱验证码
+              <div class="password-code-row">
+                <input v-model="passwordForm.emailCode" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" />
+                <button type="button" :disabled="passwordCodeSending || passwordCountdown > 0" @click="sendPasswordVerificationCode">
+                  {{ passwordCodeSending ? '发送中...' : passwordCountdown > 0 ? `${passwordCountdown}s 后重试` : '获取验证码' }}
+                </button>
+              </div>
+            </label>
+          </div>
+
+          <div class="password-divider"><span>设置新密码</span></div>
+          <div class="password-dialog-section password-new-fields">
+            <label>新密码
+              <div class="security-password-field">
+                <input v-model="passwordForm.newPassword" :type="showNewPassword ? 'text' : 'password'" maxlength="72" autocomplete="new-password" placeholder="至少 6 位，含字母和数字" />
+                <button type="button" :aria-label="showNewPassword ? '隐藏新密码' : '显示新密码'" @click="showNewPassword = !showNewPassword">
+                  <svg v-if="showNewPassword" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10.7 10.7 0 0 1 12 4.9c6.5 0 9.8 7.1 9.8 7.1a18.3 18.3 0 0 1-3.1 4.1M6.3 6.3C3.8 8.1 2.2 12 2.2 12S5.5 19.1 12 19.1c1.1 0 2.1-.2 3-.5" /></svg>
+                  <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M2.2 12S5.5 4.9 12 4.9 21.8 12 21.8 12 18.5 19.1 12 19.1 2.2 12 2.2 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+                </button>
+              </div>
+            </label>
+            <div v-if="passwordForm.newPassword" class="password-checks" aria-live="polite">
+              <span :class="{ ok: passwordChecks.length, invalid: !passwordChecks.length }">至少 6 位</span>
+              <span :class="{ ok: passwordChecks.letter, invalid: !passwordChecks.letter }">含字母</span>
+              <span :class="{ ok: passwordChecks.digit, invalid: !passwordChecks.digit }">含数字</span>
+            </div>
+            <label>确认新密码
+              <div class="security-password-field">
+                <input v-model="passwordForm.confirmPassword" :type="showConfirmPassword ? 'text' : 'password'" maxlength="72" autocomplete="new-password" placeholder="再次输入新密码" />
+                <button type="button" :aria-label="showConfirmPassword ? '隐藏确认密码' : '显示确认密码'" @click="showConfirmPassword = !showConfirmPassword">
+                  <svg v-if="showConfirmPassword" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10.7 10.7 0 0 1 12 4.9c6.5 0 9.8 7.1 9.8 7.1a18.3 18.3 0 0 1-3.1 4.1M6.3 6.3C3.8 8.1 2.2 12 2.2 12S5.5 19.1 12 19.1c1.1 0 2.1-.2 3-.5" /></svg>
+                  <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M2.2 12S5.5 4.9 12 4.9 21.8 12 21.8 12 18.5 19.1 12 19.1 2.2 12 2.2 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+                </button>
+              </div>
+              <small v-if="passwordForm.confirmPassword" :class="['password-match-hint', { ok: passwordConfirmMatches }]">
+                {{ passwordConfirmMatches ? '两次密码一致' : '两次输入的密码不一致' }}
+              </small>
+            </label>
+          </div>
+
+          <div class="password-dialog-warning">
+            <span aria-hidden="true">i</span>
+            密码更新后将立即退出当前账号，请使用新密码重新登录。
+          </div>
+          <button class="password-submit-btn" type="button" :disabled="passwordSaving || !passwordFormReady" @click="updateLoginPassword">
+            {{ passwordSaving ? '正在安全更新...' : passwordSet ? '确认修改并重新登录' : '确认设置并重新登录' }}
+          </button>
+        </section>
+      </div>
+    </Teleport>
 
     <Teleport to="body">
       <div v-if="emailUnbindConfirmOpen" class="email-confirm-backdrop" @click.self="closeUnbindEmailConfirm">
@@ -516,9 +788,66 @@ async function uploadAvatar(event: Event) {
 .bind-email-btn { width: 100%; margin-top: 12px; border: 0; border-radius: 8px; padding: 10px 14px; color: #fff; background: #194234; font-size: 11px; font-weight: 800; cursor: pointer; }
 .bind-email-btn:hover { background: #2b604b; }
 .bind-email-btn:disabled { opacity: .55; cursor: wait; }
+.password-security-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 16px; border: 1px solid #eadbca; border-radius: 14px; background: linear-gradient(112deg, #fffaf4, #fffdf9); }
+.password-security-card.is-set { border-color: #d9e8dc; background: linear-gradient(112deg, #f7fcf7, #fbfdf9); }
+.password-security-icon { display: grid; width: 36px; height: 36px; flex: none; place-items: center; border: 1px solid #efd8c7; border-radius: 11px; color: #bd6b4d; background: #fff3e9; }
+.password-security-card.is-set .password-security-icon { border-color: #cee3d3; color: #47875b; background: #eaf6ed; }
+.password-security-icon svg, .password-dialog-icon svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.password-status-pill { flex: none; border-radius: 999px; padding: 4px 7px; color: #a87c5b; background: #f8eadc; font-size: 9px; font-weight: 700; }
+.password-status-pill.is-set { color: #4b8c5c; background: #e6f3e8; }
+.password-entry-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 92px; flex: none; border: 1px solid #d8e5da; border-radius: 8px; padding: 9px 12px; color: #347050; background: #f2f9f3; font-size: 11px; font-weight: 700; cursor: pointer; }
+.password-entry-btn:hover { border-color: #9cbea5; background: #e7f4e9; }
+.password-dialog-backdrop { position: fixed; z-index: 1100; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: 24px; background: rgba(18, 39, 30, .46); backdrop-filter: blur(6px); }
+.password-dialog { position: relative; width: min(100%, 448px); max-height: calc(100vh - 48px); overflow-y: auto; box-sizing: border-box; padding: 27px 28px 25px; border: 1px solid rgba(218, 226, 217, .95); border-radius: 20px; background: #fffefb; box-shadow: 0 26px 70px rgba(17, 43, 32, .26); }
+.password-dialog-close { position: absolute; z-index: 1; top: 13px; right: 15px; display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 50%; color: #91a098; background: transparent; font-size: 23px; line-height: 1; cursor: pointer; }
+.password-dialog-close:hover { color: #486153; background: #f1f5f1; }
+.password-dialog-close:disabled { opacity: .5; cursor: wait; }
+.password-dialog-header { display: flex; align-items: center; gap: 13px; padding-right: 30px; }
+.password-dialog-icon { display: grid; width: 43px; height: 43px; flex: none; place-items: center; border: 1px solid #cfe3d4; border-radius: 14px; color: #3e8055; background: #edf7ef; }
+.password-dialog-header p { margin: 0 0 3px; color: #d36e43; font-size: 9px; font-weight: 800; letter-spacing: .13em; }
+.password-dialog-header h3 { margin: 0; color: #263f33; font-size: 18px; letter-spacing: -.02em; }
+.password-dialog-header small { display: block; margin-top: 5px; color: #8d9a92; font-size: 10px; }
+.password-verify-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 21px; padding: 4px; border: 1px solid #e6e9e3; border-radius: 11px; background: #f5f6f3; }
+.password-verify-tabs button { border: 0; border-radius: 8px; padding: 9px 8px; color: #87938c; background: transparent; font-size: 11px; cursor: pointer; }
+.password-verify-tabs button.active { color: #294b3b; background: #fff; box-shadow: 0 2px 8px rgba(38, 63, 51, .08); font-weight: 800; }
+.password-dialog-section { display: grid; gap: 12px; margin-top: 17px; }
+.password-dialog-section label { display: grid; gap: 6px; color: #65776c; font-size: 11px; font-weight: 600; }
+.password-dialog-section input, .password-dialog-section select { width: 100%; height: 43px; box-sizing: border-box; border: 1px solid #dde3dc; border-radius: 10px; outline: none; padding: 0 12px; color: #294136; background: #fff; font: inherit; font-size: 12px; }
+.password-dialog-section input:focus, .password-dialog-section select:focus { border-color: #91af9a; box-shadow: 0 0 0 3px rgba(77, 135, 91, .1); }
+.security-password-field { position: relative; }
+.security-password-field input { padding-right: 43px; }
+.security-password-field button { position: absolute; top: 50%; right: 7px; display: grid; width: 31px; height: 31px; transform: translateY(-50%); place-items: center; border: 0; border-radius: 8px; color: #84928a; background: transparent; cursor: pointer; }
+.security-password-field button:hover { color: #3f6652; background: #f2f6f2; }
+.security-password-field svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.forgot-current-password { justify-self: end; border: 0; padding: 0; color: #c66b48; background: transparent; font-size: 10px; cursor: pointer; }
+.forgot-current-password:hover { color: #a95335; text-decoration: underline; }
+.password-email-note { display: flex; align-items: center; gap: 7px; padding: 9px 10px; border-radius: 9px; color: #527361; background: #f1f7f2; font-size: 10px; line-height: 1.5; }
+.password-email-note span { display: grid; width: 16px; height: 16px; flex: none; place-items: center; border-radius: 50%; color: #fff; background: #55a06b; font-size: 9px; font-weight: 800; }
+.password-code-row { display: flex; gap: 8px; }
+.password-code-row input { min-width: 0; flex: 1; }
+.password-code-row button { flex: 0 0 108px; border: 1px solid #cee0d2; border-radius: 10px; color: #347050; background: #f1f8f2; font-size: 10px; font-weight: 700; cursor: pointer; }
+.password-code-row button:hover:not(:disabled) { border-color: #91b69a; background: #e9f4eb; }
+.password-code-row button:disabled { color: #9aa59e; background: #f4f5f2; cursor: not-allowed; }
+.password-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 0; color: #98a39c; font-size: 9px; }
+.password-divider::before, .password-divider::after { height: 1px; flex: 1; background: #eceee9; content: ''; }
+.password-new-fields { margin-top: 13px; }
+.password-checks { display: flex; flex-wrap: wrap; gap: 10px; margin-top: -3px; }
+.password-checks span { display: inline-flex; align-items: center; gap: 5px; color: #9ba49e; font-size: 9px; }
+.password-checks span::before { width: 7px; height: 7px; border-radius: 50%; background: #c6cec8; content: ''; }
+.password-checks span.ok { color: #41905c; }
+.password-checks span.ok::before { background: #41a064; }
+.password-checks span.invalid { color: #c86550; }
+.password-checks span.invalid::before { background: #d96855; }
+.password-match-hint { margin-top: -2px; color: #c86550; font-size: 9px; }
+.password-match-hint.ok { color: #41905c; }
+.password-dialog-warning { display: flex; align-items: flex-start; gap: 8px; margin-top: 17px; padding: 10px 11px; border: 1px solid #eddfcf; border-radius: 10px; color: #8d715f; background: #fff9f3; font-size: 10px; line-height: 1.6; }
+.password-dialog-warning span { display: grid; width: 16px; height: 16px; flex: none; place-items: center; border: 1px solid #d9b89f; border-radius: 50%; color: #bc704f; font-size: 9px; font-weight: 800; }
+.password-submit-btn { width: 100%; margin-top: 15px; border: 0; border-radius: 10px; padding: 12px 14px; color: #fff; background: #194234; font-size: 11px; font-weight: 800; cursor: pointer; }
+.password-submit-btn:hover:not(:disabled) { background: #2b604b; }
+.password-submit-btn:disabled { opacity: .5; cursor: not-allowed; }
 .profile-actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 8px; padding-top: 17px; border-top: 1px solid #f0ede6; color: #9aa59e; font-size: 10px; }
 .save-profile-btn { border: 0; border-radius: 9px; padding: 11px 20px; color: #fff; background: #194234; font-size: 12px; font-weight: 800; cursor: pointer; }
 .save-profile-btn:hover { background: #2b604b; }
 .save-profile-btn:disabled { opacity: .55; cursor: wait; }
-@media (max-width: 640px) { .customer-profile-panel { width: min(100% - 28px, 560px); padding-top: 22px; } .profile-intro { display: block; } .profile-security { width: fit-content; margin-top: 14px; text-align: left; } .profile-card { padding: 17px; } .profile-grid, .email-bind-grid { grid-template-columns: 1fr; } .email-section-title { align-items: flex-start; flex-direction: column; gap: 4px; } .email-security-card { align-items: flex-start; flex-direction: column; } .email-security-main, .email-security-actions { width: 100%; } .email-security-actions { justify-content: space-between; } .email-entry-btn { width: 100%; } .email-bound-item .unbind-email-btn { width: auto; } .profile-actions { align-items: flex-start; flex-direction: column; } .save-profile-btn, .bind-email-btn { width: 100%; } }
+@media (max-width: 640px) { .customer-profile-panel { width: min(100% - 28px, 560px); padding-top: 22px; } .profile-intro { display: block; } .profile-security { width: fit-content; margin-top: 14px; text-align: left; } .profile-card { padding: 17px; } .profile-grid, .email-bind-grid { grid-template-columns: 1fr; } .email-section-title { align-items: flex-start; flex-direction: column; gap: 4px; } .email-security-card, .password-security-card { align-items: flex-start; flex-direction: column; } .email-security-main, .email-security-actions { width: 100%; } .email-security-actions { justify-content: space-between; } .email-entry-btn, .password-entry-btn { width: 100%; } .email-bound-item .unbind-email-btn { width: auto; } .profile-actions { align-items: flex-start; flex-direction: column; } .save-profile-btn, .bind-email-btn { width: 100%; } .password-dialog-backdrop { align-items: end; padding: 12px; } .password-dialog { width: 100%; max-height: calc(100vh - 24px); padding: 24px 19px 20px; border-radius: 19px; } }
 </style>

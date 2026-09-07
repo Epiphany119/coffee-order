@@ -27,6 +27,8 @@ public class AuthResponse {
     private String email;
     /** 当前用户全部已验证邮箱；email 保留为首选邮箱兼容旧客户端。 */
     private List<String> emails = new ArrayList<>();
+    /** 是否已设置可用于账号登录的密码；绝不向前端返回密码或密码摘要。 */
+    private boolean passwordSet;
     private String otherInfo;
     /** Bearer 会话令牌；仅注册/登录成功时返回。 */
     private String accessToken;
@@ -86,6 +88,8 @@ public class AuthResponse {
     public void setEmails(List<String> emails) {
         this.emails = emails == null ? new ArrayList<>() : new ArrayList<>(emails);
     }
+    public boolean isPasswordSet() { return passwordSet; }
+    public void setPasswordSet(boolean passwordSet) { this.passwordSet = passwordSet; }
     public String getOtherInfo() { return otherInfo; }
     public void setOtherInfo(String otherInfo) { this.otherInfo = otherInfo; }
     public String getAccessToken() { return accessToken; }

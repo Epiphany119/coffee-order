@@ -41,6 +41,12 @@ public interface AuthService {
     /** 解绑当前顾客指定邮箱；不传邮箱时兼容旧客户端，解绑首选邮箱。 */
     AuthResponse unbindEmail(Long userId, String email);
 
+    /** 向当前账户已绑定邮箱发送密码操作验证码。 */
+    int sendPasswordVerificationCode(Long userId, String email);
+
+    /** 已登录用户经原密码或绑定邮箱验证后设置/修改密码。 */
+    AuthResponse updatePassword(Long userId, UserPasswordUpdateRequest request);
+
     /**
      * 获取用户信息
      */
