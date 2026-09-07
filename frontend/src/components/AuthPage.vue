@@ -52,6 +52,8 @@ const forgotHint = ref('')
 const resetHint = ref('')
 const emailLoginHint = ref('')
 const emailRegisterHint = ref('')
+const emailRegisterAvailability = ref<'idle' | 'checking' | 'available' | 'bound'>('idle')
+const emailRegisterAvailabilityMessage = ref('')
 
 const loginLoading = ref(false)
 const registerLoading = ref(false)
@@ -125,6 +127,8 @@ function switchTab(tab: 'login' | 'register'){
   resetHint.value=''
   emailLoginHint.value = ''
   emailRegisterHint.value = ''
+  emailRegisterAvailability.value = 'idle'
+  emailRegisterAvailabilityMessage.value = ''
 
 }
 
@@ -192,6 +196,46 @@ function isEmailValid(email: string) {
   return EMAIL_PATTERN.test(email.trim())
 }
 
+function resetEmailRegisterAvailability() {
+  emailRegisterAvailability.value = 'idle'
+  emailRegisterAvailabilityMessage.value = ''
+}
+
+async function checkEmailRegisterAvailability() {
+  const email = emailRegisterForm.value.email.trim()
+  if (!email) {
+    resetEmailRegisterAvailability()
+    return false
+  }
+  if (!isEmailValid(email)) {
+    emailRegisterAvailability.value = 'idle'
+    emailRegisterAvailabilityMessage.value = '请输入有效的邮箱地址'
+    return false
+  }
+
+  emailRegisterAvailability.value = 'checking'
+  emailRegisterAvailabilityMessage.value = '正在检查邮箱状态...'
+  try {
+    const result = await authApi.checkEmailAvailability(email)
+    // 避免用户快速改邮箱后，旧请求覆盖新邮箱的检查结果。
+    if (email !== emailRegisterForm.value.email.trim()) return false
+    if (!result.available || result.bound) {
+      emailRegisterAvailability.value = 'bound'
+      emailRegisterAvailabilityMessage.value = result.message || '该邮箱已经被绑定，请选择其他未绑定的邮箱登录'
+      return false
+    }
+    emailRegisterAvailability.value = 'available'
+    emailRegisterAvailabilityMessage.value = result.message || '该邮箱可用，可以继续注册'
+    return true
+  } catch (e: any) {
+    if (email === emailRegisterForm.value.email.trim()) {
+      emailRegisterAvailability.value = 'idle'
+      emailRegisterAvailabilityMessage.value = e.message || '邮箱状态检查失败，请稍后重试'
+    }
+    return false
+  }
+}
+
 async function sendEmailCode(purpose: EmailCodePurpose) {
   const form = purpose === 'LOGIN' ? emailLoginForm.value : emailRegisterForm.value
   const setHint = (message: string) => {
@@ -202,6 +246,10 @@ async function sendEmailCode(purpose: EmailCodePurpose) {
   if (!isEmailValid(email)) {
     setHint('请输入有效的邮箱地址')
     return
+  }
+
+  if (purpose === 'REGISTER' && emailRegisterAvailability.value !== 'available') {
+    if (!(await checkEmailRegisterAvailability())) return
   }
 
   sendingEmailCodeFor.value = purpose
@@ -357,8 +405,17 @@ async function doEmailRegister() {
   const form = emailRegisterForm.value
   const email = form.email.trim()
   const code = form.code.trim()
-  if (!isEmailValid(email) || !/^\d{6}$/.test(code) || !form.username.trim() || !form.password || !form.confirm) {
-    emailRegisterHint.value = '请填写邮箱、验证码、账号和密码'
+  const username = form.username.trim()
+  if (!isEmailValid(email) || !/^\d{6}$/.test(code) || !username || !form.password || !form.confirm) {
+    emailRegisterHint.value = '请填写有效邮箱、6 位验证码、用户名和密码'
+    return
+  }
+  if (username.length < 2 || username.length > 50) {
+    emailRegisterHint.value = '用户名长度需要在2到50个字符之间'
+    return
+  }
+  if (emailRegisterAvailability.value !== 'available' && !(await checkEmailRegisterAvailability())) {
+    emailRegisterHint.value = emailRegisterAvailabilityMessage.value || '请先确认邮箱可以注册'
     return
   }
   if (!emailPwdStrong.value) {
@@ -376,7 +433,7 @@ async function doEmailRegister() {
     const data = await authApi.emailRegister({
       email,
       code,
-      username: form.username.trim(),
+      username,
       password: form.password,
       nickname: form.nickname.trim()
     })
@@ -609,9 +666,11 @@ async function doReset(){
             账号
             <input
                 v-model="loginForm.username"
-                placeholder="输入用户名"
+                autocomplete="username"
+                placeholder="用户名 / fika账号 / 已绑定邮箱"
             />
           </label>
+          <p class="auth-field-note">支持使用用户名、系统账号号码或已绑定邮箱登录</p>
 
           <label>
             密码
@@ -892,7 +951,7 @@ async function doReset(){
             v-else
             @submit.prevent="doEmailRegister"
         >
-          <p class="email-auth-note">验证邮箱后创建 FIKA 会员账户，邮箱可用于下次快捷登录。</p>
+          <p class="email-auth-note">验证邮箱后创建 FIKA 会员账户。用户名由你设置，系统会另外生成唯一的 fika 账号号码。</p>
 
           <label>
             邮箱
@@ -901,7 +960,18 @@ async function doReset(){
                 type="email"
                 autocomplete="email"
                 placeholder="name@example.com"
+                :aria-invalid="emailRegisterAvailability === 'bound'"
+                @input="resetEmailRegisterAvailability"
+                @blur="checkEmailRegisterAvailability"
             />
+            <p
+                v-if="emailRegisterAvailabilityMessage"
+                class="email-availability"
+                :class="{ checking: emailRegisterAvailability === 'checking', available: emailRegisterAvailability === 'available', bound: emailRegisterAvailability === 'bound' }"
+            >
+              <span aria-hidden="true">{{ emailRegisterAvailability === 'bound' ? '!' : emailRegisterAvailability === 'available' ? '✓' : '·' }}</span>
+              {{ emailRegisterAvailabilityMessage }}
+            </p>
           </label>
 
           <label>
@@ -917,7 +987,7 @@ async function doReset(){
               <button
                   class="code-button"
                   type="button"
-                  :disabled="sendingEmailCodeFor === 'REGISTER' || emailRegisterCountdown > 0"
+                  :disabled="sendingEmailCodeFor === 'REGISTER' || emailRegisterCountdown > 0 || emailRegisterAvailability === 'bound' || emailRegisterAvailability === 'checking'"
                   @click="sendEmailCode('REGISTER')"
               >
                 {{ sendingEmailCodeFor === 'REGISTER' ? '发送中...' : emailRegisterCountdown > 0 ? `${emailRegisterCountdown}s 后重试` : '获取验证码' }}
@@ -927,20 +997,22 @@ async function doReset(){
 
           <div class="compact-field-row">
             <label>
-              账号
+              用户名
               <input
                   v-model="emailRegisterForm.username"
+                  maxlength="50"
                   autocomplete="username"
-                  placeholder="设置登录账号"
+                  placeholder="设置登录用户名"
               />
             </label>
 
             <label>
-              昵称
+              昵称（可选）
               <input
                   v-model="emailRegisterForm.nickname"
+                  maxlength="50"
                   autocomplete="nickname"
-                  placeholder="怎么称呼你（可选）"
+                  placeholder="怎么称呼你"
               />
             </label>
           </div>
@@ -990,7 +1062,7 @@ async function doReset(){
 
           <button
               class="submit"
-              :disabled="emailRegisterLoading"
+              :disabled="emailRegisterLoading || emailRegisterAvailability === 'bound'"
           >
             {{ emailRegisterLoading ? '创建中...' : '验证邮箱并创建账户' }}
           </button>
@@ -1317,6 +1389,43 @@ input:focus {
   font-size: 12px;
   line-height: 1.65;
 }
+
+.auth-field-note {
+  margin: -9px 0 14px;
+  color: #8a958e;
+  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.email-availability {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 7px 1px 0;
+  color: #7e9185;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.email-availability span {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 50%;
+  color: #7e9185;
+  background: #edf3ee;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.email-availability.checking { color: #9a8b7c; }
+.email-availability.checking span { color: #a87c5b; background: #f8eadc; }
+.email-availability.available { color: #39805a; }
+.email-availability.available span { color: #fff; background: #4d9a67; }
+.email-availability.bound { color: #bd6548; }
+.email-availability.bound span { color: #fff; background: #c86f4c; }
 
 .code-row {
   display: flex;

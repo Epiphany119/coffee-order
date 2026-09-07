@@ -8,6 +8,7 @@ import com.coffee.module.auth.biz.domain.User;
 public interface UserRepository {
     User findById(Long id);
     User findByUsername(String username);
+    User findByAccountNo(String accountNo);
     User findByEmail(String email);
     boolean existsByUsername(String username);
     boolean existsByEmail(String email);

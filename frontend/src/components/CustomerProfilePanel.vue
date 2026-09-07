@@ -22,11 +22,21 @@ const emailBinding = ref(false)
 const emailUnbinding = ref(false)
 const emailCountdown = ref(0)
 const emailBindingOpen = ref(false)
+const emailBindingCheckState = ref<'idle' | 'checking' | 'available' | 'bound' | 'limit'>('idle')
+const emailBindingCheckMessage = ref('')
+const emailUnbindConfirmOpen = ref(false)
+const emailUnbindTarget = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 let emailTimer: ReturnType<typeof window.setInterval> | undefined
 
+const MAX_EMAIL_BINDINGS = 3
 const avatarUrl = computed(() => store.currentUser?.avatarUrl || '')
-const boundEmail = computed(() => store.currentUser?.email || '')
+const boundEmails = computed(() => {
+  const current = store.currentUser
+  const emails = Array.isArray(current?.emails) ? current.emails : []
+  const legacy = current?.email ? [current.email] : []
+  return [...new Set([...emails, ...legacy].map(email => email?.trim().toLowerCase()).filter(Boolean))]
+})
 const avatarText = computed(() =>
   (store.currentUser?.nickname || store.currentUser?.username || 'U').slice(0, 1).toUpperCase()
 )
@@ -83,6 +93,55 @@ function validEmail(value: string) {
   return /^[^@\s]{1,64}@[^@\s]{1,190}$/.test(value.trim())
 }
 
+function resetEmailBindingCheck() {
+  emailBindingCheckState.value = 'idle'
+  emailBindingCheckMessage.value = ''
+}
+
+async function checkEmailBindingAvailability() {
+  const email = emailForm.email.trim().toLowerCase()
+  if (!email) {
+    resetEmailBindingCheck()
+    return false
+  }
+  if (!validEmail(email)) {
+    emailBindingCheckState.value = 'idle'
+    emailBindingCheckMessage.value = '请输入有效的邮箱地址'
+    return false
+  }
+  if (boundEmails.value.some(item => item.toLowerCase() === email)) {
+    emailBindingCheckState.value = 'bound'
+    emailBindingCheckMessage.value = '该邮箱已经绑定在当前账户'
+    return false
+  }
+  if (boundEmails.value.length >= MAX_EMAIL_BINDINGS) {
+    emailBindingCheckState.value = 'limit'
+    emailBindingCheckMessage.value = `每个用户最多绑定 ${MAX_EMAIL_BINDINGS} 个邮箱`
+    return false
+  }
+
+  emailBindingCheckState.value = 'checking'
+  emailBindingCheckMessage.value = '正在检查邮箱状态...'
+  try {
+    const result = await authApi.checkEmailAvailability(email)
+    if (email !== emailForm.email.trim().toLowerCase()) return false
+    if (!result.available || result.bound) {
+      emailBindingCheckState.value = 'bound'
+      emailBindingCheckMessage.value = result.message || '该邮箱已经被绑定，请更换其他邮箱'
+      return false
+    }
+    emailBindingCheckState.value = 'available'
+    emailBindingCheckMessage.value = '该邮箱可以绑定'
+    return true
+  } catch (e: any) {
+    if (email === emailForm.email.trim().toLowerCase()) {
+      emailBindingCheckState.value = 'idle'
+      emailBindingCheckMessage.value = e.message || '邮箱状态检查失败，请稍后重试'
+    }
+    return false
+  }
+}
+
 async function sendEmailBindCode() {
   const userId = store.currentUser?.id
   const email = emailForm.email.trim()
@@ -90,6 +149,7 @@ async function sendEmailBindCode() {
     ElMessage.warning('请输入有效的邮箱地址')
     return
   }
+  if (emailBindingCheckState.value !== 'available' && !(await checkEmailBindingAvailability())) return
   emailCodeSending.value = true
   try {
     const result = await authApi.sendEmailBindCode(userId, email)
@@ -114,6 +174,7 @@ async function bindEmail() {
     ElMessage.warning('请输入邮箱和 6 位验证码')
     return
   }
+  if (emailBindingCheckState.value !== 'available' && !(await checkEmailBindingAvailability())) return
   emailBinding.value = true
   try {
     const result = await authApi.bindEmail(userId, { email, code })
@@ -125,6 +186,7 @@ async function bindEmail() {
     emailForm.email = ''
     emailForm.code = ''
     emailBindingOpen.value = false
+    resetEmailBindingCheck()
     clearEmailCountdown()
     ElMessage.success('邮箱绑定成功')
   } catch (e: any) {
@@ -134,12 +196,13 @@ async function bindEmail() {
   }
 }
 
-async function unbindEmail() {
+async function unbindEmail(target = emailUnbindTarget.value) {
   const userId = store.currentUser?.id
-  if (!userId || !boundEmail.value) return
+  const email = target.trim().toLowerCase()
+  if (!userId || !email) return
   emailUnbinding.value = true
   try {
-    const result = await authApi.unbindEmail(userId)
+    const result = await authApi.unbindEmail(userId, email)
     if (!result.success) {
       ElMessage.error(result.message || '邮箱解绑失败')
       return
@@ -147,13 +210,28 @@ async function unbindEmail() {
     mergeSession(result)
     emailForm.email = ''
     emailForm.code = ''
-    emailBindingOpen.value = false
+    emailUnbindTarget.value = ''
+    emailUnbindConfirmOpen.value = false
+    resetEmailBindingCheck()
     clearEmailCountdown()
     ElMessage.success('邮箱已解绑')
   } catch (e: any) {
     ElMessage.error(`解绑失败：${e.message}`)
   } finally {
     emailUnbinding.value = false
+  }
+}
+
+function openUnbindEmailConfirm(email: string) {
+  if (!emailUnbinding.value && email) {
+    emailUnbindTarget.value = email
+    emailUnbindConfirmOpen.value = true
+  }
+}
+
+function closeUnbindEmailConfirm() {
+  if (!emailUnbinding.value) {
+    emailUnbindConfirmOpen.value = false
   }
 }
 
@@ -224,7 +302,8 @@ async function uploadAvatar(event: Event) {
         <input ref="fileInput" class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp" @change="uploadAvatar" />
         <div>
           <b>{{ store.currentUser?.nickname || store.currentUser?.username }}</b>
-          <small>顾客账号 · {{ store.currentUser?.username }}</small>
+          <small>账号号码 · {{ store.currentUser?.accountNo || '待同步' }}</small>
+          <small>用户名 · {{ store.currentUser?.username || '未设置' }}</small>
         </div>
       </div>
 
@@ -242,40 +321,66 @@ async function uploadAvatar(event: Event) {
           <span>邮箱安全</span>
           <small>独立验证，保护账号登录与找回</small>
         </div>
-        <div class="email-security-card" :class="{ 'is-bound': boundEmail }">
+        <div class="email-security-card" :class="{ 'is-bound': boundEmails.length > 0 }">
           <div class="email-security-main">
             <span class="email-security-icon" aria-hidden="true">✉</span>
             <div class="email-security-copy">
               <div class="email-security-title">
-                <b>{{ boundEmail ? '邮箱已绑定' : '暂未绑定邮箱' }}</b>
-                <span :class="['email-status-pill', { 'is-bound': boundEmail }]">{{ boundEmail ? '已验证' : '建议绑定' }}</span>
+                <b>{{ boundEmails.length ? '邮箱已绑定' : '暂未绑定邮箱' }}</b>
+                <span :class="['email-status-pill', { 'is-bound': boundEmails.length > 0 }]">{{ boundEmails.length ? `${boundEmails.length}/${MAX_EMAIL_BINDINGS} 个` : '建议绑定' }}</span>
               </div>
-              <small>{{ boundEmail || '绑定后可使用邮箱验证码登录与找回账号' }}</small>
+              <small>{{ boundEmails.length ? '已验证邮箱可用于邮箱登录与账号找回' : '绑定后可使用邮箱验证码登录与找回账号' }}</small>
             </div>
           </div>
-          <button v-if="boundEmail" class="unbind-email-btn" type="button" :disabled="emailUnbinding" @click="unbindEmail">
-            {{ emailUnbinding ? '解绑中...' : '解绑邮箱' }}
-          </button>
-          <button v-else class="email-entry-btn" type="button" :aria-expanded="emailBindingOpen" @click="emailBindingOpen = !emailBindingOpen">
-            {{ emailBindingOpen ? '收起' : '绑定邮箱' }}
-            <span aria-hidden="true">{{ emailBindingOpen ? '⌃' : '›' }}</span>
-          </button>
+          <div class="email-security-actions">
+            <span v-if="boundEmails.length >= MAX_EMAIL_BINDINGS" class="email-limit-note">已达绑定上限</span>
+            <button v-if="boundEmails.length < MAX_EMAIL_BINDINGS" class="email-entry-btn" type="button" :aria-expanded="emailBindingOpen" @click="emailBindingOpen = !emailBindingOpen">
+              {{ emailBindingOpen ? '收起' : boundEmails.length ? '添加邮箱' : '绑定邮箱' }}
+              <span aria-hidden="true">{{ emailBindingOpen ? '⌃' : '›' }}</span>
+            </button>
+          </div>
         </div>
 
-        <div v-if="!boundEmail && emailBindingOpen" class="email-bind-card">
+        <div v-if="boundEmails.length" class="email-bound-list">
+          <div v-for="(email, index) in boundEmails" :key="email" class="email-bound-item">
+            <span class="email-bound-icon" aria-hidden="true">✉</span>
+            <div class="email-bound-copy">
+              <div>
+                <b>{{ email }}</b>
+                <span v-if="index === 0" class="email-primary-pill">首选邮箱</span>
+              </div>
+              <small>已完成邮箱验证</small>
+            </div>
+            <button class="unbind-email-btn" type="button" :disabled="emailUnbinding" @click="openUnbindEmailConfirm(email)">
+              {{ emailUnbinding && emailUnbindTarget === email ? '解绑中...' : '解绑' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="emailBindingOpen && boundEmails.length < MAX_EMAIL_BINDINGS" class="email-bind-card">
           <div class="email-bind-heading">
             <div>
-              <b>验证邮箱并完成绑定</b>
-              <small>一次验证即可生效，验证码仅用于本次绑定</small>
+              <b>{{ boundEmails.length ? '添加新的邮箱' : '验证邮箱并完成绑定' }}</b>
+              <small>一次验证即可生效；一个邮箱只能绑定一个账户</small>
             </div>
-            <span class="email-flow-pill">一次验证</span>
+            <span class="email-flow-pill">{{ boundEmails.length }}/{{ MAX_EMAIL_BINDINGS }}</span>
           </div>
           <div class="email-bind-grid">
-            <label>邮箱<input v-model="emailForm.email" type="email" maxlength="120" autocomplete="email" placeholder="name@example.com" /></label>
+            <label>邮箱
+              <input v-model="emailForm.email" type="email" maxlength="120" autocomplete="email" placeholder="name@example.com" @input="resetEmailBindingCheck" @blur="checkEmailBindingAvailability" />
+              <p
+                v-if="emailBindingCheckMessage"
+                class="email-availability"
+                :class="{ checking: emailBindingCheckState === 'checking', available: emailBindingCheckState === 'available', bound: emailBindingCheckState === 'bound' || emailBindingCheckState === 'limit' }"
+              >
+                <span aria-hidden="true">{{ emailBindingCheckState === 'bound' || emailBindingCheckState === 'limit' ? '!' : emailBindingCheckState === 'available' ? '✓' : '·' }}</span>
+                {{ emailBindingCheckMessage }}
+              </p>
+            </label>
             <label>验证码
               <div class="email-code-row">
                 <input v-model="emailForm.code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" />
-                <button class="email-send-code-btn" type="button" :disabled="emailCodeSending || emailCountdown > 0" @click="sendEmailBindCode">
+                <button class="email-send-code-btn" type="button" :disabled="emailCodeSending || emailCountdown > 0 || emailBindingCheckState === 'bound' || emailBindingCheckState === 'limit' || emailBindingCheckState === 'checking'" @click="sendEmailBindCode">
                   {{ emailCodeSending ? '发送中...' : emailCountdown > 0 ? `${emailCountdown}s 后重试` : '获取验证码' }}
                 </button>
               </div>
@@ -295,6 +400,26 @@ async function uploadAvatar(event: Event) {
         </div>
       </form>
     </div>
+
+    <Teleport to="body">
+      <div v-if="emailUnbindConfirmOpen" class="email-confirm-backdrop" @click.self="closeUnbindEmailConfirm">
+        <section class="email-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="email-unbind-title">
+          <button class="email-confirm-close" type="button" aria-label="关闭确认窗口" :disabled="emailUnbinding" @click="closeUnbindEmailConfirm">×</button>
+          <div class="email-confirm-icon" aria-hidden="true">!</div>
+          <div class="email-confirm-copy">
+            <h3 id="email-unbind-title">确认解绑邮箱？</h3>
+            <p>解绑后，该邮箱将不能再用于邮箱登录和账号找回。</p>
+            <small>{{ emailUnbindTarget }} · 之后仍可重新绑定</small>
+          </div>
+          <div class="email-confirm-actions">
+            <button class="email-confirm-cancel" type="button" :disabled="emailUnbinding" @click="closeUnbindEmailConfirm">暂不解绑</button>
+            <button class="email-confirm-submit" type="button" :disabled="emailUnbinding" @click="unbindEmail(emailUnbindTarget)">
+              {{ emailUnbinding ? '解绑中...' : '确认解绑' }}
+            </button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -335,12 +460,46 @@ async function uploadAvatar(event: Event) {
 .email-security-copy > small { display: block; max-width: 360px; margin-top: 5px; overflow: hidden; color: #89968e; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .email-status-pill { flex: none; border-radius: 999px; padding: 4px 7px; color: #a87c5b; background: #f8eadc; font-size: 9px; font-weight: 700; }
 .email-status-pill.is-bound { color: #4b8c5c; background: #e6f3e8; }
+.email-security-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
+.email-limit-note { color: #9aa59e; font-size: 10px; }
 .email-entry-btn, .unbind-email-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; min-width: 84px; border-radius: 8px; padding: 9px 12px; font-size: 11px; font-weight: 700; cursor: pointer; }
 .email-entry-btn { border: 1px solid #d8e5da; color: #347050; background: #f2f9f3; }
 .email-entry-btn:hover { border-color: #9cbea5; background: #e7f4e9; }
 .unbind-email-btn { border: 1px solid #e5cfc5; color: #bd6548; background: #fffaf7; }
 .unbind-email-btn:hover { border-color: #d99b86; background: #fff3ed; }
 .unbind-email-btn:disabled { opacity: .55; cursor: wait; }
+.email-bound-list { display: grid; gap: 8px; }
+.email-bound-item { display: flex; align-items: center; gap: 11px; padding: 11px 12px; border: 1px solid #e8eee8; border-radius: 11px; background: #fbfdfb; }
+.email-bound-icon { display: grid; width: 29px; height: 29px; flex: none; place-items: center; border: 1px solid #d9eadc; border-radius: 9px; color: #4d9563; background: #edf8ef; font-size: 13px; }
+.email-bound-copy { min-width: 0; flex: 1; }
+.email-bound-copy > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.email-bound-copy b { overflow: hidden; color: #3a5144; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.email-bound-copy small { display: block; margin-top: 4px; color: #99a59c; font-size: 9px; }
+.email-primary-pill { flex: none; border-radius: 999px; padding: 3px 6px; color: #4b8c5c; background: #e6f3e8; font-size: 8px; font-weight: 700; }
+.email-availability { display: flex; align-items: center; gap: 5px; margin: 7px 1px 0; color: #7e9185; font-size: 10px; line-height: 1.4; }
+.email-availability span { display: inline-grid; width: 15px; height: 15px; flex: none; place-items: center; border-radius: 50%; color: #7e9185; background: #edf3ee; font-size: 9px; font-weight: 800; }
+.email-availability.checking { color: #9a8b7c; }
+.email-availability.checking span { color: #a87c5b; background: #f8eadc; }
+.email-availability.available { color: #39805a; }
+.email-availability.available span { color: #fff; background: #4d9a67; }
+.email-availability.bound { color: #bd6548; }
+.email-availability.bound span { color: #fff; background: #c86f4c; }
+.email-confirm-backdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(24, 42, 34, .32); backdrop-filter: blur(4px); }
+.email-confirm-dialog { position: relative; width: min(100%, 390px); box-sizing: border-box; padding: 30px 30px 24px; border: 1px solid rgba(224, 215, 201, .9); border-radius: 18px; background: #fffefb; box-shadow: 0 22px 60px rgba(29, 49, 39, .2); text-align: center; }
+.email-confirm-close { position: absolute; top: 12px; right: 14px; width: 28px; height: 28px; border: 0; border-radius: 50%; color: #91a098; background: transparent; font-size: 23px; line-height: 1; cursor: pointer; }
+.email-confirm-close:hover { color: #486153; background: #f3f5f0; }
+.email-confirm-close:disabled { opacity: .5; cursor: wait; }
+.email-confirm-icon { display: grid; width: 42px; height: 42px; margin: 0 auto 14px; place-items: center; border: 1px solid #efd8c7; border-radius: 14px; color: #c86f4c; background: #fff3e9; font-size: 20px; font-weight: 800; }
+.email-confirm-copy h3 { margin: 0; color: #294438; font-size: 17px; letter-spacing: -.02em; }
+.email-confirm-copy p { margin: 10px auto 0; color: #7f8d83; font-size: 11px; line-height: 1.7; }
+.email-confirm-copy small { display: block; margin-top: 8px; overflow: hidden; color: #a1978a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.email-confirm-actions { display: flex; gap: 10px; margin-top: 24px; }
+.email-confirm-actions button { flex: 1; border-radius: 9px; padding: 11px 12px; font-size: 11px; font-weight: 800; cursor: pointer; }
+.email-confirm-cancel { border: 1px solid #e2e5de; color: #637267; background: #fff; }
+.email-confirm-cancel:hover { border-color: #bdcbbf; background: #f7faf6; }
+.email-confirm-submit { border: 1px solid #d99b86; color: #fff; background: #bd6548; }
+.email-confirm-submit:hover { border-color: #b85b3d; background: #ad563a; }
+.email-confirm-actions button:disabled { opacity: .55; cursor: wait; }
 .email-bind-card { padding: 16px; border: 1px solid #eadbca; border-radius: 14px; background: #fffaf4; }
 .email-bind-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; margin-bottom: 14px; }
 .email-bind-heading b, .email-bind-heading small { display: block; }
@@ -361,5 +520,5 @@ async function uploadAvatar(event: Event) {
 .save-profile-btn { border: 0; border-radius: 9px; padding: 11px 20px; color: #fff; background: #194234; font-size: 12px; font-weight: 800; cursor: pointer; }
 .save-profile-btn:hover { background: #2b604b; }
 .save-profile-btn:disabled { opacity: .55; cursor: wait; }
-@media (max-width: 640px) { .customer-profile-panel { width: min(100% - 28px, 560px); padding-top: 22px; } .profile-intro { display: block; } .profile-security { width: fit-content; margin-top: 14px; text-align: left; } .profile-card { padding: 17px; } .profile-grid, .email-bind-grid { grid-template-columns: 1fr; } .email-section-title { align-items: flex-start; flex-direction: column; gap: 4px; } .email-security-card { align-items: flex-start; flex-direction: column; } .email-security-main { width: 100%; } .email-entry-btn, .unbind-email-btn { width: 100%; } .profile-actions { align-items: flex-start; flex-direction: column; } .save-profile-btn, .bind-email-btn { width: 100%; } }
+@media (max-width: 640px) { .customer-profile-panel { width: min(100% - 28px, 560px); padding-top: 22px; } .profile-intro { display: block; } .profile-security { width: fit-content; margin-top: 14px; text-align: left; } .profile-card { padding: 17px; } .profile-grid, .email-bind-grid { grid-template-columns: 1fr; } .email-section-title { align-items: flex-start; flex-direction: column; gap: 4px; } .email-security-card { align-items: flex-start; flex-direction: column; } .email-security-main, .email-security-actions { width: 100%; } .email-security-actions { justify-content: space-between; } .email-entry-btn { width: 100%; } .email-bound-item .unbind-email-btn { width: auto; } .profile-actions { align-items: flex-start; flex-direction: column; } .save-profile-btn, .bind-email-btn { width: 100%; } }
 </style>

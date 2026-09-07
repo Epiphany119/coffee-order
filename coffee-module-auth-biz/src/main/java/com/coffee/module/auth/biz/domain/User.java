@@ -2,12 +2,16 @@ package com.coffee.module.auth.biz.domain;
 
 import java.time.LocalDateTime;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 用户领域对象
  */
 public class User {
     private Long id;
+    /** 对外展示的 FIKA 账号号码；与数据库自增主键 id 分离。 */
+    private String accountNo;
     private String username;
     private String passwordHash;
     private String nickname;
@@ -17,6 +21,7 @@ public class User {
     private String wechatId;
     private String qqNumber;
     private String email;
+    private List<String> emails = new ArrayList<>();
     private String otherInfo;
     private Double totalSpent;
     private String role;
@@ -36,6 +41,8 @@ public class User {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public String getAccountNo() { return accountNo; }
+    public void setAccountNo(String accountNo) { this.accountNo = accountNo; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
     public String getPasswordHash() { return passwordHash; }
@@ -54,6 +61,10 @@ public class User {
     public void setQqNumber(String qqNumber) { this.qqNumber = qqNumber; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
+    public List<String> getEmails() { return emails; }
+    public void setEmails(List<String> emails) {
+        this.emails = emails == null ? new ArrayList<>() : new ArrayList<>(emails);
+    }
     public String getOtherInfo() { return otherInfo; }
     public void setOtherInfo(String otherInfo) { this.otherInfo = otherInfo; }
     public Double getTotalSpent() { return totalSpent; }

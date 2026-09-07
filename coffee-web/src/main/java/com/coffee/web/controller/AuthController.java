@@ -61,6 +61,12 @@ public class AuthController {
         return Map.of("success", true, "message", "验证码已发送，请查收邮箱", "cooldownSeconds", cooldownSeconds);
     }
 
+    /** 注册或绑定前检查邮箱是否已被其他顾客占用。 */
+    @GetMapping("/email/check")
+    public EmailAvailabilityResponse checkEmailAvailability(@RequestParam String email) {
+        return authService.checkEmailAvailability(email);
+    }
+
     /** 已登录顾客绑定邮箱专用的验证码入口；验证码用途固定为 BIND。 */
     @PostMapping("/user/{id}/email/send-code")
     public Map<String, Object> sendEmailBindCode(@PathVariable Long id,
@@ -93,11 +99,12 @@ public class AuthController {
         return withToken(authService.bindEmail(id, request));
     }
 
-    /** 解绑当前顾客邮箱，不需要再次输入验证码。 */
+    /** 解绑当前顾客指定邮箱，不需要再次输入验证码；不传 email 时兼容旧客户端。 */
     @DeleteMapping("/user/{id}/email")
-    public AuthResponse unbindEmail(@PathVariable Long id) {
+    public AuthResponse unbindEmail(@PathVariable Long id,
+                                    @RequestParam(required = false) String email) {
         AccessGuard.requireUser(id);
-        return withToken(authService.unbindEmail(id));
+        return withToken(authService.unbindEmail(id, email));
     }
 
     @PostMapping("/forgot-password")

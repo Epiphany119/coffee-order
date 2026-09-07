@@ -3,6 +3,8 @@ package com.coffee.module.auth.api.dto;
 import com.coffee.module.member.api.dto.MemberLevelDTO;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 认证响应（注册/登录/用户信息通用）
@@ -11,6 +13,8 @@ public class AuthResponse {
     private boolean success;
     private String message;
     private Long id;
+    /** 对外展示的 FIKA 账号号码，不等同于数据库自增 id。 */
+    private String accountNo;
     private String username;
     private String nickname;
     private Double totalSpent;
@@ -21,6 +25,8 @@ public class AuthResponse {
     private String wechatId;
     private String qqNumber;
     private String email;
+    /** 当前用户全部已验证邮箱；email 保留为首选邮箱兼容旧客户端。 */
+    private List<String> emails = new ArrayList<>();
     private String otherInfo;
     /** Bearer 会话令牌；仅注册/登录成功时返回。 */
     private String accessToken;
@@ -54,6 +60,8 @@ public class AuthResponse {
     public void setMessage(String message) { this.message = message; }
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public String getAccountNo() { return accountNo; }
+    public void setAccountNo(String accountNo) { this.accountNo = accountNo; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
     public String getNickname() { return nickname; }
@@ -74,6 +82,10 @@ public class AuthResponse {
     public void setQqNumber(String qqNumber) { this.qqNumber = qqNumber; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
+    public List<String> getEmails() { return emails; }
+    public void setEmails(List<String> emails) {
+        this.emails = emails == null ? new ArrayList<>() : new ArrayList<>(emails);
+    }
     public String getOtherInfo() { return otherInfo; }
     public void setOtherInfo(String otherInfo) { this.otherInfo = otherInfo; }
     public String getAccessToken() { return accessToken; }

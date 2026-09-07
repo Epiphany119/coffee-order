@@ -168,7 +168,7 @@ export const useAppStore = defineStore('app', () => {
     // 清除会话凭证：只有主动退出才回登录页
     try {
       localStorage.removeItem(SESSION_KEY)
-      sessionStorage.removeItem('fikaGuestToken')
+      invalidateGuestSession()
     } catch (e) {
       console.warn('clear session failed', e)
     }
@@ -184,21 +184,57 @@ export const useAppStore = defineStore('app', () => {
 
   // --- Guest（游客身份由后端签发入库，前端仅内存持有） ---
   const guestId = ref<string | null>(null)
+  let guestSessionRequest: Promise<string> | null = null
+
+  function hasGuestToken(): boolean {
+    try { return !!sessionStorage.getItem('fikaGuestToken') } catch { return false }
+  }
+
+  function invalidateGuestSession() {
+    guestId.value = null
+    try { sessionStorage.removeItem('fikaGuestToken') } catch {}
+  }
 
   /** 获取游客身份：首次调用向后端签发（POST /api/guest/session 入库），内存持有，刷新后重新签发 */
   async function ensureGuestId(): Promise<string> {
-    if (guestId.value) return guestId.value
-    try {
+    if (guestId.value && hasGuestToken()) return guestId.value
+    if (guestSessionRequest) return guestSessionRequest
+
+    guestId.value = null
+    guestSessionRequest = (async () => {
       const res = await guestApi.createSession()
-      guestId.value = res?.guestId || null
-    } catch (e) {
-      console.warn('create guest session failed', e)
+      if (!res?.guestId || !res?.accessToken) {
+        throw new Error('无法创建游客会话，请检查后端服务')
+      }
+      guestId.value = res.guestId
+      return res.guestId
+    })()
+
+    try {
+      return await guestSessionRequest
+    } finally {
+      guestSessionRequest = null
     }
-    if (!guestId.value) {
-      // 兜底：后端不可用时用会话内临时ID（仅内存，不落浏览器，不入库）
-      guestId.value = `g-tmp-${Math.random().toString(36).slice(2, 10)}`
+  }
+
+  async function renewGuestSession(failedGuestId: string): Promise<string> {
+    // 多个组件同时收到旧令牌的 401 时，只允许第一个请求创建新会话；其余请求复用结果。
+    if (guestSessionRequest) return guestSessionRequest
+    if (guestId.value && guestId.value !== failedGuestId && hasGuestToken()) return guestId.value
+    invalidateGuestSession()
+    return ensureGuestId()
+  }
+
+  /** 游客令牌过期或后端重启时，自动换一组匹配的 guestId + token，并仅重试一次。 */
+  async function withGuestSession<T>(operation: (id: string) => Promise<T>): Promise<T> {
+    const firstGuestId = await ensureGuestId()
+    try {
+      return await operation(firstGuestId)
+    } catch (error) {
+      const status = (error as { status?: number })?.status
+      if (status !== 401 && status !== 403) throw error
+      return operation(await renewGuestSession(firstGuestId))
     }
-    return guestId.value
   }
 
   // --- Menu ---
@@ -299,10 +335,9 @@ export const useAppStore = defineStore('app', () => {
 
   async function loadFavorites() {
     try {
-      const params = isLoggedIn.value && currentUser.value?.id
-        ? { userId: currentUser.value.id }
-        : { guestId: await ensureGuestId() }
-      const data = await favoriteApi.getFavorites(params)
+      const data = isLoggedIn.value && currentUser.value?.id
+        ? await favoriteApi.getFavorites({ userId: currentUser.value.id })
+        : await withGuestSession(id => favoriteApi.getFavorites({ guestId: id }))
       favoriteProducts.value = data || []
     } catch (e) {
       console.warn('load favorites failed', e)
@@ -310,16 +345,20 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function toggleFavorite(product: Product) {
-    const params = isLoggedIn.value && currentUser.value?.id
-      ? { userId: currentUser.value.id }
-      : { guestId: await ensureGuestId() }
     const exists = favoriteProducts.value.some(p => p.code === product.code)
     try {
+      if (isLoggedIn.value && currentUser.value?.id) {
+        const params = { userId: currentUser.value.id, productCode: product.code }
+        if (exists) await favoriteApi.removeFavorite(params)
+        else await favoriteApi.addFavorite(params)
+      } else if (exists) {
+        await withGuestSession(id => favoriteApi.removeFavorite({ guestId: id, productCode: product.code }))
+      } else {
+        await withGuestSession(id => favoriteApi.addFavorite({ guestId: id, productCode: product.code }))
+      }
       if (exists) {
-        await favoriteApi.removeFavorite({ ...params, productCode: product.code })
         favoriteProducts.value = favoriteProducts.value.filter(p => p.code !== product.code)
       } else {
-        await favoriteApi.addFavorite({ ...params, productCode: product.code })
         favoriteProducts.value.unshift(product)
       }
     } catch (e) {
@@ -379,7 +418,7 @@ export const useAppStore = defineStore('app', () => {
     storePickerOpen, openStorePicker, closeStorePicker, storeList, setStoreList,
     currentUser, isLoggedIn, setUser, logout, restoreSession, refreshUser,
     seat, setSeat,
-    ensureGuestId,
+    ensureGuestId, invalidateGuestSession, withGuestSession,
     products, categories, activeCategory, setMenu, customRule,
     cart, addToCart, updateCartItem, clearCart,
     orderNote,

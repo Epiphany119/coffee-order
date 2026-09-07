@@ -94,7 +94,7 @@ async function switchStore(s: StoreResponse) {
         if (store.isLoggedIn && store.currentUser?.id) {
           await orderApi.cancelUserOrder(o.id, 'cancel', store.currentUser.id)
         } else {
-          await orderApi.cancelGuestOrder(o.id, 'cancel', await store.ensureGuestId())
+          await store.withGuestSession(guestId => orderApi.cancelGuestOrder(o.id, 'cancel', guestId))
         }
       } catch (e) {
         console.warn('cancel unpaid order failed', o.id, e)
@@ -104,7 +104,7 @@ async function switchStore(s: StoreResponse) {
     try {
       const data = store.isLoggedIn && store.currentUser?.id
         ? await orderApi.getUserOrders(store.currentUser.id)
-        : await orderApi.getGuestOrders(await store.ensureGuestId())
+        : await store.withGuestSession(guestId => orderApi.getGuestOrders(guestId))
       store.setOrders(data || [])
     } catch (e) {
       console.warn('refresh orders after switch failed', e)

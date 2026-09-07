@@ -5,15 +5,18 @@ import com.coffee.module.auth.api.dto.*;
 import com.coffee.module.auth.biz.domain.PasswordResetToken;
 import com.coffee.module.auth.biz.domain.User;
 import com.coffee.module.auth.biz.domain.repository.PasswordResetTokenRepository;
+import com.coffee.module.auth.biz.domain.repository.UserEmailRepository;
 import com.coffee.module.auth.biz.domain.repository.UserRepository;
 import com.coffee.module.auth.biz.domain.service.PasswordValidator;
-import com.coffee.module.auth.biz.infra.repository.UserRepositoryImpl;
 import com.coffee.module.auth.biz.infra.security.PasswordEncoder;
 import com.coffee.common.core.exception.ServiceException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -31,13 +34,19 @@ public class AuthApplicationService implements AuthService {
     private static final Pattern PHONE = Pattern.compile("^[0-9+()\\-\\s]{6,30}$");
 
     private final UserRepository userRepository;
+    private final UserEmailRepository userEmailRepository;
     private final PasswordResetTokenRepository tokenRepository;
     private final EmailVerificationService emailVerificationService;
 
+    @org.springframework.beans.factory.annotation.Value("${coffee.auth.max-email-bindings:3}")
+    private int maxEmailBindings;
+
     public AuthApplicationService(UserRepository userRepository,
+                                  UserEmailRepository userEmailRepository,
                                   PasswordResetTokenRepository tokenRepository,
                                   EmailVerificationService emailVerificationService) {
         this.userRepository = userRepository;
+        this.userEmailRepository = userEmailRepository;
         this.tokenRepository = tokenRepository;
         this.emailVerificationService = emailVerificationService;
     }
@@ -82,7 +91,21 @@ public class AuthApplicationService implements AuthService {
             return AuthResponse.fail("用户名或密码错误");
         }
 
-        User user = userRepository.findByUsername(request.getUsername());
+        String identifier = request.getUsername().trim();
+        if (identifier.isEmpty()) return AuthResponse.fail("用户名或密码错误");
+
+        // “账号”输入框同时支持用户名、系统账号号码和已绑定邮箱。
+        User user = userRepository.findByUsername(identifier);
+        if (user == null) {
+            user = userRepository.findByAccountNo(identifier.toLowerCase(Locale.ROOT));
+        }
+        if (user == null && identifier.contains("@")) {
+            try {
+                user = userRepository.findByEmail(emailVerificationService.normalizeEmail(identifier));
+            } catch (ServiceException ignored) {
+                // 统一返回用户名或密码错误，避免通过登录接口探测邮箱格式和账号是否存在。
+            }
+        }
         if (user == null) {
             return AuthResponse.fail("用户名或密码错误");
         }
@@ -105,15 +128,38 @@ public class AuthApplicationService implements AuthService {
         if (request.getPurpose() != EmailCodePurpose.LOGIN && request.getPurpose() != EmailCodePurpose.REGISTER) {
             throw new ServiceException(400, "验证码用途无效");
         }
-        return emailVerificationService.send(request.getEmail(), request.getPurpose());
+        String email = emailVerificationService.normalizeEmail(request.getEmail());
+        if (request.getPurpose() == EmailCodePurpose.REGISTER && userEmailRepository.findByEmail(email) != null) {
+            throw new ServiceException(409, "该邮箱已经被绑定，请选择邮箱登录");
+        }
+        return emailVerificationService.send(email, request.getPurpose());
     }
 
     @Override
+    public EmailAvailabilityResponse checkEmailAvailability(String rawEmail) {
+        String email = emailVerificationService.normalizeEmail(rawEmail);
+        boolean bound = userEmailRepository.findByEmail(email) != null;
+        return new EmailAvailabilityResponse(
+                !bound,
+                bound,
+                bound ? "该邮箱已经被绑定，请选择邮箱登录" : "该邮箱可用，可以继续注册");
+    }
+
+    @Override
+    @Transactional
     public int sendEmailBindCode(Long userId, String email) {
         if (userId == null || userRepository.findById(userId) == null) {
             throw new ServiceException(404, "用户不存在");
         }
-        return emailVerificationService.send(email, EmailCodePurpose.BIND);
+        String normalized = emailVerificationService.normalizeEmail(email);
+        userEmailRepository.lockUser(userId);
+        if (userEmailRepository.findByEmail(normalized) != null) {
+            throw new ServiceException(409, "该邮箱已经被绑定，请更换其他邮箱");
+        }
+        if (userEmailRepository.countByUserId(userId) >= safeMaxEmailBindings()) {
+            throw new ServiceException(409, "每个用户最多绑定 " + safeMaxEmailBindings() + " 个邮箱");
+        }
+        return emailVerificationService.send(normalized, EmailCodePurpose.BIND);
     }
 
     @Override
@@ -136,10 +182,10 @@ public class AuthApplicationService implements AuthService {
         if (request == null) return AuthResponse.fail("请求不能为空");
         String email = emailVerificationService.normalizeEmail(request.getEmail());
         String username = request.getUsername() == null ? "" : request.getUsername().trim();
-        String rawPassword = request.getPassword();
         if (username.length() < 2 || username.length() > 50) {
-            return AuthResponse.fail("账户名长度需要在2到50个字符之间");
+            return AuthResponse.fail("用户名长度需要在2到50个字符之间");
         }
+        String rawPassword = request.getPassword();
         if (rawPassword == null || rawPassword.isBlank()) {
             return AuthResponse.fail("密码不能为空");
         }
@@ -148,19 +194,25 @@ public class AuthApplicationService implements AuthService {
         } catch (IllegalArgumentException ex) {
             return AuthResponse.fail(ex.getMessage());
         }
+        if (userEmailRepository.findByEmail(email) != null) {
+            return AuthResponse.fail("该邮箱已经被绑定，请选择邮箱登录");
+        }
         if (userRepository.existsByUsername(username)) {
             return AuthResponse.fail("用户名已存在");
-        }
-        if (userRepository.existsByEmail(email)) {
-            return AuthResponse.fail("该邮箱已创建账户，请选择邮箱登录");
         }
         if (!emailVerificationService.verify(email, EmailCodePurpose.REGISTER, request.getCode())) {
             return AuthResponse.fail("验证码错误、已过期或已使用，请重新获取");
         }
 
         User user = User.register(username, PasswordEncoder.encode(rawPassword), request.getNickname());
-        user.setEmail(email);
         userRepository.save(user);
+        try {
+            userEmailRepository.add(user.getId(), email, true);
+        } catch (DataIntegrityViolationException ex) {
+            throw new ServiceException(409, "该邮箱已经被绑定，请选择邮箱登录");
+        }
+        user.setEmail(email);
+        user.setEmails(List.of(email));
         return toResponse(user);
     }
 
@@ -172,26 +224,57 @@ public class AuthApplicationService implements AuthService {
         if (user == null) throw new ServiceException(404, "用户不存在");
 
         String email = emailVerificationService.normalizeEmail(request.getEmail());
-        User existing = userRepository.findByEmail(email);
-        if (existing != null && !userId.equals(existing.getId())) {
-            return AuthResponse.fail("该邮箱已绑定其他账户");
+        userEmailRepository.lockUser(userId);
+        UserEmailRepository.UserEmailBinding existing = userEmailRepository.findByEmail(email);
+        if (existing != null) {
+            return AuthResponse.fail(userId.equals(existing.userId())
+                    ? "该邮箱已经绑定在当前账户"
+                    : "该邮箱已经被绑定其他账户");
+        }
+        int currentEmailCount = userEmailRepository.countByUserId(userId);
+        if (currentEmailCount >= safeMaxEmailBindings()) {
+            return AuthResponse.fail("每个用户最多绑定 " + safeMaxEmailBindings() + " 个邮箱");
         }
         if (!emailVerificationService.verify(email, EmailCodePurpose.BIND, request.getCode())) {
             return AuthResponse.fail("验证码错误、已过期或已使用，请重新获取");
         }
 
-        user.setEmail(email);
-        userRepository.updateEmail(userId, email);
+        try {
+            userEmailRepository.add(userId, email, currentEmailCount == 0);
+        } catch (DataIntegrityViolationException ex) {
+            throw new ServiceException(409, "该邮箱已经被绑定，请更换其他邮箱");
+        }
+        if (currentEmailCount == 0) {
+            userRepository.updateEmail(userId, email);
+        }
+        applyEmails(user);
         return toResponse(user);
     }
 
     @Override
     @Transactional
-    public AuthResponse unbindEmail(Long userId) {
+    public AuthResponse unbindEmail(Long userId, String rawEmail) {
         User user = userRepository.findById(userId);
         if (user == null) throw new ServiceException(404, "用户不存在");
-        userRepository.updateEmail(userId, null);
-        user.setEmail(null);
+        userEmailRepository.lockUser(userId);
+        List<String> emails = userEmailRepository.findEmailsByUserId(userId);
+        String email = rawEmail == null || rawEmail.isBlank()
+                ? (emails.isEmpty() ? user.getEmail() : emails.get(0))
+                : emailVerificationService.normalizeEmail(rawEmail);
+        if (email == null || email.isBlank()) {
+            return AuthResponse.fail("当前没有已绑定邮箱");
+        }
+        if (!emails.contains(email)) {
+            return AuthResponse.fail("该邮箱未绑定在当前账户");
+        }
+
+        userEmailRepository.delete(userId, email);
+        List<String> remaining = userEmailRepository.findEmailsByUserId(userId);
+        String primary = remaining.isEmpty() ? null : remaining.get(0);
+        userEmailRepository.setPrimary(userId, primary);
+        userRepository.updateEmail(userId, primary);
+        user.setEmails(remaining);
+        user.setEmail(primary);
         return toResponse(user);
     }
 
@@ -361,14 +444,26 @@ public class AuthApplicationService implements AuthService {
     private AuthResponse toResponse(User user) {
         AuthResponse response = AuthResponse.ok(user.getId(), user.getUsername(), user.getNickname(),
                 user.getTotalSpent() != null ? user.getTotalSpent() : 0.0);
+        response.setAccountNo(user.getAccountNo());
         response.setAvatarUrl(user.getAvatarUrl());
         response.setPhone(user.getPhone());
         response.setBirthday(user.getBirthday());
         response.setWechatId(user.getWechatId());
         response.setQqNumber(user.getQqNumber());
         response.setEmail(user.getEmail());
+        response.setEmails(user.getEmails());
         response.setOtherInfo(user.getOtherInfo());
         return response;
+    }
+
+    private void applyEmails(User user) {
+        List<String> emails = userEmailRepository.findEmailsByUserId(user.getId());
+        user.setEmails(emails);
+        user.setEmail(emails.isEmpty() ? null : emails.get(0));
+    }
+
+    private int safeMaxEmailBindings() {
+        return Math.max(1, maxEmailBindings);
     }
 
     private String trim(String value, int maxLength) {

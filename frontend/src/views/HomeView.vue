@@ -71,7 +71,7 @@ async function loadOrders() {
     if (store.isLoggedIn && store.currentUser?.id) {
       data = await orderApi.getUserOrders(store.currentUser.id)
     } else {
-      data = await orderApi.getGuestOrders(await store.ensureGuestId())
+      data = await store.withGuestSession(guestId => orderApi.getGuestOrders(guestId))
     }
     store.setOrders(data || [])
   } catch (e) {
@@ -233,7 +233,7 @@ async function cancelOrder(id: number) {
     if (store.isLoggedIn) {
       await orderApi.cancelUserOrder(id, 'cancel', store.currentUser!.id!)
     } else {
-      await orderApi.cancelGuestOrder(id, 'cancel', await store.ensureGuestId())
+      await store.withGuestSession(guestId => orderApi.cancelGuestOrder(id, 'cancel', guestId))
     }
     ElMessage.success('订单已取消')
     await loadOrders()

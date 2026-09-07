@@ -64,6 +64,7 @@ public class TokenAuthenticationInterceptor implements HandlerInterceptor {
     private boolean isPublicSessionEndpoint(HttpServletRequest request) {
         String path = request.getRequestURI();
         if ("/api/auth/login-challenge".equals(path)) return true;
+        if ("/api/auth/email/check".equals(path)) return true;
         if (!"POST".equalsIgnoreCase(request.getMethod())) return false;
         if (path.startsWith("/api/pay/callback/")) return true;
         return "/api/auth/login".equals(path)

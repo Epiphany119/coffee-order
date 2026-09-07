@@ -1,6 +1,6 @@
 package com.coffee.module.auth.api.dto;
 
-/** 先完成邮箱验证码校验，再创建会员账号。 */
+/** 先完成邮箱验证码校验，再创建会员账号；用户名由用户设置，系统账号号码由系统生成。 */
 public class EmailRegisterRequest {
     private String email;
     private String code;

@@ -5,6 +5,7 @@ import type {
   AuthResponse,
   EmailCodeRequest,
   EmailCodeResponse,
+  EmailAvailabilityResponse,
   EmailLoginRequest,
   EmailBindRequest,
   EmailRegisterRequest,
@@ -181,19 +182,55 @@ const apiHostReady = isInMiniProgramWebView
  * 每次请求从会话快照读取令牌，避免 store 初始化顺序和刷新恢复时出现循环依赖。
  * 登录用户优先于商家；游客令牌只保存在 sessionStorage，关闭标签页即失效。
  */
-function readAccessToken(preferMerchant = false, skipMerchant = false, preferRider = false): string | null {
+type AuthDomain = 'user' | 'merchant' | 'rider' | 'guest'
+type AccessCredential = { token: string; domain: AuthDomain }
+type FikaRequestError = Error & { status?: number; authDomain?: AuthDomain }
+
+function readStoredAccessToken(key: string): string | null {
   try {
-    const user = JSON.parse(localStorage.getItem('fikaSession') || 'null')
-    const merchant = JSON.parse(localStorage.getItem('fikaMerchant') || 'null')
-    const rider = JSON.parse(localStorage.getItem('fikaRider') || 'null')
-    if (preferRider) return rider?.accessToken || null
-    if (preferMerchant && merchant?.accessToken) return merchant.accessToken
-    if (user?.accessToken) return user.accessToken
-    if (!skipMerchant && merchant?.accessToken) return merchant.accessToken
-    return sessionStorage.getItem('fikaGuestToken')
+    const snapshot = JSON.parse(localStorage.getItem(key) || 'null')
+    return typeof snapshot?.accessToken === 'string' && snapshot.accessToken
+      ? snapshot.accessToken
+      : null
   } catch {
     return null
   }
+}
+
+function readGuestAccessToken(): string | null {
+  try { return sessionStorage.getItem('fikaGuestToken') } catch { return null }
+}
+
+function readAccessCredential(preferMerchant = false, skipMerchant = false, preferRider = false): AccessCredential | null {
+  const userToken = readStoredAccessToken('fikaSession')
+  const merchantToken = readStoredAccessToken('fikaMerchant')
+  const riderToken = readStoredAccessToken('fikaRider')
+  const guestToken = readGuestAccessToken()
+  if (preferRider) return riderToken ? { token: riderToken, domain: 'rider' } : null
+  if (preferMerchant && merchantToken) return { token: merchantToken, domain: 'merchant' }
+  if (userToken) return { token: userToken, domain: 'user' }
+  if (!skipMerchant && merchantToken) return { token: merchantToken, domain: 'merchant' }
+  return guestToken ? { token: guestToken, domain: 'guest' } : null
+}
+
+function parseRequestBody(data: unknown): any {
+  if (typeof data !== 'string') return data
+  try { return JSON.parse(data) } catch { return null }
+}
+
+/** 显式携带 guestId 的请求只能使用游客令牌，不能误带用户或商家令牌。 */
+function isGuestApiRequest(path: string, config?: any): boolean {
+  if (path.startsWith('/orders/guest/') || path.startsWith('/order/guest/')) return true
+  if (config?.params?.guestId) return true
+  const body = parseRequestBody(config?.data)
+  return !!body?.guestId && !body?.userId
+}
+
+function createRequestError(message: string, status?: number, authDomain?: AuthDomain): FikaRequestError {
+  const error = new Error(message) as FikaRequestError
+  error.status = status
+  error.authDomain = authDomain
+  return error
 }
 
 function isMerchantApiPath(path: string): boolean {
@@ -218,6 +255,7 @@ request.interceptors.request.use(async (config) => {
   const publicSessionRequest = path === '/auth/login'
     || path === '/auth/register'
     || path === '/auth/email/send-code'
+    || path === '/auth/email/check'
     || path === '/auth/email/login'
     || path === '/auth/email/register'
     || path === '/auth/forgot-password'
@@ -245,9 +283,15 @@ request.interceptors.request.use(async (config) => {
   }
   const merchantRequest = !customerAgentRequest && !riderRequest
     && (isMerchantApiPath(path) || businessAgentMerchantRequest)
-  // customer-agent 路径跳过商家 token，确保使用正确的身份
-  const token = readAccessToken(merchantRequest, customerAgentRequest || riderRequest, riderRequest)
-  if (token) config.headers.Authorization = `Bearer ${token}`
+  const guestRequest = isGuestApiRequest(path, config)
+  // 显式游客请求优先使用游客 token；其余请求保持用户、商家、配送员的域隔离。
+  const guestToken = guestRequest ? readGuestAccessToken() : null
+  const credential = guestRequest
+    ? (guestToken ? { token: guestToken, domain: 'guest' as const } : null)
+    : readAccessCredential(merchantRequest, customerAgentRequest || riderRequest, riderRequest)
+  const authDomain = credential?.domain || (guestRequest ? 'guest' : undefined)
+  ;(config as any).__fikaAuthDomain = authDomain
+  if (credential) config.headers.Authorization = `Bearer ${credential.token}`
   return config
 })
 
@@ -257,44 +301,60 @@ request.interceptors.response.use(
     // 后端业务异常统一返回 Result(code=4xx)，但 HTTP 状态仍可能是 200；
     // 必须在这里转成 rejected Promise，否则页面会把错误当成空数据继续渲染。
     if (body && typeof body === 'object' && typeof body.code === 'number' && 'message' in body) {
-      if (body.code !== 200) throw new Error(body.message || '请求失败')
+      if (body.code !== 200) {
+        throw createRequestError(body.message || '请求失败', body.code, (res.config as any).__fikaAuthDomain)
+      }
       return Object.prototype.hasOwnProperty.call(body, 'data') ? body.data : body
     }
     return body
   },
   (err) => {
-    console.error('[fika-api] request failed:', err.config?.url, err.message)
+    const path = err.config?.url || ''
+    const status = err.response?.status
+    const configuredDomain = (err.config as any)?.__fikaAuthDomain as AuthDomain | undefined
+    const authDomain = configuredDomain || (isGuestApiRequest(path, err.config) ? 'guest' : undefined)
+    // 游客令牌在后端重启后失效属于可恢复状态，调用方会自动重建会话并重试。
+    if (!(status === 401 && authDomain === 'guest')) {
+      console.error('[fika-api] request failed:', path, err.message)
+    }
     // 令牌过期后不保留无效快照，下一次登录不会再把它带到公开登录接口。
     // 按请求域清理，避免一个身份失效时误清除另一个独立面板的会话。
-    if (err.response?.status === 401) {
+    if (status === 401) {
       try {
-        const path = err.config?.url || ''
-        let merchantBusinessAgent = false
-        if (path === '/business-agent/ask') {
-          try {
-            const body = typeof err.config?.data === 'string' ? JSON.parse(err.config.data) : err.config?.data
-            merchantBusinessAgent = body?.scene === 'merchant'
-          } catch {}
-        }
-        const authDomain = isDeliveryRiderApiPath(path)
-          ? 'rider'
-          : isMerchantApiPath(path) || merchantBusinessAgent ? 'merchant' : 'user'
-        if (authDomain === 'rider') {
-          localStorage.removeItem('fikaRider')
-        } else if (authDomain === 'merchant') {
-          localStorage.removeItem('fikaMerchant')
-          localStorage.removeItem('fikaMerchantStore')
-        } else {
-          localStorage.removeItem('fikaSession')
+        if (authDomain === 'guest') {
           sessionStorage.removeItem('fikaGuestToken')
+        } else {
+          let merchantBusinessAgent = false
+          if (path === '/business-agent/ask') {
+            try {
+              const body = typeof err.config?.data === 'string' ? JSON.parse(err.config.data) : err.config?.data
+              merchantBusinessAgent = body?.scene === 'merchant'
+            } catch {}
+          }
+          const sessionDomain = authDomain || (isDeliveryRiderApiPath(path)
+            ? 'rider'
+            : isMerchantApiPath(path) || merchantBusinessAgent ? 'merchant' : 'user')
+          if (sessionDomain === 'rider') {
+            localStorage.removeItem('fikaRider')
+          } else if (sessionDomain === 'merchant') {
+            localStorage.removeItem('fikaMerchant')
+            localStorage.removeItem('fikaMerchantStore')
+          } else {
+            localStorage.removeItem('fikaSession')
+            sessionStorage.removeItem('fikaGuestToken')
+          }
+          window.dispatchEvent(new CustomEvent('fika-auth-expired', { detail: { domain: sessionDomain } }))
         }
-        window.dispatchEvent(new CustomEvent('fika-auth-expired', { detail: { domain: authDomain } }))
       } catch {}
     }
     if (!err.response || err.response.status === 0) {
       throw new Error('网络连接失败，请检查后端服务是否启动')
     }
-    throw new Error(err.response?.data?.message || err.message || '请求失败')
+    throw createRequestError(
+      err.response?.data?.message || err.message || '请求失败',
+      status,
+      authDomain
+    )
   }
 )
 
@@ -311,6 +371,9 @@ export const authApi = {
   sendEmailCode: (data: EmailCodeRequest) =>
     request.post<any, EmailCodeResponse>('/auth/email/send-code', data),
 
+  checkEmailAvailability: (email: string) =>
+    request.get<any, EmailAvailabilityResponse>('/auth/email/check', { params: { email } }),
+
   emailLogin: (data: EmailLoginRequest) =>
     request.post<any, AuthResponse>('/auth/email/login', data),
 
@@ -323,8 +386,8 @@ export const authApi = {
   bindEmail: (id: number, data: EmailBindRequest) =>
     request.put<any, AuthResponse>(`/auth/user/${id}/email`, data),
 
-  unbindEmail: (id: number) =>
-    request.delete<any, AuthResponse>(`/auth/user/${id}/email`),
+  unbindEmail: (id: number, email?: string) =>
+    request.delete<any, AuthResponse>(`/auth/user/${id}/email`, email ? { params: { email } } : undefined),
 
   forgotPassword: (data: ForgotPasswordRequest) =>
     request.post<any, ForgotPasswordResponse>('/auth/forgot-password', data),
@@ -419,7 +482,7 @@ export const customerAgentApi = {
                }) => {
     return new Promise<void>((resolve) => {
       const baseURL = request.defaults.baseURL || ''
-      const token = readAccessToken(false, true)
+      const token = readAccessCredential(false, true)?.token
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream'

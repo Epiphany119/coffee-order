@@ -107,6 +107,7 @@ coffee:
     token-secret: ${COFFEE_AUTH_TOKEN_SECRET:}
     token-expires-seconds: ${COFFEE_AUTH_TOKEN_EXPIRES_SECONDS:28800}
     expose-reset-token: ${COFFEE_AUTH_EXPOSE_RESET_TOKEN:false}
+    max-email-bindings: ${COFFEE_AUTH_MAX_EMAIL_BINDINGS:3}
     email-code:
       expires-seconds: ${COFFEE_EMAIL_CODE_EXPIRES_SECONDS:300}
       cooldown-seconds: ${COFFEE_EMAIL_CODE_COOLDOWN_SECONDS:60}

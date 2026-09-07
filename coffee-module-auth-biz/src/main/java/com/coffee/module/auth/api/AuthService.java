@@ -23,6 +23,9 @@ public interface AuthService {
      */
     int sendEmailCode(EmailCodeRequest request);
 
+    /** 检查邮箱是否已经被任意顾客绑定。 */
+    EmailAvailabilityResponse checkEmailAvailability(String email);
+
     /** 给已登录顾客发送绑定邮箱验证码。 */
     int sendEmailBindCode(Long userId, String email);
 
@@ -35,8 +38,8 @@ public interface AuthService {
     /** 校验绑定用途验证码后绑定邮箱。 */
     AuthResponse bindEmail(Long userId, EmailBindRequest request);
 
-    /** 直接解绑当前顾客邮箱。 */
-    AuthResponse unbindEmail(Long userId);
+    /** 解绑当前顾客指定邮箱；不传邮箱时兼容旧客户端，解绑首选邮箱。 */
+    AuthResponse unbindEmail(Long userId, String email);
 
     /**
      * 获取用户信息

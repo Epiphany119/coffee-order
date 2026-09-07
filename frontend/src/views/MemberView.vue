@@ -330,6 +330,7 @@ function handleLogout() {
           <div class="member-info">
             <h2>{{ store.currentUser?.nickname || store.currentUser?.username }}</h2>
             <p>{{ store.currentUser?.memberLevel || '普通会员' }}</p>
+            <p v-if="store.currentUser?.accountNo">账号 · {{ store.currentUser.accountNo }}</p>
           </div>
         </div>
         <button class="logout-btn" @click="handleLogout">退出登录</button>

@@ -19,6 +19,13 @@ export interface EmailCodeResponse {
   cooldownSeconds: number
 }
 
+export interface EmailAvailabilityResponse {
+  success: boolean
+  available: boolean
+  bound: boolean
+  message: string
+}
+
 export interface EmailLoginRequest {
   email: string
   code: string
@@ -45,6 +52,8 @@ export interface AuthResponse {
   success: boolean
   message: string
   id: number | null
+  /** 对外展示的 FIKA 账号号码；不等同于数据库自增 id。 */
+  accountNo?: string | null
   username: string | null
   nickname: string | null
   totalSpent: number
@@ -55,6 +64,7 @@ export interface AuthResponse {
   wechatId?: string | null
   qqNumber?: string | null
   email?: string | null
+  emails?: string[] | null
   otherInfo?: string | null
   accessToken?: string | null
 }

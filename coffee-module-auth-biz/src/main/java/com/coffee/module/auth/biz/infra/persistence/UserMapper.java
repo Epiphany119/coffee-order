@@ -15,13 +15,20 @@ public interface UserMapper extends BaseMapper<UserPO> {
     @Select("SELECT * FROM coffee_user WHERE username = #{username}")
     UserPO selectByUsername(@Param("username") String username);
 
-    @Select("SELECT * FROM coffee_user WHERE email = #{email} LIMIT 1")
+    @Select("SELECT * FROM coffee_user WHERE account_no = #{accountNo} LIMIT 1")
+    UserPO selectByAccountNo(@Param("accountNo") String accountNo);
+
+    @Select("SELECT u.* FROM coffee_user u INNER JOIN coffee_user_email ue ON ue.user_id = u.id "
+            + "WHERE ue.email = #{email} LIMIT 1")
     UserPO selectByEmail(@Param("email") String email);
 
     @Select("SELECT COUNT(*) FROM coffee_user WHERE username = #{username}")
     long countByUsername(@Param("username") String username);
 
-    @Select("SELECT COUNT(*) FROM coffee_user WHERE email = #{email}")
+    @Select("SELECT COUNT(*) FROM coffee_user WHERE account_no = #{accountNo}")
+    long countByAccountNo(@Param("accountNo") String accountNo);
+
+    @Select("SELECT COUNT(*) FROM coffee_user_email WHERE email = #{email}")
     long countByEmail(@Param("email") String email);
 
     @Select("SELECT password FROM coffee_user WHERE id = #{id}")
