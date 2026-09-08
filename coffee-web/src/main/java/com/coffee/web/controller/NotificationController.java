@@ -19,6 +19,6 @@ public class NotificationController {
     @GetMapping("/user/{userId}")
     public Result<List<Map<String, Object>>> list(@PathVariable Long userId) {
         AccessGuard.requireUser(userId);
-        return Result.success(jdbcTemplate.queryForList("SELECT id, type, title, content, read_status AS readStatus, created_at AS createdAt FROM user_notification WHERE user_id = ? ORDER BY id DESC LIMIT 50", userId));
+        return Result.success(jdbcTemplate.queryForList("SELECT id, order_id AS orderId, type, title, content, read_status AS readStatus, created_at AS createdAt FROM user_notification WHERE user_id = ? ORDER BY id DESC LIMIT 50", userId));
     }
 }

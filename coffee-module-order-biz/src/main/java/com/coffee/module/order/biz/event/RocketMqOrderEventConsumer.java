@@ -47,8 +47,8 @@ public class RocketMqOrderEventConsumer implements RocketMQListener<String> {
                 memberService.addSpending(order.getUserId(), order.getFinalPrice());
                 membershipService.addConsumptionPoints(order.getUserId(), order.getFinalPrice());
                 if ("COMPLETED".equals(event.getStatus())) {
-                    jdbcTemplate.update("INSERT INTO user_notification (user_id, type, title, content, read_status, created_at) VALUES (?, 'ORDER_COMPLETED', ?, ?, 0, NOW())",
-                            order.getUserId(), "订单已完成 · #" + order.getId(), "本次消费已入账，积分已发放到你的会员账户。");
+                    jdbcTemplate.update("INSERT INTO user_notification (user_id, order_id, type, title, content, read_status, created_at) VALUES (?, ?, 'ORDER_COMPLETED', ?, ?, 0, NOW())",
+                            order.getUserId(), order.getId(), "订单已完成 · #" + order.getId(), "本次消费已入账，积分已发放到你的会员账户。");
                 }
                 log.info("[RocketMQ] 订单 {} 的会员积分已异步入账", order.getId());
             }

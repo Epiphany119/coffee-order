@@ -136,9 +136,15 @@ async function contactRider() {
         <!-- 订单明细（批量订单 = 1 单 N 明细）：单价（折后）+ 划线原价（有折扣时） -->
         <div v-if="order.items && order.items.length" class="items-block">
           <div v-for="(it, idx) in order.items" :key="idx" class="item-row">
-            <span class="item-name">{{ it.beverageName }} ×{{ it.quantity }}</span>
+            <div class="item-main">
+              <div class="item-thumb" aria-hidden="true">
+                <img v-if="it.imageUrl" :src="it.imageUrl" :alt="it.beverageName" />
+                <span v-else>☕</span>
+              </div>
+              <span class="item-name">{{ it.beverageName }} ×{{ it.quantity }}</span>
+            </div>
             <span class="item-right">
-              <span class="item-unit">单价 ¥{{ fmtMoney(it.unitPrice) }}</span>
+              <span class="item-unit">单价 {{ fmtMoney(it.unitPrice) }}</span>
               <s v-if="hasDiscount(it)" class="item-original">{{ fmtMoney(originalSubtotal(it)) }}</s>
               <span v-else class="item-price">{{ fmtMoney(it.subtotal) }}</span>
             </span>
@@ -272,8 +278,38 @@ async function contactRider() {
     gap: 12px;
     font-size: 12px;
 
+    .item-main {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .item-thumb {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      flex: none;
+      border: 1px solid rgba(218, 211, 199, .9);
+      border-radius: 9px;
+      color: #a8784f;
+      background: #f6eee5;
+      font-size: 19px;
+
+      img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+    }
+
     .item-name {
       color: var(--ink);
+      min-width: 0;
+      line-height: 1.45;
     }
 
     .item-right {

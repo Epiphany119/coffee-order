@@ -169,11 +169,12 @@
 | 18.3 | [确认执行方案](#183-确认执行方案) | `POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute` |
 | 18.4 | [查询 Agent 审计记录](#184-查询-agent-审计记录) | `GET /api/merchant/{merchantId}/growth-agent/actions` |
 
-### 十九、顾客点单 Agent（1 个）
+### 十九、顾客点单 Agent（2 个）
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
 | 19.1 | [生成点单方案](#191-生成点单方案) | `POST /api/customer-agent/plan` |
+| 19.2 | [确认 Agent 方案并创建待支付订单](#192-确认-agent-方案并创建待支付订单) | `POST /api/customer-agent/plans/confirm` |
 
 ### 二十、外卖配送模块（17 个）
 
@@ -1444,7 +1445,7 @@ Authorization: Bearer {accessToken}
 
 **`POST /api/order`**
 
-作用：下单。支持单品与批量（`items` 非空即批量：1 单 + N 明细，明细按行落 `order_item`）。**下单即创建支付单**（幂等编排），订单初始状态 `UNPAID`，响应携带 `paymentNo` 供前端拉起支付；支付成功后才流转 `PENDING` 进入商家队列。
+作用：下单。支持单品与批量（`items` 非空即批量：1 单 + N 明细，明细按行落 `order_item`）。每条明细响应包含下单时的 `imageUrl` 商品图片快照，供订单详情展示缩略图。**下单即创建支付单**（幂等编排），订单初始状态 `UNPAID`，响应携带 `paymentNo` 供前端拉起支付；支付成功后才流转 `PENDING` 进入商家队列。
 
 请求必须带 `Idempotency-Key` Header（16-128 位字母、数字、`_` 或 `-`）。同一用户/游客身份下以相同 key 重试会原样返回首次成功响应；同 key 携带不同请求返回 `409`；同 key 正在处理返回 `409`。前端在一次“确认下单”操作中生成 UUID，网络重试时复用该 UUID。
 
@@ -1539,7 +1540,7 @@ Authorization: Bearer {accessToken}
 | memberDiscount / couponDiscount / couponName | 折扣明细 |
 | earnedPoints | 本单预计积分（支付完成时结算） |
 | estimatedReadyTime | 预计出餐时间（HH:mm） |
-| items | 明细（批量订单多条；`unitPrice` 为折后单价、`originalUnitPrice` 为单件原价（折前，明细行划线展示用，老数据可能为 null）、`subtotal` 为折后小计） |
+| items | 明细（批量订单多条；`imageUrl` 为下单时的商品图片快照，`unitPrice` 为折后单价、`originalUnitPrice` 为单件原价（折前，明细行划线展示用，老数据可能为 null）、`subtotal` 为折后小计） |
 
 失败响应（HTTP 200，body 业务码）：
 
@@ -2364,7 +2365,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 **`GET /api/notifications/user/{userId}`**
 
-作用：获取用户最近 50 条站内消息（包括秒杀抢购成功提醒）。
+作用：获取用户最近 50 条站内消息（包括秒杀抢购成功提醒）。订单状态通知会返回 `orderId`，顾客端点击消息后可直接打开对应订单详情；营销/抢购类通知的 `orderId` 为 `null`。
 
 请求头：`Authorization: Bearer {accessToken}`，路径中的 `userId` 必须与令牌身份一致。
 
@@ -2377,6 +2378,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
   "data": [
     {
       "id": 1,
+      "orderId": null,
       "type": "FLASH_SALE_CLAIM",
       "title": "抢购成功 · 资格已保存",
       "content": "你已抢到「经典拿铁 · 限时尝鲜」，抢购码：FS9DD110E72E6444A8。可在会员中心的“我的抢购”中查看。",
@@ -2549,11 +2551,12 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
   "planToken": "Agent 返回的一次性令牌",
   "storeId": 5,
   "userId": 1,
-  "fulfillmentType": "PICKUP"
+  "fulfillmentType": "DELIVERY",
+  "deliveryAddressId": 12
 }
 ```
 
-安全规则：令牌绑定用户/游客身份与门店，5 分钟过期，只能绑定一枚幂等键；换身份、换门店、修改商品行或用另一枚幂等键重复确认均会被拒绝。价格、库存、优惠与支付单均由正式订单链路处理。
+安全规则：令牌绑定用户/游客身份与门店，5 分钟过期，只能绑定一枚幂等键；换身份、换门店、修改商品行或用另一枚幂等键重复确认均会被拒绝。`DELIVERY` 仅允许登录顾客，并且必须传当前顾客自己的 `deliveryAddressId`。价格、库存、优惠与支付单均由正式订单链路处理。
 
 ## 二十、外卖配送模块
 
@@ -2612,7 +2615,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 **`GET /api/delivery/rider/orders/available`**、**`GET /api/delivery/rider/orders/mine`**
 
-待抢订单只返回 `OPEN` 且对应主订单为 `READY_FOR_DELIVERY` 的配送单；响应包含门店、商品摘要、收货地址快照、金额和配送状态。
+待抢订单只返回 `OPEN` 且对应主订单为 `READY_FOR_DELIVERY` 的配送单；响应包含门店、商品摘要、商品明细快照（包括 `beverageName`、`quantity`、`imageUrl`，以及可选规格/配料/价格）、收货地址快照、金额和配送状态。骑手端可以直接使用 `items[].imageUrl` 展示每个商品缩略图。
 
 骑手响应会隐藏顾客真实手机号和用户内部 id；骑手仅可看到收货人称呼、地址标签、详细地址、商品摘要和顾客备注。顾客手机号只用于服务端地址快照和后续中介转接，不会透传给骑手。
 
@@ -2676,7 +2679,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 **`GET /api/delivery/orders/mine`**
 
-登录顾客查询自己的配送单及状态，地址字段来自下单时的快照。
+登录顾客查询自己的配送单及状态，地址字段来自下单时的快照，`items` 为下单时保存的商品图片快照。
 
 ### 20.10 配送员个人资料
 

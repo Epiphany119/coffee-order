@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { deliveryApi } from '@/api'
-import type { DeliveryOrder, DeliveryPerformanceRange, DeliveryRiderPerformance, DeliveryRiderResponse } from '@/api/types'
+import type { DeliveryOrder, DeliveryOrderItem, DeliveryPerformanceRange, DeliveryRiderPerformance, DeliveryRiderResponse } from '@/api/types'
 
 type AuthMode = 'login' | 'register'
 type OrderTab = 'available' | 'mine'
@@ -263,6 +263,14 @@ function formatMoney(value: number | null | undefined) {
   return Number(value || 0).toFixed(2)
 }
 
+function itemMeta(item: DeliveryOrderItem) {
+  const parts = [
+    item.size && item.size !== 'MIXED' ? item.size : '',
+    item.condiments || ''
+  ].filter(Boolean)
+  return parts.join(' · ') || '下单时商品快照'
+}
+
 function canContactCustomer(order: DeliveryOrder) {
   return orderTab.value === 'mine' && ['CLAIMED', 'PICKED_UP', 'DELIVERING'].includes(order.status)
 }
@@ -418,6 +426,18 @@ async function contactCustomer(order: DeliveryOrder) {
               <div class="order-address"><span>⌖</span><div><small>{{ order.addressLabel }} · 收货人 {{ order.receiverName }}</small><b>{{ order.detailAddress }}</b></div></div>
               <div class="order-price"><small>订单金额</small><b>¥{{ Number(order.amount || 0).toFixed(2) }}</b></div>
             </div>
+            <div v-if="order.items?.length" class="delivery-items">
+              <div v-for="(item, index) in order.items" :key="`${item.productCode || item.beverageName}-${index}`" class="delivery-item">
+                <div class="delivery-item-thumb" aria-hidden="true">
+                  <img v-if="item.imageUrl" :src="item.imageUrl" :alt="item.beverageName" />
+                  <span v-else>☕</span>
+                </div>
+                <div class="delivery-item-copy">
+                  <b>{{ item.beverageName }} ×{{ item.quantity }}</b>
+                  <small>{{ itemMeta(item) }}</small>
+                </div>
+              </div>
+            </div>
             <div v-if="order.note" class="order-note">备注：{{ order.note }}</div>
             <div class="order-card-bottom">
               <small v-if="orderTab === 'available'">商家已完成制作 · 可立即抢单</small>
@@ -505,6 +525,11 @@ async function contactCustomer(order: DeliveryOrder) {
 .order-shop, .order-address { display: flex; align-items: flex-start; gap: 8px; min-width: 0; .shop-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; color: #fff; background: #193f32; font-family: Georgia, serif; font-size: 17px; flex: none; } b, small { display: block; } b { color: #32493d; font-size: 12px; } small { margin-top: 4px; color: #8b968f; font-size: 10px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
 .order-address { .shop-icon { display: none; } > span { color: #ed7548; font-size: 19px; line-height: 1; } b { color: #586b60; font-size: 11px; line-height: 1.5; white-space: normal; } }
 .order-price { padding-left: 8px; border-left: 1px solid #eeeae2; text-align: right; white-space: nowrap; small, b { display: block; } small { color: #9ca49e; font-size: 10px; } b { margin-top: 5px; color: #ed6f3e; font-size: 18px; } }
+.delivery-items { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 1px solid #f0ede6; }
+.delivery-item { display: flex; align-items: center; gap: 8px; min-width: 190px; flex: 1 1 210px; padding: 7px 8px; border: 1px solid #eeeae2; border-radius: 11px; background: #fffdf9; }
+.delivery-item-thumb { width: 42px; height: 42px; display: grid; place-items: center; overflow: hidden; flex: none; border: 1px solid rgba(218, 211, 199, .9); border-radius: 9px; color: #a8784f; background: #f6eee5; font-size: 19px; }
+.delivery-item-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.delivery-item-copy { min-width: 0; b, small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } b { color: #32493d; font-size: 11px; } small { margin-top: 4px; color: #8b968f; font-size: 9px; } }
 .order-note { margin-bottom: 11px; padding: 8px 9px; border-radius: 7px; color: #8d786d; background: #fff8f2; font-size: 10px; }
 .order-card-bottom { padding-top: 11px; border-top: 1px solid #f0ede6; small { color: #8d9990; font-size: 10px; } > span { flex: 1; } .claim-btn { padding: 9px 12px; font-size: 11px; } .claim-btn span { margin-left: 5px; font-size: 14px; } }
 .contact-btn { border: 1px solid #bcd2c2; border-radius: 9px; padding: 8px 10px; color: #3f7054; background: #f3faf4; font-size: 10px; font-weight: 800; cursor: pointer; &:hover { border-color: #7ea98b; background: #e9f5eb; } &:disabled { opacity: .55; cursor: not-allowed; } }

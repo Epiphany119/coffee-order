@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 import { orderApi, favoriteApi, membershipApi, afterSaleApi, notificationApi, flashSaleApi, memberApi, deliveryApi } from '@/api'
 import { STATUS_LABELS, CATEGORY_META, sizeText } from '@/api/types'
-import type { Product, RedeemItem, Voucher, FeedbackRecord, FlashSaleClaimRecord } from '@/api/types'
+import type { Product, RedeemItem, Voucher, FeedbackRecord, FlashSaleClaimRecord, UserNotification } from '@/api/types'
 import OrderDetailDialog from '@/components/OrderDetailDialog.vue'
 import AfterSaleDialog from '@/components/AfterSaleDialog.vue'
 import FeedbackDialog from '@/components/FeedbackDialog.vue'
@@ -19,7 +19,7 @@ const emit = defineEmits<{
 }>()
 
 const activeTab = ref<'profile' | 'orders' | 'favorites' | 'points' | 'notifications' | 'flashClaims'>('orders')
-const notifications = ref<any[]>([])
+const notifications = ref<UserNotification[]>([])
 const flashClaims = ref<FlashSaleClaimRecord[]>([])
 let refreshTimer: number | undefined
 
@@ -139,6 +139,33 @@ const detailOrder = ref<any>(null)
 function openDetail(o: any) {
   detailOrder.value = o
   detailVisible.value = true
+}
+
+function notificationOrderId(notification: UserNotification): number | null {
+  const direct = Number(notification.orderId)
+  if (Number.isInteger(direct) && direct > 0) return direct
+  // 兼容 V23 迁移前已经产生的旧通知：旧标题使用“#订单 id”格式。
+  const match = `${notification.title || ''} ${notification.content || ''}`.match(/#\s*(\d+)/)
+  const parsed = Number(match?.[1])
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+async function openNotification(notification: UserNotification) {
+  const orderId = notificationOrderId(notification)
+  if (!orderId) {
+    ElMessage.info('这是一条站内通知，暂未关联订单详情')
+    return
+  }
+  let order = orders.value.find(item => Number(item.id ?? item.orderId) === orderId)
+  if (!order) {
+    await loadOrders()
+    order = orders.value.find(item => Number(item.id ?? item.orderId) === orderId)
+  }
+  if (!order) {
+    ElMessage.warning('订单详情暂时无法加载，请稍后重试')
+    return
+  }
+  openDetail(order)
 }
 
 function canContactRider(o: any) {
@@ -415,8 +442,23 @@ function handleLogout() {
 
     <div v-if="activeTab === 'notifications'" class="tab-content notifications-inner">
       <div v-if="notifications.length" class="notification-list">
-        <article v-for="n in notifications" :key="n.id" class="notification-card">
-          <span class="notification-mark">✦</span><div><b>{{ n.title }}</b><p>{{ n.content }}</p><small>{{ formatTime(n.createdAt) }}</small></div>
+        <article
+          v-for="n in notifications"
+          :key="n.id"
+          class="notification-card"
+          :class="{ clickable: notificationOrderId(n) }"
+          role="button"
+          tabindex="0"
+          @click="openNotification(n)"
+          @keydown.enter="openNotification(n)"
+        >
+          <span class="notification-mark">✦</span>
+          <div class="notification-main">
+            <b>{{ n.title }}</b>
+            <p>{{ n.content }}</p>
+            <small>{{ formatTime(n.createdAt) }}</small>
+          </div>
+          <span v-if="notificationOrderId(n)" class="notification-action">查看订单详情 <i>→</i></span>
         </article>
       </div>
       <div v-else class="empty-state">暂时没有新消息。</div>
@@ -783,7 +825,7 @@ function handleLogout() {
 .tab-content {
   padding: 28px 0 70px;
 }
-.notifications-inner,.flash-claims-inner{width:min(1240px,calc(100% - 40px));max-width:900px;margin-left:auto;margin-right:auto}.notification-list,.flash-claim-list{display:grid;gap:10px}.notification-card{display:flex;gap:13px;padding:16px 18px;border:1px solid var(--line);border-radius:16px;background:var(--paper)}.notification-mark{display:grid;place-items:center;width:30px;height:30px;border-radius:10px;color:var(--orange);background:#fff0df}.notification-card b{font-size:14px}.notification-card p{margin:5px 0;color:var(--muted);font-size:13px}.notification-card small{color:#a5aaa4;font-size:11px}.tab-nav-inner i{font-style:normal;font-size:10px;margin-left:3px;color:var(--orange)}.flash-claim-card{display:flex;justify-content:space-between;gap:18px;padding:18px 20px;border:1px solid var(--line);border-left:4px solid var(--orange);border-radius:16px;background:var(--paper)}.flash-claim-card.used{border-left-color:#4a9b67}.flash-claim-card.expired{border-left-color:#a5aaa4;opacity:.72;background:#f2f3f1;filter:grayscale(.65)}.claim-kicker{color:var(--orange);font-size:11px;font-weight:700;letter-spacing:.08em}.flash-claim-card h3{margin:6px 0;font-size:16px}.flash-claim-card p{margin:0 0 5px;color:var(--muted);font-size:13px}.flash-claim-card code{padding:2px 6px;border-radius:5px;background:#fff0df;color:#a95024}.flash-claim-card code.expired-code{text-decoration:line-through;background:#e5e7e4;color:#8a908a}.flash-claim-card small{color:#8a928a;font-size:11px}.claim-side{display:grid;align-content:center;justify-items:end;gap:8px;white-space:nowrap}.claim-side b{color:var(--orange);font-size:18px}.claim-side span{padding:3px 8px;border-radius:999px;background:#fff0df;color:#b55f32;font-size:11px}.used .claim-side span{background:#e5f5e9;color:#368150}.expired .claim-side span{background:#edf0ed;color:#747b75}
+.notifications-inner,.flash-claims-inner{width:min(1240px,calc(100% - 40px));max-width:900px;margin-left:auto;margin-right:auto}.notification-list,.flash-claim-list{display:grid;gap:10px}.notification-card{display:flex;align-items:flex-start;gap:13px;padding:16px 18px;border:1px solid var(--line);border-radius:16px;background:var(--paper);transition:transform .16s,border-color .16s,box-shadow .16s}.notification-card.clickable{cursor:pointer}.notification-card.clickable:hover,.notification-card.clickable:focus-visible{border-color:#e7a477;outline:none;transform:translateY(-1px);box-shadow:0 9px 22px rgba(48,70,56,.08)}.notification-mark{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:10px;color:var(--orange);background:#fff0df}.notification-main{min-width:0;flex:1}.notification-card b{font-size:14px}.notification-card p{margin:5px 0;color:var(--muted);font-size:13px}.notification-card small{color:#a5aaa4;font-size:11px}.notification-action{align-self:center;flex:none;color:var(--orange);font-size:11px;font-weight:700;white-space:nowrap}.notification-action i{margin-left:3px;font-style:normal;font-size:14px}.tab-nav-inner i{font-style:normal;font-size:10px;margin-left:3px;color:var(--orange)}.flash-claim-card{display:flex;justify-content:space-between;gap:18px;padding:18px 20px;border:1px solid var(--line);border-left:4px solid var(--orange);border-radius:16px;background:var(--paper)}.flash-claim-card.used{border-left-color:#4a9b67}.flash-claim-card.expired{border-left-color:#a5aaa4;opacity:.72;background:#f2f3f1;filter:grayscale(.65)}.claim-kicker{color:var(--orange);font-size:11px;font-weight:700;letter-spacing:.08em}.flash-claim-card h3{margin:6px 0;font-size:16px}.flash-claim-card p{margin:0 0 5px;color:var(--muted);font-size:13px}.flash-claim-card code{padding:2px 6px;border-radius:5px;background:#fff0df;color:#a95024}.flash-claim-card code.expired-code{text-decoration:line-through;background:#e5e7e4;color:#8a908a}.flash-claim-card small{color:#8a928a;font-size:11px}.claim-side{display:grid;align-content:center;justify-items:end;gap:8px;white-space:nowrap}.claim-side b{color:var(--orange);font-size:18px}.claim-side span{padding:3px 8px;border-radius:999px;background:#fff0df;color:#b55f32;font-size:11px}.used .claim-side span{background:#e5f5e9;color:#368150}.expired .claim-side span{background:#edf0ed;color:#747b75}
 
 .orders-inner, .favorites-inner, .points-inner {
   width: min(1240px, calc(100% - 40px));

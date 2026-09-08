@@ -56,6 +56,7 @@ import type {
   , DeliveryRiderPerformance
   , DeliveryPerformanceRange
   , VirtualCallResponse
+  , UserNotification
   , MerchantProfileUpdateRequest
   , BusinessAgentAnswer
 } from './types'
@@ -570,7 +571,7 @@ export const customerAgentApi = {
   },
 
   /** 只提交一次性方案令牌；商品行由服务端从已审计的方案快照读取。 */
-  confirm: (data: { planToken: string; storeId: number; userId?: number | null; guestId?: string | null; fulfillmentType: string; includeAddOn?: boolean }, idempotencyKey = createIdempotencyKey()) =>
+  confirm: (data: { planToken: string; storeId: number; userId?: number | null; guestId?: string | null; fulfillmentType: string; deliveryAddressId?: number | null; includeAddOn?: boolean }, idempotencyKey = createIdempotencyKey()) =>
     request.post<any, OrderResponse>('/customer-agent/plans/confirm', data, { headers: { 'Idempotency-Key': idempotencyKey } })
 }
 
@@ -673,7 +674,7 @@ export const deliveryApi = {
 }
 
 export const notificationApi = {
-  getUserNotifications: (userId: number) => request.get<any, any[]>(`/notifications/user/${userId}`)
+  getUserNotifications: (userId: number) => request.get<any, UserNotification[]>(`/notifications/user/${userId}`)
 }
 
 function createIdempotencyKey(): string {

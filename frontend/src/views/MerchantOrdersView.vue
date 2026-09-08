@@ -202,7 +202,16 @@ async function copyOrderNo(no: string) {
           </div>
         </div>
         <div class="order-items">
-          {{ itemText(o) }}
+          <template v-if="o.items && o.items.length">
+            <span v-for="(it, idx) in o.items" :key="idx" class="list-item-preview" :title="`${it.beverageName} ×${it.quantity}`">
+              <span class="list-item-thumb" aria-hidden="true">
+                <img v-if="it.imageUrl" :src="it.imageUrl" :alt="it.beverageName" />
+                <span v-else>☕</span>
+              </span>
+              <span>{{ it.beverageName }} ×{{ it.quantity }}</span>
+            </span>
+          </template>
+          <span v-else>{{ itemText(o) }}</span>
         </div>
         <div class="order-amount">¥{{ fmt(o.finalPrice) }}</div>
         <div class="order-side">
@@ -250,7 +259,13 @@ async function copyOrderNo(no: string) {
         <div class="drawer-items">
           <template v-if="current.items && current.items.length">
             <div v-for="(it, idx) in current.items" :key="idx" class="item-row">
-              <span class="item-name">{{ it.beverageName }} ×{{ it.quantity }}</span>
+              <div class="item-main">
+                <div class="item-thumb" aria-hidden="true">
+                  <img v-if="it.imageUrl" :src="it.imageUrl" :alt="it.beverageName" />
+                  <span v-else>☕</span>
+                </div>
+                <span class="item-name">{{ it.beverageName }} ×{{ it.quantity }}</span>
+              </div>
               <span class="item-sub">单价 ¥{{ fmt(it.unitPrice) }}</span>
               <s v-if="hasDiscount(it)" class="item-original">¥{{ fmt(originalSubtotal(it)) }}</s>
               <span v-else class="item-price">¥{{ fmt(it.subtotal) }}</span>
@@ -384,6 +399,38 @@ async function copyOrderNo(no: string) {
   white-space: nowrap;
 }
 
+.list-item-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: 10px;
+  max-width: 190px;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-item-thumb {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid rgba(218, 211, 199, .9);
+  border-radius: 8px;
+  color: #a8784f;
+  background: #f6eee5;
+  font-size: 14px;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
 .order-amount {
   font-size: 16px;
   font-weight: 700;
@@ -514,7 +561,10 @@ async function copyOrderNo(no: string) {
     gap: 10px;
     padding: 7px 0;
     font-size: 13.5px;
-    .item-name { flex: 1; color: var(--ink); }
+    .item-main { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+    .item-thumb { width: 42px; height: 42px; display: grid; place-items: center; overflow: hidden; flex: none; border: 1px solid rgba(218, 211, 199, .9); border-radius: 9px; color: #a8784f; background: #f6eee5; font-size: 19px; }
+    .item-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .item-name { min-width: 0; color: var(--ink); line-height: 1.45; }
     .item-sub { color: var(--muted); font-size: 12px; flex-shrink: 0; }
     .item-price { font-family: "SF Mono", Menlo, monospace; color: var(--pine); font-weight: 600; flex-shrink: 0; }
     .item-original { position: relative; font-family: "SF Mono", Menlo, monospace; color: var(--muted); flex-shrink: 0; }

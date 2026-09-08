@@ -3,6 +3,7 @@ package com.coffee.module.delivery.api.dto;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /** 顾客和配送员工作台共用的配送单响应；骑手视图会脱敏隐私字段。 */
 @Data
@@ -16,6 +17,8 @@ public class DeliveryOrderResponse {
     private String storeName;
     private Double amount;
     private String itemSummary;
+    /** 商品快照；骑手、商家和顾客配送单均可查看，不包含顾客隐私字段。 */
+    private List<DeliveryOrderItem> items;
     private String note;
     private String addressLabel;
     private String receiverName;

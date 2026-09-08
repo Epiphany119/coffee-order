@@ -18,6 +18,8 @@ public class OrderItemPO {
     /** 商品 id（FK → menu_item.id） */
     private Long productId;
     private String productName;
+    /** 下单时的商品图片快照。 */
+    private String imageUrl;
     /** 数量（购物车行级，如燕麦拿铁 x2 = quantity 2） */
     private Integer quantity;
     /** 单件折后价 */

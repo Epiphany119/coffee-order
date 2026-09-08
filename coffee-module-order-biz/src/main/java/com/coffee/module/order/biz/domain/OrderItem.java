@@ -21,6 +21,8 @@ public class OrderItem {
     private Long productId;
     private String productCode;
     private String beverageName;
+    /** 商品图片快照，避免菜单图片更新后历史订单图片跟着变化。 */
+    private String imageUrl;
     private String categoryCode;
     private String size;
     private List<String> condiments;

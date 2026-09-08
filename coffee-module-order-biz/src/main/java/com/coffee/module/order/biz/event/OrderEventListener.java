@@ -35,8 +35,8 @@ public class OrderEventListener {
                     objectMapper.writeValueAsString(event), LocalDateTime.now(), LocalDateTime.now());
             if ("ORDER_STATUS_CHANGED".equals(event.getEventType()) && "DELIVERED".equals(event.getStatus())) {
                 // 送达通知与主订单状态处在同一个本地事务中；重复事件不会重复通知。
-                jdbcTemplate.update("INSERT INTO user_notification (user_id, type, title, content, read_status, created_at) "
-                                + "SELECT o.user_id, 'DELIVERY_DELIVERED', ?, ?, 0, NOW() FROM user_order o "
+                jdbcTemplate.update("INSERT INTO user_notification (user_id, order_id, type, title, content, read_status, created_at) "
+                                + "SELECT o.user_id, o.id, 'DELIVERY_DELIVERED', ?, ?, 0, NOW() FROM user_order o "
                                 + "WHERE o.id = ? AND o.user_id IS NOT NULL AND o.fulfillment_type = 'DELIVERY' "
                                 + "AND o.status = 'DELIVERED' AND NOT EXISTS ("
                                 + "SELECT 1 FROM user_notification n WHERE n.user_id = o.user_id "

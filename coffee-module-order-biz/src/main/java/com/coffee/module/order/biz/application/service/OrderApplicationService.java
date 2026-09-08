@@ -166,6 +166,7 @@ public class OrderApplicationService implements OrderService {
         OrderItem item = OrderItem.create(product.getCode(), fullName, product.getCategoryCode(),
                 size, command.getCondiments(), 1, coupon.finalPrice, null);
         item.setProductId(product.getId());
+        item.setImageUrl(product.getImageUrl());
         item.setOriginalUnitPrice(regularUnitPrice);
         order.setItems(List.of(item));
 
@@ -263,6 +264,7 @@ public class OrderApplicationService implements OrderService {
                     line.product.getCategoryCode(), line.size, line.condiments,
                     line.quantity, lineUnitPrice, null);
             item.setProductId(line.product.getId());
+            item.setImageUrl(line.product.getImageUrl());
             item.setOriginalUnitPrice(line.unitPrice);
             item.setSubtotal(lineFinal);
             items.add(item);
@@ -275,6 +277,7 @@ public class OrderApplicationService implements OrderService {
             OrderResponse.OrderItemResponse itemResp = new OrderResponse.OrderItemResponse();
             itemResp.setProductCode(line.product.getCode());
             itemResp.setBeverageName(line.fullName);
+            itemResp.setImageUrl(line.product.getImageUrl());
             itemResp.setCategoryCode(line.product.getCategoryCode());
             itemResp.setSize(line.size);
             itemResp.setUnitPrice(lineUnitPrice);
@@ -653,6 +656,25 @@ public class OrderApplicationService implements OrderService {
         response.setCouponName(coupon.name);
         response.setEarnedPoints(earnedPoints);
         response.setEstimatedReadyTime(readyTimeStr);
+        if (order.getItems() != null) {
+            response.setItems(order.getItems().stream().map(this::toItemResponse).toList());
+        }
+        return response;
+    }
+
+    /** 下单响应也返回明细图片，前端无需重新查询菜单即可展示刚生成的订单。 */
+    private OrderResponse.OrderItemResponse toItemResponse(OrderItem item) {
+        OrderResponse.OrderItemResponse response = new OrderResponse.OrderItemResponse();
+        response.setProductCode(item.getProductCode());
+        response.setBeverageName(item.getBeverageName());
+        response.setImageUrl(item.getImageUrl());
+        response.setCategoryCode(item.getCategoryCode());
+        response.setSize(item.getSize());
+        response.setCondiments(item.getCondiments() == null ? "" : String.join(",", item.getCondiments()));
+        response.setQuantity(item.getQuantity());
+        response.setUnitPrice(item.getUnitPrice());
+        response.setOriginalUnitPrice(item.getOriginalUnitPrice());
+        response.setSubtotal(item.getSubtotal());
         return response;
     }
 
@@ -678,6 +700,7 @@ public class OrderApplicationService implements OrderService {
             Map<String, Object> im = new LinkedHashMap<>();
             im.put("productId", item.getProductId());
             im.put("beverageName", item.getBeverageName());
+            im.put("imageUrl", item.getImageUrl());
             im.put("quantity", item.getQuantity());
             im.put("unitPrice", item.getUnitPrice());
             im.put("originalUnitPrice", item.getOriginalUnitPrice());

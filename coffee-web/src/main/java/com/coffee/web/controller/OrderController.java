@@ -15,6 +15,7 @@ import com.coffee.module.store.api.StoreService;
 import com.coffee.module.store.api.dto.StoreResponse;
 import com.coffee.module.delivery.api.DeliveryService;
 import com.coffee.module.delivery.api.dto.DeliveryOrderCreateRequest;
+import com.coffee.module.delivery.api.dto.DeliveryOrderItem;
 import com.coffee.module.delivery.api.dto.DeliveryOrderResponse;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.idempotency.OrderIdempotencyService;
@@ -71,6 +72,7 @@ public class OrderController {
                 deliveryRequest.setStoreName(store.getName());
                 deliveryRequest.setAmount(created.getFinalPrice());
                 deliveryRequest.setItemSummary(created.getOrderName());
+                deliveryRequest.setItems(toDeliveryItems(created));
                 deliveryRequest.setAddressId(command.getDeliveryAddressId());
                 deliveryRequest.setNote(command.getNote());
                 DeliveryOrderResponse delivery = deliveryService.createDeliveryOrder(deliveryRequest);
@@ -218,5 +220,22 @@ public class OrderController {
         boolean ownsStore = storeService.listByMerchant(merchantId).stream()
                 .anyMatch(store -> storeId.equals(store.getStoreId()));
         if (!ownsStore) throw new ServiceException(403, "无权操作其他商家的订单");
+    }
+
+    private List<DeliveryOrderItem> toDeliveryItems(OrderResponse order) {
+        if (order == null || order.getItems() == null) return List.of();
+        return order.getItems().stream().map(item -> {
+            DeliveryOrderItem snapshot = new DeliveryOrderItem();
+            snapshot.setProductCode(item.getProductCode());
+            snapshot.setBeverageName(item.getBeverageName());
+            snapshot.setImageUrl(item.getImageUrl());
+            snapshot.setSize(item.getSize());
+            snapshot.setCondiments(item.getCondiments());
+            snapshot.setQuantity(item.getQuantity());
+            snapshot.setUnitPrice(item.getUnitPrice());
+            snapshot.setOriginalUnitPrice(item.getOriginalUnitPrice());
+            snapshot.setSubtotal(item.getSubtotal());
+            return snapshot;
+        }).toList();
     }
 }

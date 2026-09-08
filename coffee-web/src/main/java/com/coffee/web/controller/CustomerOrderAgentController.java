@@ -4,10 +4,18 @@ import com.coffee.common.core.exception.ServiceException;
 import com.coffee.common.core.result.Result;
 import com.coffee.module.customeragent.api.CustomerOrderAgentService;
 import com.coffee.module.customeragent.api.dto.AgentOrderPlan;
+import com.coffee.module.delivery.api.DeliveryService;
+import com.coffee.module.delivery.api.dto.DeliveryOrderCreateRequest;
+import com.coffee.module.delivery.api.dto.DeliveryOrderItem;
+import com.coffee.module.delivery.api.dto.DeliveryOrderResponse;
 import com.coffee.module.order.api.OrderService;
 import com.coffee.module.order.api.dto.CartItemCommand;
 import com.coffee.module.order.api.dto.CreateOrderCommand;
 import com.coffee.module.order.api.dto.OrderResponse;
+import com.coffee.module.payment.api.PaymentService;
+import com.coffee.module.payment.api.dto.PaymentResponse;
+import com.coffee.module.store.api.StoreService;
+import com.coffee.module.store.api.dto.StoreResponse;
 import com.coffee.web.idempotency.OrderIdempotencyService;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.security.RequestIdentity;
@@ -17,7 +25,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 /** HTTP 适配层：计划与确认分离；支持 SSE 流式响应防止超时。 */
@@ -25,8 +35,25 @@ import java.util.concurrent.CompletableFuture;
 @RequestMapping("/api/customer-agent")
 public class CustomerOrderAgentController {
     private final CustomerOrderAgentService customerOrderAgentService;
-    private final OrderService orderService; private final OrderIdempotencyService idempotencyService;
-    public CustomerOrderAgentController(CustomerOrderAgentService customerOrderAgentService, OrderService orderService, OrderIdempotencyService idempotencyService) { this.customerOrderAgentService = customerOrderAgentService; this.orderService = orderService; this.idempotencyService = idempotencyService; }
+    private final OrderService orderService;
+    private final OrderIdempotencyService idempotencyService;
+    private final DeliveryService deliveryService;
+    private final StoreService storeService;
+    private final PaymentService paymentService;
+
+    public CustomerOrderAgentController(CustomerOrderAgentService customerOrderAgentService,
+                                        OrderService orderService,
+                                        OrderIdempotencyService idempotencyService,
+                                        DeliveryService deliveryService,
+                                        StoreService storeService,
+                                        PaymentService paymentService) {
+        this.customerOrderAgentService = customerOrderAgentService;
+        this.orderService = orderService;
+        this.idempotencyService = idempotencyService;
+        this.deliveryService = deliveryService;
+        this.storeService = storeService;
+        this.paymentService = paymentService;
+    }
     
     @PostMapping("/plan")
     public Result<Map<String, Object>> plan(@RequestBody CustomerAgentRequest request) {
@@ -108,18 +135,46 @@ public class CustomerOrderAgentController {
         if (request == null || request.storeId == null || request.planToken == null || request.planToken.isBlank()) {
             throw new ServiceException(400, "缺少 Agent 方案确认信息");
         }
-        if ("DELIVERY".equalsIgnoreCase(request.fulfillmentType)) {
-            throw new ServiceException(400, "外卖配送请从购物袋确认收货地址后下单");
-        }
+        String fulfillmentType = normalizeFulfillment(request.fulfillmentType);
         Identity identity = currentCustomerIdentity();
+        if ("DELIVERY".equals(fulfillmentType)) {
+            if (identity.userId() == null) {
+                throw new ServiceException(400, "外卖配送需要先登录顾客账号");
+            }
+            if (request.deliveryAddressId == null || request.deliveryAddressId <= 0) {
+                throw new ServiceException(400, "外卖配送请选择收货地址");
+            }
+        }
         AgentOrderPlan plan = customerOrderAgentService.confirm(request.planToken, idempotencyKey, request.storeId, identity.userId(), identity.guestId(), request.includeAddOn);
         CreateOrderCommand command = new CreateOrderCommand();
         command.setStoreId(plan.storeId()); command.setUserId(plan.userId()); command.setGuestId(plan.guestId());
-        command.setFulfillmentType("DINE_IN".equalsIgnoreCase(request.fulfillmentType) ? "DINE_IN" : "PICKUP");
+        command.setFulfillmentType(fulfillmentType);
+        command.setDeliveryAddressId("DELIVERY".equals(fulfillmentType) ? request.deliveryAddressId : null);
         command.setNote(plan.note());
         command.setItems(plan.items().stream().map(line -> { CartItemCommand item = new CartItemCommand(); item.setProductCode(line.productCode()); item.setSize(line.size()); item.setQuantity(line.quantity()); item.setCondiments(List.of()); return item; }).toList());
         if (plan.userId() != null && plan.userId() > 0) command.setCouponCode("AGENT_FIKA8");
-        OrderResponse response = idempotencyService.execute(idempotencyKey, plan.userId(), plan.guestId(), command, () -> orderService.createOrder(command));
+        OrderResponse response = idempotencyService.execute(idempotencyKey, plan.userId(), plan.guestId(), command, () -> {
+            OrderResponse created = orderService.createOrder(command);
+            if ("DELIVERY".equals(command.getFulfillmentType())) {
+                StoreResponse store = storeService.getStore(command.getStoreId());
+                DeliveryOrderCreateRequest deliveryRequest = new DeliveryOrderCreateRequest();
+                deliveryRequest.setOrderId(created.getOrderId());
+                deliveryRequest.setOrderNo(created.getOrderNo());
+                deliveryRequest.setUserId(command.getUserId());
+                deliveryRequest.setStoreId(command.getStoreId());
+                deliveryRequest.setStoreName(store.getName());
+                deliveryRequest.setAmount(created.getFinalPrice());
+                deliveryRequest.setItemSummary(created.getOrderName());
+                deliveryRequest.setItems(toDeliveryItems(created));
+                deliveryRequest.setAddressId(command.getDeliveryAddressId());
+                deliveryRequest.setNote(command.getNote());
+                DeliveryOrderResponse delivery = deliveryService.createDeliveryOrder(deliveryRequest);
+                created.setDeliveryOrderId(delivery.getDeliveryOrderId());
+            }
+            PaymentResponse payment = paymentService.createForOrder(created.getOrderId());
+            created.setPaymentNo(payment.getPaymentNo());
+            return created;
+        });
         return Result.success(response);
     }
 
@@ -129,7 +184,34 @@ public class CustomerOrderAgentController {
         if (identity.kind() == RequestIdentity.Kind.GUEST && identity.guestId() != null && !identity.guestId().isBlank()) return new Identity(null, identity.guestId());
         throw new ServiceException(403, "点单 Agent 仅支持顾客或游客身份");
     }
+
+    private String normalizeFulfillment(String raw) {
+        String fulfillment = raw == null || raw.isBlank()
+                ? "PICKUP" : raw.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("PICKUP", "DINE_IN", "DELIVERY").contains(fulfillment)) {
+            throw new ServiceException(400, "不支持的取餐方式");
+        }
+        return fulfillment;
+    }
+
+    private List<DeliveryOrderItem> toDeliveryItems(OrderResponse order) {
+        if (order == null || order.getItems() == null) return List.of();
+        return order.getItems().stream().map(item -> {
+            DeliveryOrderItem snapshot = new DeliveryOrderItem();
+            snapshot.setProductCode(item.getProductCode());
+            snapshot.setBeverageName(item.getBeverageName());
+            snapshot.setImageUrl(item.getImageUrl());
+            snapshot.setSize(item.getSize());
+            snapshot.setCondiments(item.getCondiments());
+            snapshot.setQuantity(item.getQuantity());
+            snapshot.setUnitPrice(item.getUnitPrice());
+            snapshot.setOriginalUnitPrice(item.getOriginalUnitPrice());
+            snapshot.setSubtotal(item.getSubtotal());
+            return snapshot;
+        }).toList();
+    }
+
     private record Identity(Long userId, String guestId) { }
     public static class CustomerAgentRequest { public Long storeId; public Long userId; public String guestId; public String message; }
-    public static class ConfirmPlanRequest { public String planToken; public Long storeId; public Long userId; public String guestId; public String fulfillmentType; public boolean includeAddOn; }
+    public static class ConfirmPlanRequest { public String planToken; public Long storeId; public Long userId; public String guestId; public String fulfillmentType; public Long deliveryAddressId; public boolean includeAddOn; }
 }

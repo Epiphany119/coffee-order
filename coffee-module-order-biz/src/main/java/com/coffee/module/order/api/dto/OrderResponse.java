@@ -38,6 +38,8 @@ public class OrderResponse {
     public static class OrderItemResponse {
         private String productCode;
         private String beverageName;
+        /** 下单时保存的商品图片快照。 */
+        private String imageUrl;
         private String categoryCode;
         private String size;
         private String condiments;

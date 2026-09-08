@@ -2,7 +2,7 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
-import { customerAgentApi, orderApi, memberApi, membershipApi } from '@/api'
+import { customerAgentApi, orderApi, memberApi, membershipApi, deliveryApi } from '@/api'
 import type { Product, Coupon, CustomerAgentItem, DeliveryAddress } from '@/api/types'
 
 import SiteHeader from '@/components/SiteHeader.vue'
@@ -119,6 +119,8 @@ function chooseDelivery() {
   }
   fulfillmentType.value = 'DELIVERY'
   deliveryAddressVisible.value = true
+  // 已有地址时预选默认地址；弹窗仍保持打开，用户可以切换到其他地址。
+  void ensureDeliveryAddress()
 }
 
 function chooseFulfillment(type: 'PICKUP' | 'DINE_IN') {
@@ -131,6 +133,22 @@ function selectDeliveryAddress(address: DeliveryAddress) {
   fulfillmentType.value = 'DELIVERY'
   deliveryAddressVisible.value = false
   ElMessage.success(`已选择${address.label} · ${address.detailAddress}`)
+}
+
+/**
+ * 将地址管理中已保存的默认地址带入当前订单。
+ * 地址不存在或接口异常时返回 false，由调用方打开选择/新增地址弹窗。
+ */
+async function ensureDeliveryAddress() {
+  if (selectedDeliveryAddress.value?.id || !store.isLoggedIn) return !!selectedDeliveryAddress.value?.id
+  try {
+    const addresses = await deliveryApi.listAddresses()
+    const address = addresses.find(item => item.isDefault) || addresses[0]
+    if (address) selectedDeliveryAddress.value = address
+  } catch (e) {
+    console.warn('load default delivery address failed', e)
+  }
+  return !!selectedDeliveryAddress.value?.id
 }
 
 /** 切换门店后强制重新确认外卖地址，避免用户误把上一家门店的配送选择带到新门店。 */
@@ -148,7 +166,7 @@ async function submitOrder() {
       emit('open-login')
       return
     }
-    if (!selectedDeliveryAddress.value?.id) {
+    if (!await ensureDeliveryAddress()) {
       deliveryAddressVisible.value = true
       ElMessage.info('请先选择收货地址')
       return
@@ -199,9 +217,16 @@ async function submitOrder() {
 async function submitAgentOrder(planToken: string, includeAddOn = false) {
   if (!planToken || !store.currentStore?.storeId) return
   if (fulfillmentType.value === 'DELIVERY') {
-    ElMessage.info('外卖配送请从购物袋确认地址后下单，Agent 方案暂不支持直接配送')
-    deliveryAddressVisible.value = true
-    return
+    if (!store.isLoggedIn) {
+      ElMessage.info('外卖配送需要先登录顾客账号')
+      emit('open-login')
+      return
+    }
+    if (!await ensureDeliveryAddress()) {
+      ElMessage.info('请先选择收货地址')
+      deliveryAddressVisible.value = true
+      return
+    }
   }
   submitting.value = true
   try {
@@ -209,6 +234,7 @@ async function submitAgentOrder(planToken: string, includeAddOn = false) {
       planToken,
       storeId: store.currentStore.storeId,
       fulfillmentType: fulfillmentType.value,
+      deliveryAddressId: fulfillmentType.value === 'DELIVERY' ? selectedDeliveryAddress.value?.id ?? null : null,
       includeAddOn
     })
     ElMessage.success(`Agent 已为你创建订单 · 共 ¥${data.finalPrice}`)

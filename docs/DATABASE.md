@@ -2,7 +2,7 @@
 
 > 数据库：`coffee_order_pro`（MySQL 8.0，utf8mb4 / utf8mb4_unicode_ci）。本文档描述当前线上结构（2026-09-01），结构变更后请同步更新本文档并重新导出 `sql_backup/` 备份。
 
-> 除下方基础业务表外，订单幂等、Outbox、库存、定位、秒杀、Agent、站内通知和外卖配送等运行时表由 `sql/migrations/` 中的版本迁移统一创建；不要依赖应用启动时临时建表。外卖模块新增表由 `V20260831_13_delivery_module.sql` 创建，骑手业绩查询索引由 `V20260901_15_delivery_rider_performance_contact.sql` 增加，三端个人资料字段由 `V20260901_16_profile_center.sql` 增加。
+> 除下方基础业务表外，订单幂等、Outbox、库存、定位、秒杀、Agent、站内通知和外卖配送等运行时表由 `sql/migrations/` 中的版本迁移统一创建；不要依赖应用启动时临时建表。外卖模块新增表由 `V20260831_13_delivery_module.sql` 创建，骑手业绩查询索引由 `V20260901_15_delivery_rider_performance_contact.sql` 增加，三端个人资料字段由 `V20260901_16_profile_center.sql` 增加，配送商品图片快照由 `V20260908_22_delivery_order_item_snapshot.sql` 增加，通知关联订单由 `V20260908_23_notification_order_link.sql` 增加。
 
 ## 一、基础业务表总览（26 张）
 
@@ -107,11 +107,11 @@
 
 - `delivery_address`：顾客可维护多条 `label / receiver_name / receiver_phone / detail_address`，可设置默认地址；地址按 `user_id` 隔离。
 - `delivery_rider`：配送员独立账号，密码使用 BCrypt；当前支持 `ACTIVE / DISABLED`，登录后令牌身份为 `RIDER`；资料字段包括 `avatar_url / birthday / email / other_info`，由骑手个人面板维护。
-- `delivery_order`：由 `DELIVERY` 主订单自动生成，创建时复制收货地址快照，状态为 `WAITING_MERCHANT`。商家完成制作后才发布为 `OPEN` 进入 C 端待抢列表；配送员通过数据库条件更新完成 `OPEN → CLAIMED → PICKED_UP → DELIVERING → DELIVERED`，并同步推进主订单状态，抢单使用 CAS 保证同一订单只能被一人抢到。业绩按 `rider_id`、`claimed_at`、`delivered_at` 统计，V15 增加对应复合索引。`receiver_phone` 仅用于地址快照和后续中介转接，骑手接口不返回真实电话；虚拟电话当前为应用层占位适配器，不新增真实号码表。当前不计算配送费。
+- `delivery_order`：由 `DELIVERY` 主订单自动生成，创建时复制收货地址快照和 `item_details` 商品快照（名称、规格、数量、价格、图片 URL JSON），状态为 `WAITING_MERCHANT`。商家完成制作后才发布为 `OPEN` 进入 C 端待抢列表；配送员通过数据库条件更新完成 `OPEN → CLAIMED → PICKED_UP → DELIVERING → DELIVERED`，并同步推进主订单状态，抢单使用 CAS 保证同一订单只能被一人抢到。业绩按 `rider_id`、`claimed_at`、`delivered_at` 统计，V15 增加对应复合索引。`receiver_phone` 仅用于地址快照和后续中介转接，骑手接口不返回真实电话；虚拟电话当前为应用层占位适配器，不新增真实号码表。当前不计算配送费。
 
 `order_no` 规则（2026-08-07）：`YYMMDD-{商家6位}-{类目3位}-{顺序3位}`，商家段 = `merchant_no` 去 `sj-` 前缀（无商家回退店铺 id），类目段 = 商品类目 id 左补 0（批量订单取首行商品类目），顺序段 = **店铺当日单号**（跨分类连续）。唯一索引保证并发下不重号，冲突由服务端重算重试。
 
-`order_item`：`id / order_id(FK→user_order.id) / product_id(FK→menu_item.id) / product_name(名称快照，含规格前缀如"中杯 意式浓缩") / quantity(购物车行级数量，如 燕麦拿铁×2 = 2) / unit_price(折后单价 = subtotal÷quantity) / original_unit_price(单件原价，折前，明细行划线展示用；2026-08-07 新增，历史订单按订单折扣比例回填，尾差行可能差 1 分) / subtotal(折后小计)`。
+`order_item`：`id / order_id(FK→user_order.id) / product_id(FK→menu_item.id) / product_name(名称快照，含规格前缀如"中杯 意式浓缩") / image_url(下单时商品图片快照) / quantity(购物车行级数量，如 燕麦拿铁×2 = 2) / unit_price(折后单价 = subtotal÷quantity) / original_unit_price(单件原价，折前，明细行划线展示用；2026-08-07 新增，历史订单按订单折扣比例回填，尾差行可能差 1 分) / subtotal(折后小计)`。
 
 **订单明细模型**：所有订单落库时同步写 `order_item` 明细（1 单 N 明细）——单品订单 1 条，批量订单每购物车行 1 条（`quantity` 保留行级数量）。会员折扣/优惠券按订单总额计算后按原价比例分摊到行（尾差归最后一行），明细小计合计 = 实付总额；批量订单 `beverage_name` 拼接「名称×数量」、`size` 记为 `MIXED`。已展开的历史批量订单（多条 `user_order`）保持不动。前端明细行展示「折后单价 + 划线原价」以体现减免（有折扣时划线，无折扣只显示单价）。
 
@@ -147,7 +147,7 @@
 
 ### 2.12 其他运行时表
 
-`user_location` 保存登录用户最近一次定位；`flash_sale_activity` / `flash_sale_claim` 保存秒杀活动与一次性资格；`email_verification_code` 保存邮箱注册、登录和绑定验证码的 BCrypt 哈希、过期时间和错误次数，`email_verification_rate_limit` 保存按邮箱整体隔离的短期发送计数与冷却时间；用户邮箱由成功的绑定验证码流程写入 `coffee_user_email`，解绑时只删除指定关系并更新首选邮箱快照；`account_no` 保存对外账号号码，历史数据由 V20 从 `coffee_user.id` 回填，新用户由应用生成随机后缀；`agent_knowledge_document`、`agent_menu_embedding`、`agent_conversation`、`agent_conversation_message` 保存 Agent 的可追溯知识、向量缓存与身份隔离会话；`agent_run` / `agent_tool_call` 保存 Agent 计划、工具调用耗时与运行状态；`growth_agent_action` 保存商家 Agent 操作审计；`event_consume_log`、`user_notification` 分别用于消息消费幂等和站内通知。
+`user_location` 保存登录用户最近一次定位；`flash_sale_activity` / `flash_sale_claim` 保存秒杀活动与一次性资格；`email_verification_code` 保存邮箱注册、登录和绑定验证码的 BCrypt 哈希、过期时间和错误次数，`email_verification_rate_limit` 保存按邮箱整体隔离的短期发送计数与冷却时间；用户邮箱由成功的绑定验证码流程写入 `coffee_user_email`，解绑时只删除指定关系并更新首选邮箱快照；`account_no` 保存对外账号号码，历史数据由 V20 从 `coffee_user.id` 回填，新用户由应用生成随机后缀；`agent_knowledge_document`、`agent_menu_embedding`、`agent_conversation`、`agent_conversation_message` 保存 Agent 的可追溯知识、向量缓存与身份隔离会话；`agent_run` / `agent_tool_call` 保存 Agent 计划、工具调用耗时与运行状态；`growth_agent_action` 保存商家 Agent 操作审计；`event_consume_log`、`user_notification` 分别用于消息消费幂等和站内通知，订单类通知通过 `user_notification.order_id` 关联主订单。
 
 ## 三、核心设计模式
 

@@ -38,6 +38,7 @@ public class OrderRepositoryImpl implements OrderRepository {
                 itemPo.setOrderId(order.getId());
                 itemPo.setProductId(item.getProductId());
                 itemPo.setProductName(item.getBeverageName());
+                itemPo.setImageUrl(item.getImageUrl());
                 itemPo.setQuantity(item.getQuantity());
                 itemPo.setUnitPrice(item.getUnitPrice());
                 itemPo.setOriginalUnitPrice(item.getOriginalUnitPrice());
@@ -220,6 +221,7 @@ public class OrderRepositoryImpl implements OrderRepository {
         OrderItem item = new OrderItem();
         item.setProductId(po.getProductId());
         item.setBeverageName(po.getProductName());
+        item.setImageUrl(po.getImageUrl());
         item.setQuantity(po.getQuantity());
         item.setUnitPrice(po.getUnitPrice());
         item.setOriginalUnitPrice(po.getOriginalUnitPrice());

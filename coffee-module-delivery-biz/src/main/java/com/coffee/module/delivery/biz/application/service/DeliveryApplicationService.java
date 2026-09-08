@@ -7,6 +7,7 @@ import com.coffee.module.delivery.api.DeliveryService;
 import com.coffee.module.delivery.api.dto.DeliveryAddressRequest;
 import com.coffee.module.delivery.api.dto.DeliveryAddressResponse;
 import com.coffee.module.delivery.api.dto.DeliveryOrderCreateRequest;
+import com.coffee.module.delivery.api.dto.DeliveryOrderItem;
 import com.coffee.module.delivery.api.dto.DeliveryOrderResponse;
 import com.coffee.module.delivery.api.dto.DeliveryRiderLoginRequest;
 import com.coffee.module.delivery.api.dto.DeliveryRiderPerformanceResponse;
@@ -22,6 +23,9 @@ import com.coffee.module.delivery.biz.infra.persistence.DeliveryOrderPO;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryRiderMapper;
 import com.coffee.module.delivery.biz.infra.persistence.DeliveryRiderPO;
 import com.coffee.module.delivery.biz.service.VirtualCallRelayService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -37,6 +41,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Collections;
 import java.util.regex.Pattern;
 
 /** 外卖模块应用服务。 */
@@ -52,17 +57,20 @@ public class DeliveryApplicationService implements DeliveryService {
     private final DeliveryRiderMapper riderMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final VirtualCallRelayService virtualCallRelayService;
+    private final ObjectMapper objectMapper;
 
     public DeliveryApplicationService(DeliveryAddressMapper addressMapper,
                                       DeliveryOrderMapper orderMapper,
                                       DeliveryRiderMapper riderMapper,
                                       ApplicationEventPublisher eventPublisher,
-                                      VirtualCallRelayService virtualCallRelayService) {
+                                      VirtualCallRelayService virtualCallRelayService,
+                                      ObjectMapper objectMapper) {
         this.addressMapper = addressMapper;
         this.orderMapper = orderMapper;
         this.riderMapper = riderMapper;
         this.eventPublisher = eventPublisher;
         this.virtualCallRelayService = virtualCallRelayService;
+        this.objectMapper = objectMapper;
     }
 
     // ======================== 顾客地址 ========================
@@ -166,6 +174,11 @@ public class DeliveryApplicationService implements DeliveryService {
             if (!request.getUserId().equals(existing.getUserId())) {
                 throw new ServiceException(403, "无权访问该配送单");
             }
+            // 幂等重试或旧版本首次创建时可能还没有快照；本次请求带有明细时补齐一次。
+            if (isBlank(existing.getItemDetails()) && request.getItems() != null && !request.getItems().isEmpty()) {
+                existing.setItemDetails(serializeItems(request.getItems()));
+                orderMapper.updateById(existing);
+            }
             return toOrderResponse(existing);
         }
 
@@ -178,6 +191,7 @@ public class DeliveryApplicationService implements DeliveryService {
         po.setStoreName(trim(request.getStoreName(), 120));
         po.setAmount(request.getAmount() == null ? 0.0 : Math.max(0.0, request.getAmount()));
         po.setItemSummary(trim(request.getItemSummary(), 500));
+        po.setItemDetails(serializeItems(request.getItems()));
         po.setNote(trim(request.getNote(), 500));
         po.setAddressLabel(address.getLabel());
         po.setReceiverName(address.getReceiverName());
@@ -614,6 +628,7 @@ public class DeliveryApplicationService implements DeliveryService {
         response.setStoreName(po.getStoreName());
         response.setAmount(po.getAmount());
         response.setItemSummary(po.getItemSummary());
+        response.setItems(deserializeItems(po.getItemDetails()));
         response.setNote(po.getNote());
         response.setAddressLabel(po.getAddressLabel());
         response.setReceiverName(po.getReceiverName());
@@ -629,6 +644,29 @@ public class DeliveryApplicationService implements DeliveryService {
         response.setDeliveredAt(po.getDeliveredAt());
         response.setUpdatedAt(po.getUpdatedAt());
         return response;
+    }
+
+    private String serializeItems(List<DeliveryOrderItem> items) {
+        if (items == null || items.isEmpty()) return null;
+        try {
+            return objectMapper.writeValueAsString(items);
+        } catch (JsonProcessingException e) {
+            throw new ServiceException(500, "配送商品快照保存失败");
+        }
+    }
+
+    private List<DeliveryOrderItem> deserializeItems(String json) {
+        if (isBlank(json)) return Collections.emptyList();
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<DeliveryOrderItem>>() { });
+        } catch (JsonProcessingException e) {
+            // 历史脏数据不应阻塞骑手查看整张配送单，前端仍可使用 itemSummary 兜底。
+            return Collections.emptyList();
+        }
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private DeliveryRiderResponse toRiderResponse(DeliveryRiderPO po) {

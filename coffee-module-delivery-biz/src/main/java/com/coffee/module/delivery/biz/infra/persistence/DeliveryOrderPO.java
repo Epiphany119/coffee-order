@@ -19,6 +19,8 @@ public class DeliveryOrderPO {
     private String storeName;
     private Double amount;
     private String itemSummary;
+    /** DeliveryOrderItem 列表 JSON 快照。 */
+    private String itemDetails;
     private String note;
     private String addressLabel;
     private String receiverName;

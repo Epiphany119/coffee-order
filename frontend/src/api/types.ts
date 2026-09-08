@@ -384,8 +384,10 @@ export interface OrderRequest {
 
 export interface OrderItem {
   productId?: number
-  /** 列表接口的 items 仅返回 productId/beverageName/quantity/unitPrice/originalUnitPrice/subtotal，下单响应才有完整字段 */
+  /** 订单明细列表和下单响应都会返回商品快照信息。 */
   productCode?: string
+  /** 下单时保存的商品图片快照；历史订单由迁移脚本回填。 */
+  imageUrl?: string | null
   beverageName: string
   categoryCode?: string
   size?: string
@@ -474,6 +476,18 @@ export interface DeliveryAddress {
 
 export type DeliveryOrderStatus = 'WAITING_MERCHANT' | 'OPEN' | 'CLAIMED' | 'PICKED_UP' | 'DELIVERING' | 'DELIVERED' | 'CANCELED'
 
+export interface DeliveryOrderItem {
+  productCode?: string | null
+  beverageName: string
+  imageUrl?: string | null
+  size?: string | null
+  condiments?: string | null
+  quantity: number
+  unitPrice?: number | null
+  originalUnitPrice?: number | null
+  subtotal?: number | null
+}
+
 export interface DeliveryOrder {
   id: number
   deliveryOrderId: number
@@ -484,6 +498,8 @@ export interface DeliveryOrder {
   storeName: string
   amount: number
   itemSummary: string
+  /** 下单时保存的商品图片快照，历史配送单也会由迁移脚本回填。 */
+  items?: DeliveryOrderItem[]
   note?: string | null
   addressLabel: string
   receiverName: string
@@ -499,6 +515,17 @@ export interface DeliveryOrder {
   pickedUpAt?: string | number[] | null
   deliveredAt?: string | number[] | null
   updatedAt?: string | number[] | null
+}
+
+export interface UserNotification {
+  id: number
+  type: string
+  title: string
+  content: string
+  readStatus?: number | boolean
+  /** 订单状态通知关联的主订单 id；营销类通知为空。 */
+  orderId?: number | null
+  createdAt: string | number[]
 }
 
 export interface DeliveryRiderLoginRequest {
