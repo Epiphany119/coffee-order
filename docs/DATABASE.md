@@ -147,7 +147,7 @@
 
 ### 2.12 其他运行时表
 
-`user_location` 保存登录用户最近一次定位；`flash_sale_activity` / `flash_sale_claim` 保存秒杀活动与一次性资格；`email_verification_code` 保存邮箱注册、登录和绑定验证码的 BCrypt 哈希、过期时间和错误次数，`email_verification_rate_limit` 保存按邮箱整体隔离的短期发送计数与冷却时间；用户邮箱由成功的绑定验证码流程写入 `coffee_user_email`，解绑时只删除指定关系并更新首选邮箱快照；`account_no` 保存对外账号号码，历史数据由 V20 从 `coffee_user.id` 回填，新用户由应用生成随机后缀；`agent_knowledge_document`、`agent_menu_embedding`、`agent_conversation`、`agent_conversation_message` 保存 Agent 的可追溯知识、向量缓存与身份隔离会话；`agent_run` / `agent_tool_call` 保存 Agent 计划、工具调用耗时与运行状态；`growth_agent_action` 保存商家 Agent 操作审计；`event_consume_log`、`user_notification` 分别用于消息消费幂等和站内通知，订单类通知通过 `user_notification.order_id` 关联主订单。
+`user_location` 保存登录用户最近一次定位；`flash_sale_activity` / `flash_sale_claim` 保存秒杀活动与一次性资格；`email_verification_code` 保存邮箱注册、登录和绑定验证码的 BCrypt 哈希、过期时间和错误次数，`email_verification_rate_limit` 保存按邮箱整体隔离的短期发送计数与冷却时间；用户邮箱由成功的绑定验证码流程写入 `coffee_user_email`，解绑时只删除指定关系并更新首选邮箱快照；`account_no` 保存对外账号号码，历史数据由 V20 从 `coffee_user.id` 回填，新用户由应用生成随机后缀；`agent_knowledge_document`、`agent_menu_embedding`、`agent_conversation`、`agent_conversation_message` 保存 Agent 的可追溯知识、向量缓存与身份隔离会话；`agent_run` / `agent_tool_call` 保存 Agent 计划、工具调用耗时、降级原因、模型用量/成本、订单结果与运行状态；`agent_eval_result` 保存固定评测样例的工具选择、越权工具、确认要求、预期拒绝和最终通过结果；`growth_agent_action` 保存商家 Agent 操作审计；`event_consume_log`、`user_notification` 分别用于消息消费幂等和站内通知，订单类通知通过 `user_notification.order_id` 关联主订单。
 
 ## 三、核心设计模式
 

@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 import { customerAgentApi, orderApi, memberApi, membershipApi, deliveryApi } from '@/api'
-import type { Product, Coupon, CustomerAgentItem, DeliveryAddress } from '@/api/types'
+import type { Product, Coupon, CustomerAgentItem, DeliveryAddress, OrderRecord } from '@/api/types'
 
 import SiteHeader from '@/components/SiteHeader.vue'
 import HeroSection from '@/components/HeroSection.vue'
@@ -18,6 +18,9 @@ import SeatPanel from '@/components/SeatPanel.vue'
 import PayDialog from '@/components/PayDialog.vue'
 import TopupDialog from '@/components/TopupDialog.vue'
 import CustomerOrderAgent from '@/components/CustomerOrderAgent.vue'
+import CustomerAssistantDialog from '@/components/CustomerAssistantDialog.vue'
+import FeedbackDialog from '@/components/FeedbackDialog.vue'
+import AfterSaleDialog from '@/components/AfterSaleDialog.vue'
 import DeliveryAddressDialog from '@/components/DeliveryAddressDialog.vue'
 
 const store = useAppStore()
@@ -43,6 +46,13 @@ const payPaymentNo = ref<string | null>(null)
 const topupVisible = ref(false)
 const topupGap = ref(0)
 const customerAgentVisible = ref(false)
+const customerAssistantVisible = ref(false)
+const assistantFeedbackVisible = ref(false)
+const assistantFeedbackOrder = ref<OrderRecord | null>(null)
+const assistantFeedbackDraft = ref('')
+const assistantAfterSaleVisible = ref(false)
+const assistantAfterSaleOrder = ref<OrderRecord | null>(null)
+const assistantAfterSaleDraft = ref('')
 
 /** 首屏招牌必须来自当前门店的真实菜单，优先找冷萃/拿铁；无匹配时回退第一款咖啡。 */
 const featuredProduct = computed(() => {
@@ -214,7 +224,7 @@ async function submitOrder() {
 }
 
 /** Agent 方案确认后直接创建待支付订单：不写购物袋，但仍复用订单幂等、身份、价格与库存校验。 */
-async function submitAgentOrder(planToken: string, includeAddOn = false) {
+async function submitAgentOrder(planToken: string, includeAddOn = false, runId?: string) {
   if (!planToken || !store.currentStore?.storeId) return
   if (fulfillmentType.value === 'DELIVERY') {
     if (!store.isLoggedIn) {
@@ -232,6 +242,7 @@ async function submitAgentOrder(planToken: string, includeAddOn = false) {
   try {
     const data = await customerAgentApi.confirm({
       planToken,
+      runId: runId || null,
       storeId: store.currentStore.storeId,
       fulfillmentType: fulfillmentType.value,
       deliveryAddressId: fulfillmentType.value === 'DELIVERY' ? selectedDeliveryAddress.value?.id ?? null : null,
@@ -251,6 +262,42 @@ async function submitAgentOrder(planToken: string, includeAddOn = false) {
   } finally {
     submitting.value = false
   }
+}
+
+async function resolveAssistantOrder(orderId: number): Promise<OrderRecord | null> {
+  if (!store.isLoggedIn || !store.currentUser?.id) {
+    emit('open-login')
+    return null
+  }
+  await loadOrders()
+  return (store.orders || []).find(order => Number(order.id) === Number(orderId)) || null
+}
+
+async function openAssistantFeedback(orderId: number, draft = '') {
+  const order = await resolveAssistantOrder(orderId)
+  if (!order) {
+    ElMessage.warning('没有找到属于当前账号的订单')
+    return
+  }
+  assistantFeedbackOrder.value = order
+  assistantFeedbackDraft.value = draft
+  assistantFeedbackVisible.value = true
+}
+
+async function openAssistantAfterSale(orderId: number, draft = '') {
+  const order = await resolveAssistantOrder(orderId)
+  if (!order) {
+    ElMessage.warning('没有找到属于当前账号的订单')
+    return
+  }
+  assistantAfterSaleOrder.value = order
+  assistantAfterSaleDraft.value = draft
+  assistantAfterSaleVisible.value = true
+}
+
+function goAssistantOrders() {
+  customerAssistantVisible.value = false
+  emit('go-member')
 }
 
 async function cancelOrder(id: number) {
@@ -345,8 +392,11 @@ function openFeaturedProduct() {
     </section>
 
     <section class="agent-entry">
-      <div><span>✦</span><div><b>不想翻菜单？直接告诉 FIKA 你想喝什么。</b><small>按你的喜好、门店热销与用户反馈搭配；确认后一步到支付。</small></div></div>
-      <button type="button" @click="customerAgentVisible = true">和点单 Agent 聊聊 →</button>
+      <div><span>✦</span><div><b>不想翻菜单？直接告诉 FIKA 你想喝什么。</b><small>一个 Supervisor 入口，串起咨询、推荐、点单、订单查询和反馈；写操作仍由你确认。</small></div></div>
+      <div class="agent-entry-actions">
+        <button type="button" @click="customerAssistantVisible = true">打开 FIKA 顾客助手 →</button>
+        <button type="button" class="secondary" @click="customerAgentVisible = true">快速点单</button>
+      </div>
     </section>
 
     <!-- Shop layout -->
@@ -409,6 +459,26 @@ function openFeaturedProduct() {
       :gap="topupGap"
     />
 
+    <CustomerAssistantDialog
+      v-model="customerAssistantVisible"
+      @checkout="submitAgentOrder"
+      @go-orders="goAssistantOrders"
+      @open-feedback="openAssistantFeedback"
+      @open-after-sale="openAssistantAfterSale"
+    />
+
+    <FeedbackDialog
+      v-model="assistantFeedbackVisible"
+      :order="assistantFeedbackOrder"
+      :initial-content="assistantFeedbackDraft"
+    />
+
+    <AfterSaleDialog
+      v-model="assistantAfterSaleVisible"
+      :order="assistantAfterSaleOrder"
+      :initial-reason="assistantAfterSaleDraft"
+    />
+
     <CustomerOrderAgent
       v-model="customerAgentVisible"
       @checkout="submitAgentOrder"
@@ -453,6 +523,8 @@ function openFeaturedProduct() {
   b { color: var(--ink); font-size: 13px; }
   small { margin-top: 3px; color: var(--muted); font-size: 11px; }
   button { flex: none; border: 0; border-radius: 10px; padding: 10px 13px; cursor: pointer; color: #fff; background: var(--pine); font-weight: 700; font-size: 12px; }
+  .agent-entry-actions { display: flex; flex: none; align-items: center; gap: 7px; }
+  .agent-entry-actions .secondary { color: #54705c; background: #edf5ee; }
 }
 
 .service-option {

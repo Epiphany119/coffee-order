@@ -63,9 +63,10 @@ public class BusinessAgentOrchestrator {
 
         String runId = audit.start(identity, safeScene, storeId, session, input);
         List<ToolResult> toolResults = new ArrayList<>();
+        chat.beginUsageTracking();
         try {
             PlannedRoute route = selectToolPlan(safeScene, input);
-            audit.recordPlan(runId, route.plan(), route.engine());
+            audit.recordPlan(runId, route.plan(), route.engine(), route.fallbackReason());
 
             int sequence = 0;
             for (AgentPlan.Step step : route.plan().steps()) {
@@ -76,13 +77,15 @@ public class BusinessAgentOrchestrator {
 
             String answer = answer(safeScene, input, conversations.recent(session, owner, 8), route.plan(), toolResults);
             conversations.append(session, owner, "assistant", answer);
-            audit.finish(runId, "SUCCEEDED", answer, null, toolResults.size());
+            audit.finish(identity, runId, "SUCCEEDED", answer, null, toolResults.size());
             return new AgentAnswer(session, route.plan().steps().stream().map(AgentPlan.Step::purpose).toList(),
                     toolResults, answer, route.engine(), runId, route.plan());
         } catch (Exception ex) {
-            audit.finish(runId, "FAILED", null, safeError(ex), toolResults.size());
+            audit.finish(identity, runId, "FAILED", null, safeError(ex), toolResults.size());
             if (ex instanceof RuntimeException runtimeException) throw runtimeException;
             throw new IllegalStateException("Agent 执行失败", ex);
+        } finally {
+            audit.recordModelUsage(runId, chat.endUsageTracking());
         }
     }
 
@@ -116,8 +119,11 @@ public class BusinessAgentOrchestrator {
     private PlannedRoute selectToolPlan(String scene, String input) {
         List<String> fallbackTools = fallbackTools(scene, input);
         AgentPlan fallback = fallbackPlan(scene, input, fallbackTools, "deterministic-fallback");
+        if (contains(input, "其他门店", "别的门店", "跨店", "其他店铺")) {
+            return new PlannedRoute(fallback, "FIKA Agent · scope-guard", "cross_store_scope_guard");
+        }
         if (isFastPath(scene, input)) {
-            return new PlannedRoute(fallback, "FIKA Agent · deterministic-router");
+            return new PlannedRoute(fallback, "FIKA Agent · deterministic-router", "deterministic_fast_path");
         }
 
         String rawPlan = chat.callJson(
@@ -126,22 +132,23 @@ public class BusinessAgentOrchestrator {
                 420).orElse("");
         AgentPlan parsed = planParser.parse(rawPlan, scene).orElse(null);
         if (parsed == null) {
-            return new PlannedRoute(fallback, "FIKA Agent · rule-tools-fallback");
+            return new PlannedRoute(fallback, "FIKA Agent · rule-tools-fallback",
+                    rawPlan.isBlank() ? "model_unavailable_or_empty" : "model_plan_rejected");
         }
 
         // 知识检索是事实来源，即使模型只选择了指标工具，也必须补一次知识检索。
         List<AgentPlan.Step> steps = new ArrayList<>(parsed.steps());
         if (steps.stream().noneMatch(step -> "knowledge_retrieve".equals(step.tool()))) {
             steps.add(0, new AgentPlan.Step(
-                    "knowledge_retrieve", Map.of(), "检索门店规则与可引用事实"));
+                "knowledge_retrieve", Map.of(), "检索门店规则与可引用事实"));
         }
         AgentPlan safePlan = new AgentPlan(
                 parsed.intent(),
                 steps,
-                parsed.requiresConfirmation() || contains(input, "发券", "发放", "执行", "修改库存", "发送通知", "创建活动"),
+                parsed.requiresConfirmation() || requiresConfirmation(scene, input),
                 parsed.rationale(),
                 parsed.source());
-        return new PlannedRoute(safePlan, "FIKA Agent · GLM structured-plan");
+        return new PlannedRoute(safePlan, "FIKA Agent · GLM structured-plan", null);
     }
 
     private AgentPlan fallbackPlan(String scene, String input, List<String> toolNames, String source) {
@@ -151,7 +158,7 @@ public class BusinessAgentOrchestrator {
         return new AgentPlan(
                 inferIntent(scene, input),
                 steps,
-                contains(input, "发券", "发放", "执行", "修改库存", "发送通知", "创建活动"),
+                requiresConfirmation(scene, input),
                 "使用确定性路由确保模型不可用时仍然只访问安全工具",
                 source);
     }
@@ -167,6 +174,9 @@ public class BusinessAgentOrchestrator {
     }
 
     private List<String> fallbackTools(String scene, String input) {
+        if (contains(input, "其他门店", "别的门店", "跨店", "其他店铺")) {
+            return new ArrayList<>(List.of("knowledge_retrieve"));
+        }
         List<String> tools = new ArrayList<>(List.of("knowledge_retrieve", "menu_query"));
         if ("merchant".equals(scene)
                 && contains(input, "营业额", "订单", "库存", "履约", "增长", "告警", "复购")) {
@@ -180,6 +190,13 @@ public class BusinessAgentOrchestrator {
             return contains(input, "喝", "吃", "咖啡", "奶茶", "冰沙", "轻食", "甜品", "菜单", "优惠");
         }
         return contains(input, "营业额", "订单", "库存", "履约", "增长", "告警", "菜单", "优惠", "复购");
+    }
+
+    private boolean requiresConfirmation(String scene, String input) {
+        if ("merchant".equals(scene) && contains(input, "怎么做", "建议怎么", "优化方案")) return true;
+        return contains(input, "直接下单", "下单并", "创建订单", "直接付款", "付款", "扣款",
+                "发券", "发放", "直接执行", "修改库存", "发送通知", "创建活动", "确认订单", "重复确认",
+                "确认流程", "执行下单");
     }
 
     private ToolResult executeTool(AgentPlan.Step step, String scene, String input, Long storeId) {
@@ -357,6 +374,6 @@ public class BusinessAgentOrchestrator {
         }
     }
 
-    private record PlannedRoute(AgentPlan plan, String engine) {
+    private record PlannedRoute(AgentPlan plan, String engine, String fallbackReason) {
     }
 }

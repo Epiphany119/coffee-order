@@ -11,6 +11,7 @@ const store = useAppStore()
 const props = defineProps<{
   modelValue: boolean
   order: OrderRecord | null
+  initialReason?: string
 }>()
 
 const emit = defineEmits<{
@@ -33,7 +34,7 @@ const records = ref<AfterSaleRecord[]>([])
 watch(visible, async (v) => {
   if (v) {
     type.value = 'REFUND'
-    reason.value = ''
+    reason.value = props.initialReason || ''
     await loadRecords()
   }
 })

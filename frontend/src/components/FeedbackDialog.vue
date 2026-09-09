@@ -10,6 +10,7 @@ const store = useAppStore()
 const props = defineProps<{
   modelValue: boolean
   order: OrderRecord | null
+  initialContent?: string
 }>()
 
 const emit = defineEmits<{
@@ -29,7 +30,7 @@ const records = ref<FeedbackRecord[]>([])
 watch(visible, async (v) => {
   if (v) {
     rating.value = 5
-    content.value = ''
+    content.value = props.initialContent || ''
     await loadRecords()
   }
 })

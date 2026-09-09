@@ -169,12 +169,13 @@
 | 18.3 | [确认执行方案](#183-确认执行方案) | `POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute` |
 | 18.4 | [查询 Agent 审计记录](#184-查询-agent-审计记录) | `GET /api/merchant/{merchantId}/growth-agent/actions` |
 
-### 十九、顾客点单 Agent（2 个）
+### 十九、顾客侧多智能体（3 个）
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
 | 19.1 | [生成点单方案](#191-生成点单方案) | `POST /api/customer-agent/plan` |
 | 19.2 | [确认 Agent 方案并创建待支付订单](#192-确认-agent-方案并创建待支付订单) | `POST /api/customer-agent/plans/confirm` |
+| 19.3 | [顾客侧统一 Supervisor](#193-顾客侧统一-supervisor) | `POST /api/customer-agent/assistant` |
 
 ### 二十、外卖配送模块（17 个）
 
@@ -271,7 +272,7 @@ Authorization: Bearer {accessToken}
 
 ## 三、接口总览
 
-共 89 个接口（含健康检查），按模块分组：
+共 90 个接口（含健康检查），按模块分组：
 
 | # | 模块 | 接口数 | 响应格式 | 章节 |
 |---|---|---|---|---|
@@ -290,7 +291,7 @@ Authorization: Bearer {accessToken}
 | 13 | 售后 | 4 | A | [十六](#十六售后模块) |
 | 14 | 发现、秒杀与消息 | 6 | B / A | [十七](#十七发现秒杀与消息模块) |
 | 15 | 店长增长 Agent | 4 | A | [十八](#十八店长增长-agent) |
-| 16 | 顾客点单 Agent | 1 | A | [十九](#十九顾客点单-agent) |
+| 16 | 顾客侧多智能体 | 3 | A | [十九](#十九顾客侧多智能体) |
 | 17 | 外卖配送 | 17 | A | [二十](#二十外卖配送模块) |
 | 18 | 健康检查 | 1 | 纯文本 | [二十一](#二十一健康检查) |
 
@@ -2458,7 +2459,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 成功响应：`data` 为数组，包含 `id`、`actionType`、`title`、`status`、`createdAt`、`executedAt`。
 
-> 使用前先执行 [V20260831_12_runtime_consistency.sql](../sql/migrations/V20260831_12_runtime_consistency.sql) 创建审计表及相关运行时表。
+> 使用 Agent 运行审计前请先执行 [V20260906_17_agent_observability.sql](../sql/migrations/V20260906_17_agent_observability.sql) 和 [V20260908_24_agent_evaluation_observability.sql](../sql/migrations/V20260908_24_agent_evaluation_observability.sql)。
 
 ### 18.5 统一只读 Agent 与运行轨迹
 
@@ -2484,11 +2485,33 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 **`GET /api/business-agent/runs/{runId}`**
 
-仅返回当前身份自己的 Agent 运行轨迹。执行 [V20260906_17_agent_observability.sql](../sql/migrations/V20260906_17_agent_observability.sql) 后，响应会包含运行状态和按顺序排列的工具调用记录；未执行迁移时只提示审计不可用，不影响只读 Agent 降级回答。
+仅返回当前身份自己的 Agent 运行轨迹。执行 [V20260906_17_agent_observability.sql](../sql/migrations/V20260906_17_agent_observability.sql) 和 [V20260908_24_agent_evaluation_observability.sql](../sql/migrations/V20260908_24_agent_evaluation_observability.sql) 后，响应会包含运行状态、降级原因、模型用量/成本、最终下单结果和按顺序排列的工具调用记录；未执行迁移时只提示审计不可用，不影响只读 Agent 降级回答。
 
-## 十九、顾客点单 Agent
+**`GET /api/business-agent/evaluations/cases`**
 
-> 响应格式：**A**。该接口只输出当前菜单中的受控商品方案，绝不直接创建订单；顾客确认后仍由前端调用 `POST /api/order`，因此身份校验、订单幂等、库存、服务端计价和支付流程保持不变。
+返回固定的 Agent 安全评测样例。覆盖错误门店、缺货、价格不一致、预算超限、重复确认、越权查询和 Prompt Injection。
+
+**`POST /api/business-agent/evaluations/run`**
+
+执行固定评测样例并将断言结果写入 `agent_eval_result`。请求体示例：
+
+```json
+{"caseId":"customer-safety-prompt-injection","storeId":5}
+```
+
+响应会返回 `passed`、实际工具列表、被调用的禁用工具、确认断言、预期拒绝断言、`runId` 和本次耗时。该接口只复用只读 Business Agent，不会创建订单或付款。
+
+**`POST /api/business-agent/evaluations/run-all`**
+
+按当前身份执行评测集中对应场景的全部样例（顾客身份执行 customer 样例，商家身份执行 merchant 样例），每条样例独立写入 `agent_eval_result`。请求体可传 `{ "storeId": 5 }`；商家想验证“未授权门店”时，应传一个不属于当前商家的门店 ID。
+
+**`GET /api/business-agent/evaluations/summary`**
+
+返回当前身份已执行评测的累计通过数、工具选择通过数、禁用工具拦截数、确认断言通过数、预期拒绝通过数和平均耗时。
+
+## 十九、顾客侧多智能体
+
+> 响应格式：**A**。该接口只输出当前菜单中的受控商品方案，绝不直接创建订单；顾客确认后由前端携带 `planToken` 和 `runId` 调用 `POST /api/customer-agent/plans/confirm`，因此身份校验、订单幂等、库存、服务端计价和支付流程保持不变。
 
 ### 19.1 生成点单方案
 
@@ -2534,7 +2557,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 }
 ```
 
-前端确认方案时应使用返回的 `planToken` 调用下方确认接口；不要把 Agent 返回的估算金额当作最终应付金额，也不要在浏览器重新提交商品行。
+前端确认方案时应使用返回的 `planToken` 和 `runId` 调用下方确认接口；不要把 Agent 返回的估算金额当作最终应付金额，也不要在浏览器重新提交商品行。
 
 ### 19.2 确认 Agent 方案并创建待支付订单
 
@@ -2549,6 +2572,7 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 ```json
 {
   "planToken": "Agent 返回的一次性令牌",
+  "runId": "生成方案时返回的 Agent 运行编号",
   "storeId": 5,
   "userId": 1,
   "fulfillmentType": "DELIVERY",
@@ -2557,6 +2581,44 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 ```
 
 安全规则：令牌绑定用户/游客身份与门店，5 分钟过期，只能绑定一枚幂等键；换身份、换门店、修改商品行或用另一枚幂等键重复确认均会被拒绝。`DELIVERY` 仅允许登录顾客，并且必须传当前顾客自己的 `deliveryAddressId`。价格、库存、优惠与支付单均由正式订单链路处理。
+
+### 19.3 顾客侧统一 Supervisor
+
+**`POST /api/customer-agent/assistant`**
+
+作用：为顾客和游客提供统一会话入口。Supervisor 根据请求分发到受控的咨询/推荐、点单、订单查询或反馈子 Agent，并把会话、偏好记忆、工具步骤和模型用量关联到同一个 `runId`。用户侧只读查询按当前身份隔离；下单、反馈和售后只返回前端确认动作，不会在本接口直接写入业务状态。
+
+请求头：登录顾客使用 `Authorization: Bearer {accessToken}`；游客使用游客 Token。
+
+请求体：
+
+```json
+{
+  "storeId": 5,
+  "sessionId": "可选，继续当前顾客会话",
+  "message": "给我推荐一杯不苦的冰咖啡，预算 30 元"
+}
+```
+
+成功响应的 `data` 示例：
+
+```json
+{
+  "sessionId": "会话编号",
+  "runId": "本次运行编号",
+  "route": "ORDER",
+  "answer": "我根据当前门店菜单给你生成了一套方案，请确认后再去支付。",
+  "engine": "FIKA Supervisor → order-sub-agent",
+  "action": {
+    "type": "ORDER_PLAN",
+    "label": "确认这套搭配，去支付",
+    "payload": { "items": [], "planToken": "一次性方案令牌" }
+  },
+  "memorySignals": ["偏好冰饮", "偏好清爽不苦", "最近预算约 ¥30"]
+}
+```
+
+`action.type` 可能为 `ORDER_PLAN`、`VIEW_ORDERS`、`OPEN_FEEDBACK`、`OPEN_AFTER_SALE`、`CHOOSE_FEEDBACK_ORDER` 或 `NONE`。前端收到 `ORDER_PLAN` 后仍调用 19.2，并携带 `planToken` 与 `runId`；`OPEN_FEEDBACK` / `OPEN_AFTER_SALE` 只打开已有确认弹窗。Supervisor 会拒绝提示注入、越权查询、原始 SQL 和未授权的跨门店访问。
 
 ## 二十、外卖配送模块
 

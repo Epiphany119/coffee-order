@@ -2,6 +2,8 @@ package com.coffee.web.controller;
 
 import com.coffee.common.core.exception.ServiceException;
 import com.coffee.common.core.result.Result;
+import com.coffee.web.agent.AgentEvaluationCase;
+import com.coffee.web.agent.AgentEvaluationService;
 import com.coffee.web.agent.BusinessAgentOrchestrator;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.security.RequestIdentity;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -26,8 +29,13 @@ import java.util.concurrent.CompletableFuture;
 @RequestMapping("/api/business-agent")
 public class BusinessAgentController {
     private final BusinessAgentOrchestrator orchestrator;
+    private final AgentEvaluationService evaluationService;
 
-    public BusinessAgentController(BusinessAgentOrchestrator orchestrator) { this.orchestrator = orchestrator; }
+    public BusinessAgentController(BusinessAgentOrchestrator orchestrator,
+                                   AgentEvaluationService evaluationService) {
+        this.orchestrator = orchestrator;
+        this.evaluationService = evaluationService;
+    }
 
     @PostMapping("/ask")
     public Result<BusinessAgentOrchestrator.AgentAnswer> ask(@RequestBody AskRequest request) {
@@ -38,6 +46,35 @@ public class BusinessAgentController {
     @GetMapping("/runs/{runId}")
     public Result<Map<String, Object>> readRun(@PathVariable String runId) {
         return Result.success(orchestrator.readRun(AccessGuard.currentIdentity(), runId));
+    }
+
+    /** 返回固定评测集；样例中的用户输入不会直接接受浏览器改写，避免把评测接口变成任意 Prompt 入口。 */
+    @GetMapping("/evaluations/cases")
+    public Result<List<AgentEvaluationCase>> evaluationCases() {
+        AccessGuard.currentIdentity();
+        return Result.success(evaluationService.cases());
+    }
+
+    /** 执行一条只读评测并把工具选择、越权工具、确认要求和结果状态落库。 */
+    @PostMapping("/evaluations/run")
+    public Result<AgentEvaluationService.EvaluationResult> runEvaluation(@RequestBody EvaluationRequest request) {
+        if (request == null || request.caseId == null || request.caseId.isBlank()) {
+            throw new ServiceException(400, "请选择评测样例");
+        }
+        return Result.success(evaluationService.run(
+                AccessGuard.currentIdentity(), request.caseId.trim(), request.storeId, request.sessionId));
+    }
+
+    /** 执行当前身份对应场景的全部固定样例，并逐条写入 agent_eval_result。 */
+    @PostMapping("/evaluations/run-all")
+    public Result<List<AgentEvaluationService.EvaluationResult>> runAllEvaluations(@RequestBody EvaluationRequest request) {
+        Long storeId = request == null ? null : request.storeId;
+        return Result.success(evaluationService.runAll(AccessGuard.currentIdentity(), storeId));
+    }
+
+    @GetMapping("/evaluations/summary")
+    public Result<Map<String, Object>> evaluationSummary() {
+        return Result.success(evaluationService.summary(AccessGuard.currentIdentity()));
     }
 
     @PostMapping("/knowledge/documents")
@@ -109,4 +146,5 @@ public class BusinessAgentController {
         public String source;
     }
     public static class KnowledgeBootstrapRequest { public Long storeId; }
+    public static class EvaluationRequest { public String caseId; public Long storeId; public String sessionId; }
 }

@@ -355,7 +355,33 @@ export interface CustomerAgentPlan {
   engine?: string
   storeName?: string
   planToken: string
+  /** 本次点单 Agent 运行编号，用于把最终下单结果回写到观测轨迹。 */
+  runId?: string
   expiresInSeconds: number
+}
+
+export type CustomerAssistantActionType =
+  | 'ORDER_PLAN'
+  | 'VIEW_ORDERS'
+  | 'OPEN_FEEDBACK'
+  | 'OPEN_AFTER_SALE'
+  | 'CHOOSE_FEEDBACK_ORDER'
+  | 'NONE'
+
+export interface CustomerAssistantAction {
+  type: CustomerAssistantActionType | string
+  label?: string
+  payload?: Record<string, any>
+}
+
+export interface CustomerAssistantResponse {
+  sessionId: string
+  runId: string
+  route: 'CONSULT' | 'ORDER' | 'ORDER_QUERY' | 'FEEDBACK' | 'UNSAFE' | string
+  answer: string
+  engine: string
+  action?: CustomerAssistantAction
+  memorySignals?: string[]
 }
 
 export interface CartItemRequest {

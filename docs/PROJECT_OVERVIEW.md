@@ -60,7 +60,7 @@ flowchart LR
 | 外卖配送 | 配送履约 | 顾客地址簿、外卖配送单、配送员抢单与状态机、骑手业绩与隐私联系框架；第三方平台适配预留 |
 | 售后 | 服务闭环 | 退款/重做/换货申请、商家处理、订单反馈 |
 | 门店与商家 | 多店经营 | 一商一店、门店状态、菜单/座位管理、经营看板 |
-| Agent 平台 | 受控智能业务流 | 结构化计划、场景化只读工具、Milvus RAG、SSE、人工确认、运行轨迹与工具耗时审计 |
+| Agent 平台 | 用户侧与商家侧受控智能业务流 | Supervisor 分发咨询/推荐、点单、订单查询、反馈；结构化计划、Milvus RAG、SSE、人工确认、偏好记忆、运行轨迹与工具耗时审计 |
 
 ## 5. 技术栈与工程组织
 
@@ -83,11 +83,11 @@ flowchart LR
 5. **实时履约体验**：WebSocket 用于订单状态/取餐通知，座位通过二维码绑定门店与桌号。
 6. **可靠性基础设施**：创建订单要求幂等键并将结果持久化；订单领域事件采用 Transactional Outbox，支持多实例 CAS 抢占、超时恢复和失败重试。
 7. **可观测性与性能**：`X-Request-Id` 贯穿请求响应与日志，Actuator 暴露运行指标；菜单缓存默认本地可运行，Redis profile 下可切换为共享缓存。
-8. **受控 Agent 工程化**：模型只输出结构化计划，服务端通过工具注册表、场景权限和只读校验执行；每个工具调用记录 `callId`、状态、耗时和返回条数，营销写操作仍经过人工确认、幂等和审计。
+8. **受控 Agent 工程化**：Supervisor 将用户请求分发到咨询/推荐、点单、订单查询和反馈子 Agent；模型只输出结构化计划，服务端通过工具注册表、场景权限和只读校验执行；每个运行记录 `runId`、工具调用次数、步骤耗时、降级原因、模型成本和最终下单结果，写操作仍经过人工确认、幂等和审计。
 
 ## 7. 本地运行
 
-1. 创建 MySQL 数据库 `coffee_order_pro`，导入现有结构与种子数据，并按 `sql/migrations/` 的版本顺序执行迁移；外卖模块执行 `V20260831_13_delivery_module.sql`，骑手业绩索引与联系框架执行 `V20260901_15_delivery_rider_performance_contact.sql`，三端个人资料字段执行 `V20260901_16_profile_center.sql`，Agent 运行轨迹执行 `V20260906_17_agent_observability.sql`。
+1. 创建 MySQL 数据库 `coffee_order_pro`，导入现有结构与种子数据，并按 `sql/migrations/` 的版本顺序执行迁移；外卖模块执行 `V20260831_13_delivery_module.sql`，骑手业绩索引与联系框架执行 `V20260901_15_delivery_rider_performance_contact.sql`，三端个人资料字段执行 `V20260901_16_profile_center.sql`，Agent 运行轨迹执行 `V20260906_17_agent_observability.sql`，Agent 评测和模型/订单观测扩展执行 `V20260908_24_agent_evaluation_observability.sql`，用户侧 Supervisor 的知识、会话和偏好记忆执行 `V20260909_25_customer_agent_platform.sql`。
 2. 设置 `COFFEE_DB_USERNAME`、`COFFEE_DB_PASSWORD`；开发/生产环境还必须设置 `COFFEE_AUTH_TOKEN_SECRET`（至少 32 个字符）。本地 profile 在未提供 Token 密钥时仅使用每次启动随机生成的临时密钥，重启后旧 Token 会失效；可选设置 `COFFEE_DB_URL` 和 `COFFEE_QR_BASE_URL`。公共配置已提供安全占位值。
 3. 后端运行：`mvn -pl coffee-web -am spring-boot:run`。
 4. 前端进入相邻仓库 `../coffee-order-system-pro_front`，执行 `pnpm install && pnpm dev`。
@@ -96,7 +96,7 @@ flowchart LR
 
 ## 8. 基础设施启用说明
 
-- 执行 `sql/migrations/V20260831_12_runtime_consistency.sql` 和 `sql/migrations/V20260906_17_agent_observability.sql` 后，数据库具备下单幂等、可靠事件、库存、定位、秒杀、Agent 知识/会话、工具调用审计和站内通知所需的运行时表及唯一约束。
+- 执行 `sql/migrations/V20260831_12_runtime_consistency.sql`、`sql/migrations/V20260906_17_agent_observability.sql`、`sql/migrations/V20260908_24_agent_evaluation_observability.sql` 和 `sql/migrations/V20260909_25_customer_agent_platform.sql` 后，数据库具备下单幂等、可靠事件、库存、定位、秒杀、Agent 知识/会话/偏好记忆、工具调用审计、评测结果和站内通知所需的运行时表及唯一约束。
 - Redis 可执行 `docker compose -f docker-compose.redis.yml up -d` 启动；后端增加 `--spring.profiles.active=redis` 后切换到共享缓存。
 - 健康与指标端点：`/actuator/health`、`/actuator/info`、`/actuator/metrics`；Outbox 指标为 `fika.outbox.pending`、`fika.outbox.published`、`fika.outbox.failed`。
 

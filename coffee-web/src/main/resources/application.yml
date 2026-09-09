@@ -134,6 +134,14 @@ coffee:
     cors:
       allowed-origins: ${COFFEE_CORS_ALLOWED_ORIGINS:http://localhost:5174,http://127.0.0.1:5174}
   ai:
+    observability:
+      # 记录模型调用次数和字符估算 token；成本单价可按智谱控制台配置，单位为每 1K token。
+      input-cost-per-1k: ${COFFEE_AI_INPUT_COST_PER_1K:0}
+      output-cost-per-1k: ${COFFEE_AI_OUTPUT_COST_PER_1K:0}
+      cost-currency: ${COFFEE_AI_COST_CURRENCY:CNY}
+    evaluation:
+      # 评测只调用只读 Agent；生产环境可通过 COFFEE_AI_EVALUATION_ENABLED=false 关闭接口。
+      enabled: ${COFFEE_AI_EVALUATION_ENABLED:true}
     platform:
       # 当前采用 GLM 路由 + 后端受控工具编排；未来接入 Spring AI Alibaba 时只替换适配器。
       provider: ${COFFEE_AI_PLATFORM_PROVIDER:glm}

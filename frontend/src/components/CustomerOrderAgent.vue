@@ -6,7 +6,7 @@ import { useAppStore } from '@/stores/app'
 import type { CustomerAgentItem, CustomerAgentOption, CustomerAgentPlan } from '@/api/types'
 
 const props = defineProps<{ modelValue: boolean }>()
-const emit = defineEmits<{ 'update:modelValue': [boolean]; checkout: [planToken: string, includeAddOn: boolean] }>()
+const emit = defineEmits<{ 'update:modelValue': [boolean]; checkout: [planToken: string, includeAddOn: boolean, runId?: string] }>()
 const store = useAppStore()
 const input = ref('下午有点困，想喝清爽一点、别太苦的，顺便配个小甜点。')
 const loading = ref(false)
@@ -155,7 +155,7 @@ function acceptPromotion() {
 }
 function confirm() {
   if (!plan.value?.items.length) return
-  emit('checkout', plan.value.planToken, includeAddOn.value)
+  emit('checkout', plan.value.planToken, includeAddOn.value, plan.value.runId)
   emit('update:modelValue', false)
 }
 </script>

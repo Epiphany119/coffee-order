@@ -25,6 +25,9 @@ flowchart LR
 - `BusinessAgentOrchestrator`：固定 Plan-Execute 顺序，执行 `knowledge_retrieve`、`menu_query`，商家身份才可执行 `operation_metrics`。所有工具只读并做身份范围限制。
 - `BusinessAgentController`：`POST /api/business-agent/ask` 提供同步结果；`POST /api/business-agent/stream` 返回 SSE 事件：`status`、`plan`、`tools`、`delta`、`done`。前端可逐字渲染 `delta`，并将 `sessionId` 用于下一轮。
 - `POST /api/business-agent/knowledge/documents`：仅门店所属商家可写入本店知识文档；当前写入后立即走 MySQL 检索，Milvus 索引任务只做异步增量，不阻塞请求。
+- `CustomerSupervisorAgentOrchestrator`：用户侧统一 Supervisor 入口，按规则和安全守卫将请求分发到咨询/推荐、受控点单、订单查询和反馈/售后子 Agent；`POST /api/customer-agent/assistant` 返回 `sessionId`、`runId`、路由、回答和可确认的 UI 动作。
+- `CustomerPreferenceMemoryService`：只提取冷热、甜度、口味、品类、搭配和预算等有限偏好，按 `USER:id` / `GUEST:id` 与门店隔离写入 `agent_customer_preference`，供后续咨询和推荐使用；记忆库不可用时降级为空记忆。
+- 用户侧写操作遵循“生成方案/打开确认弹窗 → 用户确认 → 原有业务服务执行”：Supervisor 不直接创建订单、提交反馈或发起售后。
 
 ### 当前模型实现：GLM 替代 Spring AI Alibaba
 
@@ -32,7 +35,7 @@ flowchart LR
 
 ## Spring AI Alibaba 与 Milvus 的第二阶段适配
 
-当前项目为 Spring Boot 3.2.4 且使用 GLM。为了不破坏订单与支付主链路，建议新增 `coffee.ai.platform.provider=spring-ai-alibaba` 和 `coffee.ai.rag.provider=milvus` 两个开关，并在预发完成兼容测试后启用：
+当前项目为 Spring Boot 3.2.4 且使用 GLM。当前用户侧 Supervisor 直接复用项目内受控服务，不依赖阿里原生 Agent API；如果后续引入 Spring AI Alibaba，也应只替换模型适配层并保留以下边界：
 
 1. 用 Spring AI Alibaba 的 `ChatClient` + Structured Output 生成 `AgentPlan`，而不是让模型直接调用写库接口。
 2. 将 `knowledge_retrieve`、`menu_query`、`operation_metrics` 声明为 Function/Tool Bean；工具输入只接收受限 DTO，工具执行与审计仍由应用层管理。

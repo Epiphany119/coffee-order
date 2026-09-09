@@ -34,6 +34,11 @@ public class ZhipuChatClient {
     private final Duration timeout;
     /** 同一 API Key 串行调用，避免多个页面/连点同时打满平台并发额度。 */
     private final Semaphore requestPermit = new Semaphore(1);
+    /**
+     * 当前请求线程的模型用量采集器。Web 层可以在一次 Agent run 周围开启它，
+     * 不需要让业务模块依赖 Web 审计模块；没有开启采集时完全不增加额外状态。
+     */
+    private final ThreadLocal<UsageAccumulator> usageTracking = new ThreadLocal<>();
     private volatile long rateLimitedUntilMillis;
 
     public ZhipuChatClient(ObjectMapper json,
@@ -54,6 +59,8 @@ public class ZhipuChatClient {
     public Optional<String> chat(String systemPrompt, String userPrompt) {
         if (apiKey.isBlank() || System.currentTimeMillis() < rateLimitedUntilMillis) return Optional.empty();
         if (!requestPermit.tryAcquire()) return Optional.empty();
+        boolean billable = false;
+        String output = "";
         try {
             String body = json.writeValueAsString(Map.of(
                     "model", model,
@@ -75,6 +82,7 @@ public class ZhipuChatClient {
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
             HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            billable = response.statusCode() / 100 == 2;
             if (response.statusCode() / 100 != 2) {
                 if (response.statusCode() == 429) {
                     long retrySeconds = response.headers().firstValue("Retry-After")
@@ -101,7 +109,8 @@ public class ZhipuChatClient {
                     }
                 }
             }
-            if (!content.isEmpty()) return Optional.of(content.toString().trim());
+            output = content.toString().trim();
+            if (!output.isEmpty()) return Optional.of(output);
             log.warn("Zhipu stream completed without displayable content");
         } catch (Exception e) {
             if (e instanceof HttpTimeoutException) {
@@ -109,6 +118,7 @@ public class ZhipuChatClient {
             }
             log.warn("Zhipu chat request failed: {}", e.getClass().getSimpleName());
         } finally {
+            recordUsage(systemPrompt, userPrompt, output, billable);
             requestPermit.release();
         }
         return Optional.empty();
@@ -118,6 +128,8 @@ public class ZhipuChatClient {
     public Optional<String> callJson(String systemPrompt, String userPrompt, int maxTokens) {
         if (apiKey.isBlank() || System.currentTimeMillis() < rateLimitedUntilMillis) return Optional.empty();
         if (!requestPermit.tryAcquire()) return Optional.empty();
+        boolean billable = false;
+        String output = "";
         try {
             String body = json.writeValueAsString(Map.of(
                     "model", model,
@@ -137,6 +149,7 @@ public class ZhipuChatClient {
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            billable = response.statusCode() / 100 == 2;
             if (response.statusCode() / 100 != 2) {
                 if (response.statusCode() == 429) {
                     long retrySeconds = response.headers().firstValue("Retry-After")
@@ -151,9 +164,9 @@ public class ZhipuChatClient {
             JsonNode root = json.readTree(response.body());
             JsonNode contentNode = root.at("/choices/0/message/content");
             if (contentNode.isTextual()) {
-                String text = contentNode.asText().trim();
-                log.debug("Zhipu callJson raw: {}", text.length() > 500 ? text.substring(0, 500) + "..." : text);
-                return Optional.of(text);
+                output = contentNode.asText().trim();
+                log.debug("Zhipu callJson raw: {}", output.length() > 500 ? output.substring(0, 500) + "..." : output);
+                return Optional.of(output);
             }
             log.warn("Zhipu callJson returned non-text content node");
         } catch (Exception e) {
@@ -163,9 +176,22 @@ public class ZhipuChatClient {
                 log.warn("Zhipu callJson failed: {}", e.getClass().getSimpleName(), e);
             }
         } finally {
+            recordUsage(systemPrompt, userPrompt, output, billable);
             requestPermit.release();
         }
         return Optional.empty();
+    }
+
+    /** 开始统计当前线程内一次 Agent run 的模型调用用量。 */
+    public void beginUsageTracking() {
+        usageTracking.set(new UsageAccumulator(model));
+    }
+
+    /** 结束当前线程的用量统计；调用方应在 finally 中调用，避免 ThreadLocal 泄漏。 */
+    public UsageSnapshot endUsageTracking() {
+        UsageAccumulator accumulator = usageTracking.get();
+        usageTracking.remove();
+        return accumulator == null ? new UsageSnapshot(model, 0, 0, 0, 0, true) : accumulator.snapshot();
     }
 
     /** 从 LLM 返回文本中提取纯 JSON（去除可能的 markdown 包裹 / 解释文字）。 */
@@ -201,5 +227,45 @@ public class ZhipuChatClient {
     private String keyId() {
         int separator = apiKey.indexOf('.');
         return separator > 0 ? apiKey.substring(0, separator) : "configured";
+    }
+
+    private void recordUsage(String systemPrompt, String userPrompt, String output, boolean billable) {
+        UsageAccumulator accumulator = usageTracking.get();
+        if (accumulator != null && billable) {
+            accumulator.add(estimateTokens(systemPrompt) + estimateTokens(userPrompt), estimateTokens(output));
+        }
+    }
+
+    /** 当前客户端未要求供应商返回 usage，因此以字符数估算；审计中会明确标注 estimated。 */
+    private int estimateTokens(String value) {
+        if (value == null || value.isBlank()) return 0;
+        int codePoints = value.codePointCount(0, value.length());
+        return Math.max(1, (codePoints + 3) / 4);
+    }
+
+    public record UsageSnapshot(String model, int modelCalls, int inputTokens, int outputTokens,
+                                int totalTokens, boolean estimated) {
+    }
+
+    private static final class UsageAccumulator {
+        private final String model;
+        private int modelCalls;
+        private int inputTokens;
+        private int outputTokens;
+
+        private UsageAccumulator(String model) {
+            this.model = model;
+        }
+
+        private void add(int input, int output) {
+            modelCalls++;
+            inputTokens += input;
+            outputTokens += output;
+        }
+
+        private UsageSnapshot snapshot() {
+            return new UsageSnapshot(model, modelCalls, inputTokens, outputTokens,
+                    inputTokens + outputTokens, true);
+        }
     }
 }

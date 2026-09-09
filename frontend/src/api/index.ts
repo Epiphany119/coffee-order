@@ -59,6 +59,7 @@ import type {
   , UserNotification
   , MerchantProfileUpdateRequest
   , BusinessAgentAnswer
+  , CustomerAssistantResponse
 } from './types'
 
 // ============================================================
@@ -571,8 +572,14 @@ export const customerAgentApi = {
   },
 
   /** 只提交一次性方案令牌；商品行由服务端从已审计的方案快照读取。 */
-  confirm: (data: { planToken: string; storeId: number; userId?: number | null; guestId?: string | null; fulfillmentType: string; deliveryAddressId?: number | null; includeAddOn?: boolean }, idempotencyKey = createIdempotencyKey()) =>
+  confirm: (data: { planToken: string; runId?: string | null; storeId: number; userId?: number | null; guestId?: string | null; fulfillmentType: string; deliveryAddressId?: number | null; includeAddOn?: boolean }, idempotencyKey = createIdempotencyKey()) =>
     request.post<any, OrderResponse>('/customer-agent/plans/confirm', data, { headers: { 'Idempotency-Key': idempotencyKey } })
+}
+
+/** 顾客侧统一 Supervisor Agent：咨询、推荐、订单查询与反馈入口共用一个会话。 */
+export const customerAssistantApi = {
+  ask: (data: { storeId: number; sessionId?: string | null; message: string }) =>
+    request.post<any, CustomerAssistantResponse>('/customer-agent/assistant', data)
 }
 
 export const seatApi = {
