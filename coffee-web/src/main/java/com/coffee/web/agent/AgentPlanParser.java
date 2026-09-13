@@ -48,6 +48,9 @@ public class AgentPlanParser {
                     return Optional.empty();
                 }
                 JsonNode argumentsNode = stepNode.get("arguments");
+                if (argumentsNode != null && !argumentsNode.isNull() && !argumentsNode.isObject()) {
+                    return Optional.empty();
+                }
                 Map<String, Object> arguments = argumentsNode == null || argumentsNode.isNull()
                         ? Map.of()
                         : json.convertValue(argumentsNode, new TypeReference<>() { });
@@ -55,6 +58,9 @@ public class AgentPlanParser {
                 if (arguments.toString().length() > MAX_ARGUMENT_LENGTH) return Optional.empty();
                 steps.add(new AgentPlan.Step(tool, arguments, text(stepNode, "purpose")));
             }
+
+            JsonNode confirmationNode = root.get("requiresConfirmation");
+            if (confirmationNode != null && !confirmationNode.isBoolean()) return Optional.empty();
 
             return Optional.of(new AgentPlan(
                     text(root, "intent"),

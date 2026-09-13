@@ -22,4 +22,5 @@ class AgentToolRegistryTest {
         assertTrue(registry.available("merchant").stream().allMatch(AgentToolRegistry.ToolDescriptor::readOnly));
         assertTrue(registry.available("customer").stream().allMatch(AgentToolRegistry.ToolDescriptor::readOnly));
     }
+
 }

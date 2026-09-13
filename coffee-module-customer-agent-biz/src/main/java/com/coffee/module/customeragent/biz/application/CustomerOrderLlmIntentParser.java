@@ -7,9 +7,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 final class CustomerOrderLlmIntentParser {
     private static final Logger log = LoggerFactory.getLogger(CustomerOrderLlmIntentParser.class);
+    private static final Pattern RAW_QUANTITY = Pattern.compile(
+            "(\\d{1,2}|[一二三四五六七八九十两兩]+)\\s*(?:个|份|样|种|品|杯|碗|块|根|条|片|件|款)");
 
     private static final String SYSTEM_PROMPT = """
             你是咖啡馆点单意图解析器。将用户的自然语言需求解析为严格的 JSON 结构。
@@ -22,7 +26,7 @@ final class CustomerOrderLlmIntentParser {
             2. 用户同时提到食物和饮品时，expect_combination 必须为 "mix"，need_food=true 且 need_drink=true。
             3. 输出必须是合法 JSON，禁止 markdown 代码块，禁止额外解释文字。
             4. target_count 是用户希望商品总数量，识别不到时填 null。
-            5. 品类判断：汉堡/薯条/三明治/热狗/鸡翅/小吃/披萨/蛋糕/甜点 → food；咖啡/拿铁/美式/冰沙/茶饮/果汁 → drink。
+            5. 品类判断：汉堡/薯条/三明治/热狗/鸡翅/小吃/披萨 → food；蛋糕/甜点/甜品 → dessert；咖啡/拿铁/美式 → coffee；冰沙/冰淇淋 → ice；茶饮/果茶 → tea。
             6. 当用户输入口语模糊，对应的字段填 null，不要臆造需求。
             7. temperature 字段：cold=冰/冷/冰镇；hot=热/暖/温的；any=不指定。
             8. must_include 放用户明确点名的每个商品（含数量，如"2杯冰沙"）；avoid 放明确不要的关键词。
@@ -32,15 +36,15 @@ final class CustomerOrderLlmIntentParser {
 
     private static final String JSON_SCHEMA = """
             {
-              "target_count": 4,
-              "need_food": true,
-              "need_drink": true,
-              "budget_max": 70,
-              "tags": ["冰饮"],
-              "must_include": ["汉堡", "薯条", "冰沙", "冰沙"],
+              "target_count": null,
+              "need_food": false,
+              "need_drink": false,
+              "budget_max": null,
+              "tags": [],
+              "must_include": [],
               "avoid": [],
-              "expect_combination": "mix",
-              "temperature": "cold",
+              "expect_combination": "single",
+              "temperature": "any",
               "user_intent_raw": ""
             }
             """;
@@ -94,47 +98,37 @@ final class CustomerOrderLlmIntentParser {
     }
 
     private CustomerOrderIntentParser.Intent mapToIntent(JsonNode node, String rawText) {
-        Integer targetCount = node.has("target_count") && !node.get("target_count").isNull()
-                ? node.get("target_count").asInt() : null;
-        Boolean needFood = node.has("need_food") && !node.get("need_food").isNull()
-                ? node.get("need_food").asBoolean() : null;
-        Boolean needDrink = node.has("need_drink") && !node.get("need_drink").isNull()
-                ? node.get("need_drink").asBoolean() : null;
-        Integer budgetMax = node.has("budget_max") && !node.get("budget_max").isNull()
-                ? node.get("budget_max").asInt() : null;
-
-        List<String> tags = readStringArray(node, "tags");
-        List<String> mustInclude = readStringArray(node, "must_include");
-        List<String> avoid = readStringArray(node, "avoid");
-        String expectCombination = node.has("expect_combination") && !node.get("expect_combination").isNull()
-                ? node.get("expect_combination").asText() : null;
-        String temperatureStr = node.has("temperature") && !node.get("temperature").isNull()
-                ? node.get("temperature").asText() : null;
+        if (node == null || !node.isObject()) return null;
+        CustomerOrderIntentParser.Intent rawIntent = fallbackParser.parse(rawText);
+        // 模型字段只能作为候选提示，必须先被原始用户文本验证，避免示例值或幻觉变成约束。
+        List<String> tags = groundedTerms(rawText, readStringArray(node, "tags"));
+        List<String> mustInclude = groundedTerms(rawText, readStringArray(node, "must_include"));
+        List<String> avoid = groundedNegatedTerms(rawText, readStringArray(node, "avoid"));
 
         List<String> requiredCategories = new ArrayList<>();
-        Set<String> excludedCategories = new LinkedHashSet<>();
+        Set<String> excludedCategories = new LinkedHashSet<>(rawIntent.excludedCategories());
 
         // === 强制规则：检查用户原始输入中的品类关键词 ===
         // 这是最高优先级，确保 LLM 即使解析错误也能正确识别
 
         // 检查原始文本中的食物关键词
         boolean hasFoodKeyword = containsAny(rawText,
-                "汉堡", "薯条", "三明治", "热狗", "鸡翅", "小吃", "披萨", "蛋糕",
-                "甜点", "甜品", "面包", "轻食", "沙拉", "卷饼", "塔可", "主食");
+                "汉堡", "薯条", "三明治", "热狗", "鸡翅", "小吃", "披萨",
+                "面包", "轻食", "沙拉", "卷饼", "塔可", "主食");
+        boolean hasDessertKeyword = containsAny(rawText, "蛋糕", "甜点", "甜品", "曲奇", "可颂", "芝士蛋糕");
         // 检查 must_include 中的食物关键词
         boolean mustIncludeHasFood = mustInclude.stream().anyMatch(m -> containsAny(m,
-                "汉堡", "薯条", "三明治", "热狗", "鸡翅", "小吃", "披萨", "蛋糕",
-                "甜点", "甜品", "面包", "轻食", "沙拉", "卷饼", "塔可", "主食"));
-        // 检查 tags 中的食物关键词
-        boolean tagHasFood = tags.stream().anyMatch(t -> containsAny(t,
-                "汉堡", "薯条", "三明治", "热狗", "鸡翅", "小吃", "披萨", "蛋糕",
-                "甜点", "甜品", "面包", "轻食", "沙拉", "卷饼", "塔可", "主食"));
+                "汉堡", "薯条", "三明治", "热狗", "鸡翅", "小吃", "披萨",
+                "面包", "轻食", "沙拉", "卷饼", "塔可", "主食"));
+        boolean mustIncludeHasDessert = mustInclude.stream().anyMatch(m -> containsAny(m,
+                "蛋糕", "甜点", "甜品", "曲奇", "可颂", "芝士蛋糕"));
 
-        if (hasFoodKeyword || mustIncludeHasFood || tagHasFood) {
+        if (hasFoodKeyword || mustIncludeHasFood) {
             requiredCategories.add("food");
-            if (needFood == null) needFood = true;
-        } else if (needFood != null && needFood) {
-            requiredCategories.add("food");
+        }
+        if (hasDessertKeyword || mustIncludeHasDessert
+                || tags.stream().anyMatch(t -> containsAny(t, "甜点", "甜品", "蛋糕"))) {
+            requiredCategories.add("dessert");
         }
 
         // 检查原始文本中的冰饮关键词
@@ -156,13 +150,8 @@ final class CustomerOrderLlmIntentParser {
                 "咖啡", "拿铁", "美式", "浓缩", "摩卡", "冷萃", "卡布奇诺", "玛奇朵", "提神");
         boolean mustIncludeHasCoffee = mustInclude.stream().anyMatch(m ->
                 containsAny(m, "咖啡", "拿铁", "美式", "浓缩", "摩卡", "冷萃", "卡布奇诺", "玛奇朵"));
-        if ((hasCoffeeKeyword || mustIncludeHasCoffee) && !requiredCategories.contains("ice") && !requiredCategories.contains("tea")) {
+        if (hasCoffeeKeyword || mustIncludeHasCoffee) {
             requiredCategories.add("coffee");
-        }
-
-        // === 标签补充检测 ===
-        if (tags.contains("甜点") || tags.contains("甜品") || tags.contains("蛋糕")) {
-            if (!requiredCategories.contains("dessert")) requiredCategories.add("dessert");
         }
 
         // === 排除品类处理 ===
@@ -184,22 +173,18 @@ final class CustomerOrderLlmIntentParser {
 
         log.info("数量词展开后 mustInclude: {}", mustInclude);
 
-        // === 数量校验 ===
-        // 以 must_include 的实际数量为准，只要有差异就修正
-        if (targetCount != null && !mustInclude.isEmpty()) {
-            long mustIncludeCount = mustInclude.size();
-            if (targetCount != (int) mustIncludeCount) {
-                log.info("修正 target_count: {} → {} (基于 must_include 数量)", targetCount, mustIncludeCount);
-                targetCount = (int) mustIncludeCount;
-            }
-        }
+        // 数量、预算、温度和排除项以原始输入为准；模型不能把示例值变成业务约束。
+        int rawQuantity = rawQuantityTotal(rawText);
+        int itemCount = rawQuantity > 0
+                ? Math.max(rawQuantity, mustInclude.size())
+                : Math.max(Math.max(rawIntent.itemCount(), mustInclude.size()), 1);
+        itemCount = Math.min(itemCount, 10);
+        CustomerOrderIntentParser.Temperature temperature = rawIntent.temperature();
+        Integer budgetMax = rawIntent.budget();
+        boolean pairing = rawIntent.pairing() || requiredCategories.size() >= 2;
 
-        CustomerOrderIntentParser.Temperature temperature = mapTemperature(temperatureStr);
-
-        boolean pairing = "mix".equals(expectCombination) || requiredCategories.size() >= 2;
-        int itemCount = targetCount != null ? targetCount : Math.max(requiredCategories.size(), 1);
-
-        Set<String> excludedProducts = new LinkedHashSet<>(avoid);
+        Set<String> excludedProducts = new LinkedHashSet<>(rawIntent.excludedProducts());
+        excludedProducts.addAll(avoid);
 
         String summary = buildSummary(requiredCategories, excludedCategories, excludedProducts,
                 temperature, budgetMax, itemCount, tags);
@@ -227,6 +212,78 @@ final class CustomerOrderLlmIntentParser {
             }
         }
         return result;
+    }
+
+    private List<String> groundedTerms(String rawText, List<String> values) {
+        String normalizedRaw = compact(rawText);
+        Set<String> grounded = new LinkedHashSet<>();
+        for (String value : values) {
+            String term = stripLeadingQuantity(value);
+            String normalizedTerm = compact(term);
+            if (normalizedTerm.isBlank() || normalizedTerm.length() > 40) continue;
+            if (normalizedRaw.contains(normalizedTerm)) grounded.add(term.trim());
+        }
+        return List.copyOf(grounded);
+    }
+
+    private List<String> groundedNegatedTerms(String rawText, List<String> values) {
+        return groundedTerms(rawText, values).stream()
+                .filter(term -> isNegated(rawText, term))
+                .toList();
+    }
+
+    private boolean isNegated(String rawText, String term) {
+        String text = rawText == null ? "" : rawText.toLowerCase(Locale.ROOT);
+        String normalizedTerm = stripLeadingQuantity(term).toLowerCase(Locale.ROOT).trim();
+        int from = text.indexOf(normalizedTerm);
+        while (from >= 0) {
+            String prefix = text.substring(Math.max(0, from - 8), from);
+            if (prefix.contains("不要") || prefix.contains("不喝") || prefix.contains("别")
+                    || prefix.contains("不想") || prefix.contains("忌") || prefix.contains("不是")
+                    || prefix.contains("并非") || prefix.contains("不吃") || prefix.contains("不选")) {
+                return true;
+            }
+            from = text.indexOf(normalizedTerm, from + normalizedTerm.length());
+        }
+        return false;
+    }
+
+    private String stripLeadingQuantity(String value) {
+        if (value == null) return "";
+        return value.trim().replaceFirst(
+                "^(?:\\d{1,2}|[一二三四五六七八九十两兩]+)\\s*(?:个|份|样|种|品|杯|碗|块|根|条|片|件|款)?", "");
+    }
+
+    private String compact(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s,，。.!！?？;；:：、\\\"“”'‘’]", "");
+    }
+
+    private int rawQuantityTotal(String rawText) {
+        Matcher matcher = RAW_QUANTITY.matcher(rawText == null ? "" : rawText);
+        int total = 0;
+        while (matcher.find()) {
+            int count = parseQuantity(matcher.group(1));
+            if (count > 0) total = Math.min(10, total + count);
+        }
+        return total;
+    }
+
+    private int parseQuantity(String value) {
+        if (value == null || value.isBlank()) return 0;
+        if (value.chars().allMatch(Character::isDigit)) {
+            try {
+                return Math.min(10, Integer.parseInt(value));
+            } catch (NumberFormatException ignored) {
+                return 0;
+            }
+        }
+        if ("两".equals(value) || "兩".equals(value) || "二".equals(value)) return 2;
+        if ("十".equals(value)) return 10;
+        if (value.length() == 1) {
+            return "一二三四五六七八九十".indexOf(value) + 1;
+        }
+        return 0;
     }
 
     private boolean containsAny(String text, String... keywords) {
@@ -319,15 +376,6 @@ final class CustomerOrderLlmIntentParser {
         }
 
         return expanded;
-    }
-
-    private CustomerOrderIntentParser.Temperature mapTemperature(String temp) {
-        if (temp == null || temp.isBlank()) return CustomerOrderIntentParser.Temperature.ANY;
-        return switch (temp.toLowerCase(Locale.ROOT)) {
-            case "cold", "iced", "冰", "冷" -> CustomerOrderIntentParser.Temperature.COLD;
-            case "hot", "热", "暖", "温" -> CustomerOrderIntentParser.Temperature.HOT;
-            default -> CustomerOrderIntentParser.Temperature.ANY;
-        };
     }
 
     private String buildSummary(List<String> required, Set<String> excluded,

@@ -19,6 +19,12 @@ public class InternalInventoryController {
         this.inventoryService = inventoryService;
     }
 
+    @PostMapping("/check")
+    public ResponseEntity<Boolean> check(@RequestBody InventoryCommand command) {
+        return ResponseEntity.ok(inventoryService.hasAvailable(
+                command.storeId(), command.productId(), command.quantity()));
+    }
+
     @PostMapping("/reserve")
     public ResponseEntity<Void> reserve(@RequestBody InventoryCommand command) {
         inventoryService.reserve(command.storeId(), command.productId(), command.quantity());

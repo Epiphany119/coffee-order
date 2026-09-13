@@ -8,11 +8,17 @@ import java.util.List;
  */
 public record AgentOrderPlan(Long storeId, Long userId, String guestId, List<AgentOrderLine> items,
                              List<AgentOrderLine> addOnItems, String note) {
+    public AgentOrderPlan {
+        items = items == null ? List.of() : List.copyOf(items);
+        addOnItems = addOnItems == null ? List.of() : List.copyOf(addOnItems);
+        note = note == null ? "" : note;
+    }
+
     public AgentOrderPlan(Long storeId, Long userId, String guestId, List<AgentOrderLine> items, String note) {
         this(storeId, userId, guestId, items, List.of(), note);
     }
     public List<AgentOrderLine> resolvedItems(boolean includeAddOn) {
-        if (!includeAddOn || addOnItems == null || addOnItems.isEmpty()) return items;
+        if (!includeAddOn || addOnItems.isEmpty()) return items;
         java.util.ArrayList<AgentOrderLine> all = new java.util.ArrayList<>(items);
         all.addAll(addOnItems);
         return List.copyOf(all);

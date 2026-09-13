@@ -276,20 +276,20 @@ public class MenuDomainService implements MenuService {
 
     /** 定制规格计价：定制价 = 中等款定价 ×（定制量 ÷ 基准量），基准量按分类（饮品 ml / 甜点轻食 g） */
     private double calculateCustomPrice(MenuItem product, String customSize) {
-        double amount = parseCustomSize(customSize);
-        double mediumPrice = product.getSizePrice("MEDIUM");
         double base = isLiquid(product.getCategoryCode()) ? CUSTOM_BASE_ML : CUSTOM_BASE_G;
+        double amount = parseCustomSize(customSize, base);
+        double mediumPrice = product.getSizePrice("MEDIUM");
         return mediumPrice * amount / base;
     }
 
     /** 解析定制量：空/非法按基准量处理（比例 1.0），不允许 0 或负数 */
-    private double parseCustomSize(String customSize) {
-        if (customSize == null || customSize.isBlank()) return 0;
+    private double parseCustomSize(String customSize, double defaultAmount) {
+        if (customSize == null || customSize.isBlank()) return defaultAmount;
         try {
             double v = Double.parseDouble(customSize.trim());
-            return Double.isFinite(v) && v > 0 ? v : 0;
+            return Double.isFinite(v) && v > 0 ? v : defaultAmount;
         } catch (NumberFormatException e) {
-            return 0;
+            return defaultAmount;
         }
     }
 

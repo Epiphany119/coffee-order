@@ -5,7 +5,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 final class IntentValidator {
     private static final Logger log = LoggerFactory.getLogger(IntentValidator.class);
@@ -20,50 +19,16 @@ final class IntentValidator {
         }
     }
 
-    /**
-     * 校验组合，支持精确匹配商品豁免
-     *
-     * @param products         选中的商品列表
-     * @param intent           意图
-     * @param totalPrice       总价
-     * @param explicitProductNames 用户明确点名的商品关键词（精确匹配的商品豁免品类校验）
-     */
+    /** 对模型或规则生成的组合执行服务端硬约束校验。 */
     ValidationResult validateCombo(List<MenuItemDTO> products,
                                      CustomerOrderIntentParser.Intent intent,
-                                     double totalPrice,
-                                     List<String> explicitProductNames) {
+                                     double totalPrice) {
         List<String> failures = new ArrayList<>();
-
-        // 找出精确匹配的商品（用户点名的）
-        Set<String> exactMatchedCodes = new HashSet<>();
-        if (explicitProductNames != null && !explicitProductNames.isEmpty()) {
-            for (String keyword : explicitProductNames) {
-                if (keyword == null || keyword.isBlank()) continue;
-                for (MenuItemDTO p : products) {
-                    if (p.getName() != null && p.getName().contains(keyword)) {
-                        exactMatchedCodes.add(p.getCode());
-                    }
-                }
-            }
-        }
-
-        List<MenuItemDTO> exactMatched = products.stream()
-                .filter(p -> exactMatchedCodes.contains(p.getCode()))
-                .collect(Collectors.toList());
-
-        List<MenuItemDTO> others = products.stream()
-                .filter(p -> !exactMatchedCodes.contains(p.getCode()))
-                .collect(Collectors.toList());
-
-        log.info("精确匹配商品（豁免品类校验）: {}", exactMatched.stream()
+        log.info("待校验商品: {}", products.stream()
                 .map(p -> p.getName() + "(" + safe(p.getCategoryCode()) + ")")
-                .collect(Collectors.joining(", ")));
-        log.info("其他商品（需品类校验）: {}", others.stream()
-                .map(p -> p.getName() + "(" + safe(p.getCategoryCode()) + ")")
-                .collect(Collectors.joining(", ")));
+                .toList());
 
-        // 精确匹配的商品豁免品类校验，只校验其他商品
-        validateCategories(others, exactMatched, intent, failures);
+        validateCategories(products, intent, failures);
         validateCount(products, intent, failures);
         validateBudget(totalPrice, intent, failures);
         validateExcluded(products, intent, failures);
@@ -77,61 +42,26 @@ final class IntentValidator {
         }
     }
 
-    /**
-     * 校验品类：结合精确匹配商品 + 其他商品的品类
-     */
-    private void validateCategories(List<MenuItemDTO> others,
-                                     List<MenuItemDTO> exactMatched,
+    /** 品类是硬约束：用户点名商品也不能绕过品类校验。 */
+    private void validateCategories(List<MenuItemDTO> products,
                                      CustomerOrderIntentParser.Intent intent,
                                      List<String> failures) {
-        if (!intent.pairing() || intent.requiredCategories().isEmpty()) return;
+        if (intent.requiredCategories().isEmpty()) return;
 
-        // 收集所有商品的品类（精确匹配 + 其他）
         Set<String> allCategories = new LinkedHashSet<>();
-        for (MenuItemDTO p : others) {
-            String cat = safe(p.getCategoryCode());
-            if (!cat.isBlank()) allCategories.add(cat);
-        }
-        for (MenuItemDTO p : exactMatched) {
+        for (MenuItemDTO p : products) {
             String cat = safe(p.getCategoryCode());
             if (!cat.isBlank()) allCategories.add(cat);
         }
 
         log.info("校验品类: allCategories={}, requiredCategories={}", allCategories, intent.requiredCategories());
 
-        // 精确匹配商品已经覆盖了某些需求品类的话，跳过校验
-        Set<String> coveredByExact = new HashSet<>();
         for (String required : intent.requiredCategories()) {
-            for (MenuItemDTO ep : exactMatched) {
-                if (matchesCategoryLoose(required, safe(ep.getCategoryCode()))) {
-                    coveredByExact.add(required);
-                    log.info("品类 {} 已被精确匹配商品 {} 覆盖，跳过校验", required, ep.getName());
-                    break;
-                }
-            }
-        }
-
-        for (String required : intent.requiredCategories()) {
-            if (coveredByExact.contains(required)) continue;
-
             boolean found = allCategories.stream()
-                    .anyMatch(pcat -> matchesCategoryLoose(required, pcat));
+                    .anyMatch(pcat -> matchesCategory(required, pcat));
             log.info("检查品类 {}: found={}", required, found);
             if (!found) {
                 failures.add("缺少必需品类: " + catName(required));
-            }
-        }
-
-        if (intent.requiredCategories().size() >= 2) {
-            boolean hasFood = allCategories.stream()
-                    .anyMatch(c -> matchesCategoryLoose("food", c) || matchesCategoryLoose("dessert", c));
-            boolean hasDrink = allCategories.stream()
-                    .anyMatch(c -> matchesCategoryLoose("coffee", c) || matchesCategoryLoose("tea", c) || matchesCategoryLoose("ice", c));
-            if (!hasFood && intent.requiredCategories().stream().anyMatch(r -> matchesCategoryLoose("food", r) || matchesCategoryLoose("dessert", r))) {
-                failures.add("组合缺少食品类商品");
-            }
-            if (!hasDrink && intent.requiredCategories().stream().anyMatch(r -> matchesCategoryLoose("coffee", r) || matchesCategoryLoose("tea", r) || matchesCategoryLoose("ice", r))) {
-                failures.add("组合缺少饮品类商品");
             }
         }
     }
@@ -170,7 +100,7 @@ final class IntentValidator {
             }
 
             for (String excludedCat : intent.excludedCategories()) {
-                if (matchesCategoryLoose(excludedCat, safe(p.getCategoryCode()))) {
+                if (matchesCategory(excludedCat, safe(p.getCategoryCode()))) {
                     failures.add("包含排除品类: " + p.getName() + " (排除品类: " + catName(excludedCat) + ")");
                 }
             }
@@ -195,45 +125,8 @@ final class IntentValidator {
         }
     }
 
-    /**
-     * 宽松品类匹配：支持跨品类匹配
-     *
-     * 策略：
-     * 1. 精确匹配：food=food, dessert=dessert, coffee=coffee, ...
-     * 2. 宽松匹配：food 可以匹配 dessert, coffee（因为商家可能把汉堡放在咖啡区）
-     * 3. 全局兜底：任何品类都可以匹配（因为商家分类可能不一致）
-     */
-    private boolean matchesCategoryLoose(String expected, String actual) {
-        if (expected == null || actual == null) return false;
-        if (expected.equalsIgnoreCase(actual)) return true;
-
-        // 精确匹配优先
-        boolean strict = switch (expected.toLowerCase(Locale.ROOT)) {
-            case "food" -> actual.equalsIgnoreCase("food") || actual.equalsIgnoreCase("dessert");
-            case "dessert" -> actual.equalsIgnoreCase("dessert") || actual.equalsIgnoreCase("food");
-            case "drink", "coffee", "tea", "ice" ->
-                    actual.equalsIgnoreCase("coffee") || actual.equalsIgnoreCase("tea") || actual.equalsIgnoreCase("ice");
-            default -> false;
-        };
-        if (strict) return true;
-
-        // 宽松匹配：food 可以匹配 coffee（汉堡在咖啡区）
-        // ice 可以匹配 coffee（冰沙在咖啡区）
-        boolean loose = switch (expected.toLowerCase(Locale.ROOT)) {
-            case "food" -> actual.equalsIgnoreCase("coffee") || actual.equalsIgnoreCase("tea") || actual.equalsIgnoreCase("ice");
-            case "dessert" -> actual.equalsIgnoreCase("coffee") || actual.equalsIgnoreCase("tea");
-            case "ice" -> actual.equalsIgnoreCase("coffee") || actual.equalsIgnoreCase("food") || actual.equalsIgnoreCase("dessert");
-            case "coffee" -> actual.equalsIgnoreCase("food") || actual.equalsIgnoreCase("dessert");
-            default -> false;
-        };
-        if (loose) {
-            log.info("宽松匹配: expected={}, actual={}, matched=true", expected, actual);
-            return true;
-        }
-
-        // 全局兜底：如果预期品类在已知列表中，但实际品类不在任何预期映射中，仍然返回 false
-        // 这样可以避免完全不相关的品类误匹配
-        return false;
+    private boolean matchesCategory(String expected, String actual) {
+        return expected != null && actual != null && expected.equalsIgnoreCase(actual);
     }
 
     private String catName(String cat) {

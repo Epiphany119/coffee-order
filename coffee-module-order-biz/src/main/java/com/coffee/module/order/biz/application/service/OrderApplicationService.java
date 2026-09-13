@@ -107,6 +107,7 @@ public class OrderApplicationService implements OrderService {
             throw new ServiceException(400, "请选择商品");
         }
         MenuItemDTO product = productService.getProductByCode(storeId, command.getProductCode());
+        requireAvailable(product);
         double regularUnitPrice = productService.calculatePrice(
                 storeId,
                 command.getProductCode(),
@@ -202,6 +203,7 @@ public class OrderApplicationService implements OrderService {
                 throw new ServiceException(400, "商品编码不能为空");
             }
             MenuItemDTO product = productService.getProductByCode(command.getStoreId(), item.getProductCode());
+            requireAvailable(product);
             double unitPrice = productService.calculatePrice(
                     command.getStoreId(),
                     item.getProductCode(),
@@ -584,6 +586,13 @@ public class OrderApplicationService implements OrderService {
             case "12w": return orderRepository.salesWeekly(storeId, 12);
             case "7d":
             default: return orderRepository.salesDaily(storeId, 7);
+        }
+    }
+
+    /** 下单是副作用边界，必须以此刻的菜单状态为准，不能信任 Agent 方案快照。 */
+    private void requireAvailable(MenuItemDTO product) {
+        if (product == null || !Boolean.TRUE.equals(product.getAvailable())) {
+            throw new ServiceException(409, "商品已下架或不可售");
         }
     }
 

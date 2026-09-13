@@ -51,7 +51,7 @@ public class AgentToolRegistry {
     }
 
     public boolean isAllowed(String scene, String toolName) {
-        return available(scene).stream().anyMatch(tool -> tool.name().equals(toolName));
+        return toolName != null && available(scene).stream().anyMatch(tool -> tool.name().equals(toolName));
     }
 
     public boolean isReadOnly(String toolName) {
@@ -61,10 +61,20 @@ public class AgentToolRegistry {
 
     public boolean argumentsAllowed(String scene, String toolName, Map<String, Object> arguments) {
         ToolDescriptor descriptor = descriptors.get(toolName);
-        if (descriptor == null || !descriptor.scenes().contains(scene)) {
+        String safeScene = "merchant".equalsIgnoreCase(scene) ? "merchant" : "customer";
+        if (descriptor == null || !descriptor.scenes().contains(safeScene) || arguments == null) {
             return false;
         }
-        return arguments.keySet().stream().allMatch(descriptor.inputSchema()::containsKey);
+        return arguments.entrySet().stream().allMatch(entry -> {
+            String expectedType = descriptor.inputSchema().get(entry.getKey());
+            Object value = entry.getValue();
+            if (expectedType == null || value == null) return false;
+            return switch (expectedType) {
+                case "string" -> value instanceof CharSequence;
+                case "number" -> value instanceof Number;
+                default -> false;
+            };
+        });
     }
 
     public String allowedNames(String scene) {

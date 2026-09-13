@@ -10,12 +10,12 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * 候选集服务：RAG 语义检索 ∩ MySQL 分类查询 = 高质量候选集
+ * 候选集服务：精确匹配、MySQL 分类和 RAG 语义结果合并去重，形成候选集。
  *
  * 架构思想：
  * ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
- * │ RAG 语义检索 │     │ MySQL 分类  │     │  交集运算   │
- * │ (向量相似度) │ ∩   │ (结构化查询) │ ──► │  Candidate  │
+ * │ RAG 语义检索 │     │ MySQL 分类  │     │ 合并去重   │
+ * │ (向量相似度) │ ∪   │ (结构化查询) │ ──► │  Candidate  │
  * └─────────────┘     └─────────────┘     │    Set      │
  *                                          └──────┬──────┘
  *                                                 │
@@ -38,7 +38,7 @@ public class CandidateSetService {
     }
 
     /**
-     * 获取高质量候选集：精确匹配 ∪ MySQL 分类 ∪ RAG 语义
+     * 获取候选集：精确匹配 ∪ MySQL 分类 ∪ RAG 语义。
      *
      * 优先级策略（从高到低）：
      * 1. 精确商品名匹配（mustInclude 关键词命中商品名） → 强制包含
@@ -194,24 +194,28 @@ public class CandidateSetService {
         return getCandidates(storeId, userQuery, categories, allProducts, itemCount, List.of());
     }
 
-    /** 精确品类匹配 — 支持 food 包含 dessert */
+    /** 品类是硬约束：候选集不把 dessert 自动当作 food，也不跨饮品品类替代。 */
     private boolean matchesCategoryStrict(MenuItemDTO product, String category) {
         String productCat = product.getCategoryCode();
-        if (productCat == null) return false;
-        if (category.equalsIgnoreCase(productCat)) return true;
-        // food 包含 dessert（甜点归为小食类）
-        if ("food".equals(category) && "dessert".equalsIgnoreCase(productCat)) return true;
-        return false;
+        return productCat != null && category != null && category.equalsIgnoreCase(productCat);
     }
 
     /** 候选集查询结果 */
     public record CandidateResult(
             List<MenuItemDTO> candidates,
             Map<String, Double> semanticScores,
-            Set<String> intersectionCodes,
+            Set<String> exactMatchCodes,
             Set<String> ragCodes,
             Set<String> mysqlCodes
     ) {
+        public CandidateResult {
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+            semanticScores = semanticScores == null ? Map.of() : Map.copyOf(semanticScores);
+            exactMatchCodes = exactMatchCodes == null ? Set.of() : Set.copyOf(exactMatchCodes);
+            ragCodes = ragCodes == null ? Set.of() : Set.copyOf(ragCodes);
+            mysqlCodes = mysqlCodes == null ? Set.of() : Set.copyOf(mysqlCodes);
+        }
+
         public int size() {
             return candidates.size();
         }
@@ -221,6 +225,35 @@ public class CandidateSetService {
                     .filter(p -> code.equals(p.getCode()))
                     .findFirst()
                     .orElse(null);
+        }
+
+        /** 将候选集收敛到最终硬约束过滤结果，模型只能看到这份集合。 */
+        public CandidateResult restrictTo(List<MenuItemDTO> allowed) {
+            if (allowed == null || allowed.isEmpty()) {
+                return new CandidateResult(List.of(), Map.of(), Set.of(), Set.of(), Set.of());
+            }
+            Set<String> allowedCodes = allowed.stream()
+                    .map(MenuItemDTO::getCode)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            List<MenuItemDTO> restricted = candidates.stream()
+                    .filter(p -> p != null && allowedCodes.contains(p.getCode()))
+                    .toList();
+            if (restricted.isEmpty()) restricted = List.copyOf(allowed);
+            Map<String, Double> restrictedScores = semanticScores.entrySet().stream()
+                    .filter(entry -> allowedCodes.contains(entry.getKey()))
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
+                            (left, right) -> left, LinkedHashMap::new));
+            return new CandidateResult(restricted, restrictedScores,
+                    exactMatchCodes.stream().filter(allowedCodes::contains).collect(Collectors.toCollection(LinkedHashSet::new)),
+                    ragCodes.stream().filter(allowedCodes::contains).collect(Collectors.toCollection(LinkedHashSet::new)),
+                    mysqlCodes.stream().filter(allowedCodes::contains).collect(Collectors.toCollection(LinkedHashSet::new)));
+        }
+
+        /** 兼容旧调用方；该字段实际表示精确商品名匹配结果。 */
+        @Deprecated
+        public Set<String> intersectionCodes() {
+            return exactMatchCodes;
         }
     }
 }

@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
  * LLM 商品选择服务 — 直接传入候选集，让 LLM 选择最优组合
  *
  * 简化架构：
- * 1. 上游 CandidateSetService 已经完成 RAG + MySQL 交集查询
+ * 1. 上游 CandidateSetService 已经完成精确匹配、RAG 和 MySQL 结果的合并去重
  * 2. 本服务只负责：给 LLM 候选集 → 让 LLM 选择 → 验证结果
  * 3. 如果 LLM 选择不对，引导重试一次
  *
@@ -78,7 +78,7 @@ public class LlmToolOrchestrator {
         log.info("LLM 选择响应: {}", json.length() > 300 ? json.substring(0, 300) + "..." : json);
 
         // Step 3: 解析选择结果
-        ToolResult result = parseSelectionResult(json, candidates);
+        ToolResult result = parseSelectionResult(json, candidates, itemCount);
 
         // Step 4: 如果数量不对，引导重试
         if (result.productCodes().size() != itemCount && elapsed < 20000) {
@@ -102,7 +102,7 @@ public class LlmToolOrchestrator {
         Optional<String> retryResponse = chatClient.callJson(systemPrompt, retryPrompt, 1500);
         if (retryResponse.isPresent()) {
             String retryJson = chatClient.extractJson(retryResponse.get());
-            ToolResult retryResult = parseSelectionResult(retryJson, candidates);
+            ToolResult retryResult = parseSelectionResult(retryJson, candidates, itemCount);
             if (retryResult.productCodes().size() == itemCount) {
                 return retryResult;
             }
@@ -135,6 +135,11 @@ public class LlmToolOrchestrator {
                 2. 严格按照用户要求的件数选择，不能多也不能少
                 3. 如果有预算限制，总价格不能超过预算
                 4. 优先选择语义分数高的商品
+                5. 只能输出候选列表中已有的 product code；重复 code 表示购买多个同款。
+
+                【权限边界】
+                你只负责从候选集做推荐选择，没有创建订单、改价、核库存、使用优惠券或扣款权限。
+                最终商品、价格、库存、优惠、身份和幂等性由服务端在确认下单时重新校验。
 
                 【输出格式】
                 {
@@ -179,7 +184,7 @@ public class LlmToolOrchestrator {
         sb.append("  \"product_codes\": [\"CODE1\", \"CODE2\"],\n");
         sb.append("  \"reasoning\": \"选择理由\"\n");
         sb.append("}\n");
-        sb.append("\n【重要】product_codes 必须使用候选列表中的 code 字段，数量必须严格等于 " + itemCount + " 件。");
+        sb.append("\n【重要】product_codes 必须使用候选列表中的 code 字段，数量必须严格等于 " + itemCount + " 件；不要输出候选集外的编码，也不要输出订单操作。");
 
         return sb.toString();
     }
@@ -219,14 +224,17 @@ public class LlmToolOrchestrator {
     // === 结果解析 ===
 
     private ToolResult parseSelectionResult(String jsonText,
-                                             CandidateSetService.CandidateResult candidates) {
+                                             CandidateSetService.CandidateResult candidates,
+                                             int expectedCount) {
         try {
             JsonNode root = jsonMapper.readTree(jsonText);
+            if (root == null || !root.isObject()) return degradeFromCandidates(candidates, expectedCount);
             List<String> codes = new ArrayList<>();
             JsonNode codesNode = root.get("product_codes");
-            if (codesNode != null && codesNode.isArray()) {
+            if (codesNode != null && codesNode.isArray() && codesNode.size() <= expectedCount + 10) {
                 for (JsonNode c : codesNode) {
-                    String code = c.asText();
+                    if (!c.isTextual()) continue;
+                    String code = c.asText().trim();
                     if (candidates.candidates().stream().anyMatch(p -> code.equals(p.getCode()))) {
                         codes.add(code);
                     } else {
@@ -234,11 +242,13 @@ public class LlmToolOrchestrator {
                     }
                 }
             }
-            String reasoning = root.has("reasoning") ? root.get("reasoning").asText() : "";
+            String reasoning = root.has("reasoning") && root.get("reasoning").isTextual()
+                    ? root.get("reasoning").asText().trim() : "";
+            if (reasoning.length() > 500) reasoning = reasoning.substring(0, 500);
             return new ToolResult("ok", codes, reasoning);
         } catch (Exception e) {
             log.warn("解析选择结果失败: {}", e.getMessage());
-            return degradeFromCandidates(candidates, 3);
+            return degradeFromCandidates(candidates, expectedCount);
         }
     }
 

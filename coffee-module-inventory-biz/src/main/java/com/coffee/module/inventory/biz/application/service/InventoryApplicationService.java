@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.List;
 
 /** 库存应用服务：MySQL 条件更新保证原子预扣，Redis 仅作为可失效的读取快照。 */
 @Service
@@ -22,6 +23,16 @@ public class InventoryApplicationService implements InventoryService {
         this.jdbcTemplate = jdbcTemplate;
         this.redisTemplate = redisTemplate;
         this.redisCacheEnabled = redisCacheEnabled;
+    }
+
+    @Override
+    public boolean hasAvailable(Long storeId, Long productId, int quantity) {
+        if (storeId == null || productId == null || quantity <= 0) return false;
+        List<Integer> stocks = jdbcTemplate.query(
+                "SELECT available_stock FROM inventory_stock WHERE store_id = ? AND product_id = ?",
+                (rs, rowNum) -> rs.getInt(1), storeId, productId);
+        // 与 reserve 的首次售卖规则保持一致：尚未落库存记录时按初始库存判断，但不在查询阶段写库。
+        return stocks.isEmpty() ? INITIAL_STOCK >= quantity : stocks.get(0) >= quantity;
     }
 
     @Override

@@ -15,7 +15,7 @@ final class CustomerOrderIntentParser {
     private static final List<String> ADD_CONNECTORS = List.of("加", "加一", "再来", "再加", "配", "搭配", "配一", "组合", "一起", "顺便", "而且", "还要", "另外", "同时");
 
     private static final Pattern BUDGET = Pattern.compile("(?:预算|不超过|控制在|最多|小于|<|≤)\\s*([0-9]{1,4})(?:\\s*元)?|([0-9]{1,4})\\s*(?:元)?\\s*(?:预算|以内|以下|左右)|([0-9]{1,4})\\s*元(?:左右|以内|以下)?");
-    private static final Pattern ITEM_COUNT = Pattern.compile("([1-3一二三兩两])\\s*(?:个|份|样|种|品|杯|碗|块|根|条|片|份儿|件|款)");
+    private static final Pattern ITEM_COUNT = Pattern.compile("([0-9]{1,2}|[一二三四五六七八九十兩两]+)\\s*(?:个|份|样|种|品|杯|碗|块|根|条|片|份儿|件|款)");
     private static final Pattern EXCLUDED_PRODUCT = Pattern.compile("(?:不要|不喝|别|不想要|不是|并非|不吃|不选)\\s*([^，。,.！!；;]{1,12})");
 
     Intent parse(String raw) {
@@ -101,30 +101,49 @@ final class CustomerOrderIntentParser {
 
     private Integer explicitItemCount(String text) {
         Matcher m = ITEM_COUNT.matcher(text);
-        if (!m.find()) return null;
-        String num = m.group(1);
-        int count = switch (num) {
-            case "一" -> 1; case "二", "两" -> 2; case "三" -> 3;
-            default -> {
-                try { yield Integer.parseInt(num); } catch (Exception e) { yield 0; }
+        int total = 0;
+        boolean found = false;
+        while (m.find()) {
+            int count = parseQuantity(m.group(1));
+            if (count <= 0) continue;
+            int matchEnd = m.end();
+            String after = text.substring(Math.min(matchEnd, text.length()), Math.min(matchEnd + 10, text.length()));
+            boolean isCategorySpec = CATEGORY_WORDS.values().stream()
+                    .flatMap(Collection::stream)
+                    .anyMatch(after::contains);
+            boolean hasConnector = ADD_CONNECTORS.stream()
+                    .mapToInt(text::indexOf)
+                    .anyMatch(index -> index >= 0 && index < m.start());
+            if (isCategorySpec || hasConnector) {
+                found = true;
+                total = Math.min(10, total + count);
             }
+        }
+        return found ? total : null;
+    }
+
+    private int parseQuantity(String value) {
+        if (value == null || value.isBlank()) return 0;
+        try {
+            if (value.chars().allMatch(Character::isDigit)) {
+                return Math.min(10, Integer.parseInt(value));
+            }
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+        return switch (value) {
+            case "一" -> 1;
+            case "二", "两", "兩" -> 2;
+            case "三" -> 3;
+            case "四" -> 4;
+            case "五" -> 5;
+            case "六" -> 6;
+            case "七" -> 7;
+            case "八" -> 8;
+            case "九" -> 9;
+            case "十" -> 10;
+            default -> 0;
         };
-        int matchEnd = m.end();
-        String after = text.substring(Math.min(matchEnd, text.length()), Math.min(matchEnd + 10, text.length()));
-        boolean isCategorySpec = false;
-        for (Map.Entry<String, List<String>> entry : CATEGORY_WORDS.entrySet()) {
-            for (String word : entry.getValue()) {
-                if (after.contains(word)) { isCategorySpec = true; break; }
-            }
-            if (isCategorySpec) break;
-        }
-        if (isCategorySpec) return count;
-        boolean hasConnector = false;
-        for (String conn : ADD_CONNECTORS) {
-            int connIdx = text.indexOf(conn);
-            if (connIdx >= 0 && connIdx < m.start()) { hasConnector = true; break; }
-        }
-        return hasConnector ? count : null;
     }
 
     private PricePreference pricePreference(String text) {

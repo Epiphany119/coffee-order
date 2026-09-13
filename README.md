@@ -1,5 +1,7 @@
 # coffee-order
 
+产品需求文档：[`docs/PRD.md`](docs/PRD.md)。
+
 FIKA 咖啡点单系统统一代码仓库，后端位于项目根目录，前端位于 `frontend/`。
 
 ## 项目结构
