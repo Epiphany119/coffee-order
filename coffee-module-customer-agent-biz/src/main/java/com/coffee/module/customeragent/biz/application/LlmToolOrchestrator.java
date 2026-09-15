@@ -48,7 +48,8 @@ public class LlmToolOrchestrator {
     public ToolResult selectFromCandidates(Long storeId, String userQuery,
                                             CustomerOrderIntentParser.Intent intent,
                                             CandidateSetService.CandidateResult candidates) {
-        int itemCount = intent.itemCount() > 0 ? intent.itemCount() : 3;
+        int itemCount = intent.itemCount() > 0
+                ? intent.itemCount() : CustomerOrderRecommendationPolicy.DEFAULT_ITEM_COUNT;
         log.info("=== LLM 商品选择开始 ===");
         log.info("意图: categories={}, count={}, budget={}, 候选集大小={}",
                 intent.requiredCategories(), itemCount, intent.budget(), candidates.size());
@@ -121,7 +122,10 @@ public class LlmToolOrchestrator {
                 .map(MenuItemDTO::getCode)
                 .collect(Collectors.toList());
         log.warn("降级选择 {} 个商品: {}", codes.size(), codes);
-        return new ToolResult("degraded", codes, "规则降级：按语义分数选择");
+        String reason = candidates.semanticScores().isEmpty()
+                ? "规则降级：按结构化约束和稳定排序选择"
+                : "规则降级：按语义分数和结构化约束选择";
+        return new ToolResult("degraded", codes, reason);
     }
 
     // === 提示词构建 ===
@@ -131,10 +135,10 @@ public class LlmToolOrchestrator {
                 你是咖啡馆点单推荐助手。从提供的候选商品列表中，为用户选择最合适的组合。
 
                 【选择原则】
-                1. 严格按照用户需求的品类选择（如用户要冰饮就选 ice 品类）
+                1. 严格按照用户需求的品类选择（drink 表示 coffee/tea/ice 三类饮品的集合）
                 2. 严格按照用户要求的件数选择，不能多也不能少
                 3. 如果有预算限制，总价格不能超过预算
-                4. 优先选择语义分数高的商品
+                4. 候选列表已经由服务端按语义、口味/场景、用户偏好和稳定规则排序；在满足硬约束后优先选择靠前商品
                 5. 只能输出候选列表中已有的 product code；重复 code 表示购买多个同款。
 
                 【权限边界】
@@ -166,6 +170,8 @@ public class LlmToolOrchestrator {
             sb.append("  排除品类: ").append(intent.excludedCategories()).append("\n");
         if (!intent.excludedProducts().isEmpty())
             sb.append("  排除商品: ").append(intent.excludedProducts()).append("\n");
+        if (!intent.preferenceTags().isEmpty())
+            sb.append("  口味/场景偏好: ").append(intent.preferenceTags()).append("\n");
 
         // 候选商品列表
         sb.append("\n【候选商品列表】\n");
@@ -174,9 +180,9 @@ public class LlmToolOrchestrator {
             MenuItemDTO p = candidates.candidates().get(i);
             double score = candidates.semanticScores().getOrDefault(p.getCode(), 0.0);
             sb.append(String.format(Locale.ROOT,
-                    "  [%d] code=%s, name=%s, category=%s, temp=%s, score=%.3f%n",
-                    i + 1, safe(p.getCode()), safe(p.getName()), safe(p.getCategoryCode()),
-                    safe(p.getTemperature()), score));
+                    "  [%d] code=%s, name=%s, description=%s, category=%s, temp=%s, semanticScore=%.3f%n",
+                    i + 1, safe(p.getCode()), safe(p.getName()), safe(p.getDescription()),
+                    safe(p.getCategoryCode()), safe(p.getTemperature()), score));
         }
 
         sb.append(String.format("\n请从候选商品中选择 ** exactly %d 件 ** 最合适的组合，输出 JSON：\n", itemCount));
@@ -201,6 +207,8 @@ public class LlmToolOrchestrator {
         sb.append("  目标品类: ").append(intent.requiredCategories()).append("\n");
         sb.append("  目标件数: ").append(itemCount).append("\n");
         sb.append("  最大预算: ¥").append(intent.budget() != null ? intent.budget() : "不限").append("\n");
+        if (!intent.preferenceTags().isEmpty())
+            sb.append("  口味/场景偏好: ").append(intent.preferenceTags()).append("\n");
 
         sb.append("\n【候选商品列表】\n");
         int limit = Math.min(candidates.size(), 40);
@@ -208,8 +216,9 @@ public class LlmToolOrchestrator {
             MenuItemDTO p = candidates.candidates().get(i);
             double score = candidates.semanticScores().getOrDefault(p.getCode(), 0.0);
             sb.append(String.format(Locale.ROOT,
-                    "  [%d] code=%s, name=%s, category=%s, score=%.3f%n",
-                    i + 1, safe(p.getCode()), safe(p.getName()), safe(p.getCategoryCode()), score));
+                    "  [%d] code=%s, name=%s, description=%s, category=%s, semanticScore=%.3f%n",
+                    i + 1, safe(p.getCode()), safe(p.getName()), safe(p.getDescription()),
+                    safe(p.getCategoryCode()), score));
         }
 
         sb.append(String.format("\n请严格选择 %d 件商品，输出 JSON：\n", itemCount));

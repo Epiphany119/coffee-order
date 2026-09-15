@@ -5,45 +5,19 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 final class CustomerOrderIntentParser {
-    private static final Map<String, List<String>> CATEGORY_WORDS = Map.of(
-            "coffee", List.of("咖啡", "美式", "拿铁", "浓缩", "摩卡", "冷萃", "卡布奇诺", "馥芮白", "flat white"),
-            "food", List.of("轻食", "三明治", "沙拉", "贝果", "午餐", "正餐", "咸食", "汉堡", "薯条", "炸鸡", "炸物", "小吃", "吃的", "吃点", "热狗", "鸡肉卷"),
-            "dessert", List.of("甜点", "蛋糕", "甜品", "曲奇", "可颂", "芝士蛋糕"),
-            "tea", List.of("奶茶", "珍珠奶茶", "果茶", "茶饮", "伯爵茶", "红茶", "绿茶", "普洱"),
-            "ice", List.of("冰淇淋", "冰激凌", "冰沙", "沙冰", "思慕雪", "冰饮", "冷饮", "冰的饮料", "冰的喝的"));
-
-    private static final List<String> ADD_CONNECTORS = List.of("加", "加一", "再来", "再加", "配", "搭配", "配一", "组合", "一起", "顺便", "而且", "还要", "另外", "同时");
+    private static final List<String> ADD_CONNECTORS = List.of("加一", "再来", "再加", "配", "搭配", "配一", "组合", "一起", "顺便", "而且", "还要", "另外", "同时");
 
     private static final Pattern BUDGET = Pattern.compile("(?:预算|不超过|控制在|最多|小于|<|≤)\\s*([0-9]{1,4})(?:\\s*元)?|([0-9]{1,4})\\s*(?:元)?\\s*(?:预算|以内|以下|左右)|([0-9]{1,4})\\s*元(?:左右|以内|以下)?");
-    private static final Pattern ITEM_COUNT = Pattern.compile("([0-9]{1,2}|[一二三四五六七八九十兩两]+)\\s*(?:个|份|样|种|品|杯|碗|块|根|条|片|份儿|件|款)");
+    // “款/种/样”描述推荐的商品种类，不等于用户要购买的件数；推荐方案数量由
+    // MAX_OPTION_COUNT 单独控制，避免“推荐三款”被误解析成下单三件。
+    private static final Pattern ITEM_COUNT = Pattern.compile("([0-9]{1,2}|[一二三四五六七八九十兩两]+)\\s*(?:个|份|品|杯|碗|块|根|条|片|份儿|件)");
     private static final Pattern EXCLUDED_PRODUCT = Pattern.compile("(?:不要|不喝|别|不想要|不是|并非|不吃|不选)\\s*([^，。,.！!；;]{1,12})");
 
     Intent parse(String raw) {
         String text = raw == null ? "" : raw.toLowerCase(Locale.ROOT);
 
-        Map<String, Integer> categoryPositions = new LinkedHashMap<>();
-        for (Map.Entry<String, List<String>> entry : CATEGORY_WORDS.entrySet()) {
-            int pos = firstIndex(text, entry.getValue());
-            if (pos < Integer.MAX_VALUE) {
-                categoryPositions.put(entry.getKey(), pos);
-            }
-        }
-
-        List<String> allCategoriesInOrder = categoryPositions.entrySet().stream()
-                .sorted(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .toList();
-
-        Set<String> excluded = new LinkedHashSet<>();
-        for (String category : allCategoriesInOrder) {
-            List<String> words = CATEGORY_WORDS.get(category);
-            for (String word : words) {
-                int idx = text.indexOf(word);
-                if (idx >= 0 && isNegated(text, idx)) {
-                    excluded.add(category);
-                }
-            }
-        }
+        List<String> allCategoriesInOrder = CustomerOrderIntentCatalog.categoriesFromText(text);
+        Set<String> excluded = new LinkedHashSet<>(CustomerOrderIntentCatalog.excludedCategoriesFromText(text));
 
         List<String> required = allCategoriesInOrder.stream()
                 .filter(cat -> !excluded.contains(cat))
@@ -51,6 +25,10 @@ final class CustomerOrderIntentParser {
 
         Integer explicitItemCount = explicitItemCount(text);
         int inferredItemCount = Math.max(required.size(), explicitItemCount != null ? explicitItemCount : 0);
+        // 未写数量时，一份推荐方案默认购买 1 件；推荐方案数量由应用层单独控制。
+        inferredItemCount = inferredItemCount > 0
+                ? Math.min(inferredItemCount, 10)
+                : CustomerOrderRecommendationPolicy.DEFAULT_ITEM_COUNT;
         boolean multiCategory = required.size() >= 2;
         boolean explicitPairing = has(text, "搭配", "套餐", "组合", "一起", "下午茶", "顺便", "配个", "配一", "饿", "小食", "加一份", "加个", "来份", "来个") || ADD_CONNECTORS.stream().anyMatch(text::contains);
 
@@ -61,31 +39,15 @@ final class CustomerOrderIntentParser {
         Set<String> excludedProducts = excludedProducts(text);
 
         boolean pairing = multiCategory || explicitPairing;
+        List<String> preferenceTags = CustomerOrderIntentCatalog.canonicalPreferenceTags(text, List.of());
 
-        return new Intent(required, excluded, excludedProducts, temperature, budget, pairing, inferredItemCount, pricePreference, summary(required, excluded, excludedProducts, temperature, budget, inferredItemCount, pricePreference), List.of());
+        return new Intent(required, excluded, excludedProducts, temperature, budget, pairing, inferredItemCount,
+                pricePreference, summary(required, excluded, excludedProducts, temperature, budget,
+                inferredItemCount, pricePreference, preferenceTags), List.of(), preferenceTags);
     }
 
     private Temperature detectTemperature(String text) {
-        boolean cold = has(text, "冰", "冷", "冰的", "少冰", "去冰", "冰镇");
-        boolean hot = has(text, "热", "暖", "热的", "温的");
-        if (cold && !hot) return Temperature.COLD;
-        if (hot && !cold) return Temperature.HOT;
-        if (cold) return Temperature.COLD;
-        if (hot) return Temperature.HOT;
-        return Temperature.ANY;
-    }
-
-    private boolean isNegated(String text, int wordIndex) {
-        int from = Math.max(0, wordIndex - 6);
-        String prefix = text.substring(from, wordIndex);
-        return prefix.contains("不要") || prefix.contains("不喝") || prefix.contains("别") || prefix.contains("不想") || prefix.contains("忌") || prefix.contains("不是") || prefix.contains("并非") || prefix.contains("不吃") || prefix.contains("不选");
-    }
-
-    private int firstIndex(String text, List<String> words) {
-        return words.stream().mapToInt(word -> {
-            int i = text.indexOf(word);
-            return i < 0 ? Integer.MAX_VALUE : i;
-        }).min().orElse(Integer.MAX_VALUE);
+        return CustomerOrderIntentCatalog.temperatureFromText(text);
     }
 
     private Integer budget(String text) {
@@ -104,20 +66,13 @@ final class CustomerOrderIntentParser {
         int total = 0;
         boolean found = false;
         while (m.find()) {
+            if (CustomerOrderIntentCatalog.isNegatedAt(text, m.start())) continue;
             int count = parseQuantity(m.group(1));
             if (count <= 0) continue;
-            int matchEnd = m.end();
-            String after = text.substring(Math.min(matchEnd, text.length()), Math.min(matchEnd + 10, text.length()));
-            boolean isCategorySpec = CATEGORY_WORDS.values().stream()
-                    .flatMap(Collection::stream)
-                    .anyMatch(after::contains);
-            boolean hasConnector = ADD_CONNECTORS.stream()
-                    .mapToInt(text::indexOf)
-                    .anyMatch(index -> index >= 0 && index < m.start());
-            if (isCategorySpec || hasConnector) {
-                found = true;
-                total = Math.min(10, total + count);
-            }
+            // 数量本身就是用户的硬约束，不应因为后面没有出现品类词而被丢弃。
+            // 例如“我想喝一杯甜一点的”在规则降级时也必须解析为 1 杯。
+            found = true;
+            total = Math.min(10, total + count);
         }
         return found ? total : null;
     }
@@ -168,20 +123,19 @@ final class CustomerOrderIntentParser {
         return Arrays.stream(words).anyMatch(text::contains);
     }
 
-    private String summary(List<String> required, Set<String> excluded, Set<String> excludedProducts, Temperature temperature, Integer budget, int itemCount, PricePreference pricePreference) {
+    private String summary(List<String> required, Set<String> excluded, Set<String> excludedProducts,
+                           Temperature temperature, Integer budget, int itemCount,
+                           PricePreference pricePreference, List<String> preferenceTags) {
         List<String> parts = new ArrayList<>();
-        if (!required.isEmpty()) parts.add("指定" + required.stream().map(this::name).reduce((a, b) -> a + "、" + b).orElse(""));
-        if (!excluded.isEmpty()) parts.add("排除" + excluded.stream().map(this::name).reduce((a, b) -> a + "、" + b).orElse(""));
+        if (!required.isEmpty()) parts.add("指定" + required.stream().map(CustomerOrderIntentCatalog::categoryName).reduce((a, b) -> a + "、" + b).orElse(""));
+        if (!excluded.isEmpty()) parts.add("排除" + excluded.stream().map(CustomerOrderIntentCatalog::categoryName).reduce((a, b) -> a + "、" + b).orElse(""));
         if (!excludedProducts.isEmpty()) parts.add("不要" + String.join("、", excludedProducts));
         if (temperature != Temperature.ANY) parts.add(temperature == Temperature.COLD ? "偏好冰饮" : "偏好热饮");
         if (budget != null) parts.add("预算不高于 ¥" + budget);
-        if (itemCount >= required.size() && itemCount > 0) parts.add("指定" + itemCount + "件商品");
+        if (itemCount > 0) parts.add("指定" + itemCount + "件商品");
         if (pricePreference != PricePreference.NONE) parts.add(pricePreference.label);
+        if (preferenceTags != null && !preferenceTags.isEmpty()) parts.add("偏好" + String.join("、", preferenceTags));
         return parts.isEmpty() ? "未指定品类，按偏好与门店数据推荐" : String.join("；", parts);
-    }
-
-    private String name(String category) {
-        return Map.of("coffee", "咖啡", "food", "轻食", "dessert", "甜点", "tea", "茶饮", "ice", "冰淇淋").getOrDefault(category, category);
     }
 
     enum Temperature { ANY, COLD, HOT }
@@ -196,5 +150,28 @@ final class CustomerOrderIntentParser {
     record Intent(List<String> requiredCategories, Set<String> excludedCategories, Set<String> excludedProducts,
                   Temperature temperature, Integer budget, boolean pairing, int itemCount,
                   PricePreference pricePreference, String summary,
-                  List<String> explicitProductNames) { }
+                  List<String> explicitProductNames, List<String> preferenceTags) {
+        Intent(List<String> requiredCategories, Set<String> excludedCategories, Set<String> excludedProducts,
+               Temperature temperature, Integer budget, boolean pairing, int itemCount,
+               PricePreference pricePreference, String summary,
+               List<String> explicitProductNames) {
+            this(requiredCategories, excludedCategories, excludedProducts, temperature, budget, pairing,
+                    itemCount, pricePreference, summary, explicitProductNames, List.of());
+        }
+
+        public Intent {
+            requiredCategories = requiredCategories == null ? List.of() : List.copyOf(requiredCategories);
+            excludedCategories = excludedCategories == null ? Set.of()
+                    : Collections.unmodifiableSet(new LinkedHashSet<>(excludedCategories));
+            excludedProducts = excludedProducts == null ? Set.of()
+                    : Collections.unmodifiableSet(new LinkedHashSet<>(excludedProducts));
+            temperature = temperature == null ? Temperature.ANY : temperature;
+            itemCount = itemCount > 0
+                    ? Math.min(itemCount, 10) : CustomerOrderRecommendationPolicy.DEFAULT_ITEM_COUNT;
+            pricePreference = pricePreference == null ? PricePreference.NONE : pricePreference;
+            summary = summary == null ? "" : summary;
+            explicitProductNames = explicitProductNames == null ? List.of() : List.copyOf(explicitProductNames);
+            preferenceTags = preferenceTags == null ? List.of() : List.copyOf(preferenceTags);
+        }
+    }
 }

@@ -89,20 +89,9 @@ final class IntentValidator {
                                    CustomerOrderIntentParser.Intent intent,
                                    List<String> failures) {
         for (MenuItemDTO p : products) {
-            String name = safe(p.getName()).toLowerCase(Locale.ROOT);
-            String desc = safe(p.getDescription()).toLowerCase(Locale.ROOT);
-            String full = name + " " + desc;
-
-            for (String excluded : intent.excludedProducts()) {
-                if (!excluded.isBlank() && full.contains(excluded.toLowerCase(Locale.ROOT))) {
-                    failures.add("包含排除商品: " + p.getName() + " (排除词: " + excluded + ")");
-                }
-            }
-
-            for (String excludedCat : intent.excludedCategories()) {
-                if (matchesCategory(excludedCat, safe(p.getCategoryCode()))) {
-                    failures.add("包含排除品类: " + p.getName() + " (排除品类: " + catName(excludedCat) + ")");
-                }
+            if (CustomerOrderIntentCatalog.matchesExcludedProductOrCategory(
+                    p, intent.excludedProducts(), intent.excludedCategories())) {
+                failures.add("包含用户排除的商品或品类: " + p.getName());
             }
         }
     }
@@ -126,12 +115,15 @@ final class IntentValidator {
     }
 
     private boolean matchesCategory(String expected, String actual) {
-        return expected != null && actual != null && expected.equalsIgnoreCase(actual);
+        if (expected == null || actual == null) return false;
+        if (CustomerOrderIntentCatalog.DRINK_CATEGORY.equalsIgnoreCase(expected)) {
+            return CustomerOrderIntentCatalog.DRINK_CATEGORIES.contains(actual.toLowerCase(Locale.ROOT));
+        }
+        return expected.equalsIgnoreCase(actual);
     }
 
     private String catName(String cat) {
-        return Map.of("coffee", "咖啡", "food", "轻食", "dessert", "甜点",
-                "tea", "茶饮", "ice", "冰淇淋").getOrDefault(cat, cat);
+        return CustomerOrderIntentCatalog.categoryName(cat);
     }
 
     private String safe(String s) {

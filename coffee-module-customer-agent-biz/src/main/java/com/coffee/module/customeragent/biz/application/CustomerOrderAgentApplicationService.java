@@ -26,6 +26,7 @@ import java.util.stream.Collectors;
 @Service
 public class CustomerOrderAgentApplicationService implements CustomerOrderAgentService {
     private static final Logger log = LoggerFactory.getLogger(CustomerOrderAgentApplicationService.class);
+    private static final int MAX_RECOMMENDATION_OPTIONS = CustomerOrderRecommendationPolicy.MAX_OPTION_COUNT;
 
     private final MenuService menuService;
     private final FavoriteService favoriteService;
@@ -41,6 +42,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     private final IntentValidator intentValidator;
     private final CandidateSetService candidateSetService;
     private final LlmToolOrchestrator toolOrchestrator;
+    private final CustomerOrderRecommendationPolicy recommendationPolicy;
 
     public CustomerOrderAgentApplicationService(MenuService menuService,
                                                 FavoriteService favoriteService,
@@ -68,6 +70,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         this.intentValidator = new IntentValidator();
         this.candidateSetService = candidateSetService;
         this.toolOrchestrator = toolOrchestrator;
+        this.recommendationPolicy = new CustomerOrderRecommendationPolicy();
     }
 
     @Override
@@ -89,6 +92,8 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
 
         // 第一层：LLM 结构化意图解析（失败时降级到规则解析）
         CustomerOrderIntentParser.Intent intent = llmIntentParser.parse(text);
+        int targetItemCount = intent.itemCount() > 0
+                ? intent.itemCount() : CustomerOrderRecommendationPolicy.DEFAULT_ITEM_COUNT;
         log.info("意图解析结果: requiredCategories={}, itemCount={}, budget={}, pairing={}, temperature={}",
                 intent.requiredCategories(), intent.itemCount(), intent.budget(),
                 intent.pairing(), intent.temperature());
@@ -100,15 +105,9 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                 .map(r -> String.valueOf(r.getOrDefault("name", ""))).collect(Collectors.toSet());
         Map<Long, Double> ratings = ratings(products);
 
-        // 硬约束过滤候选商品（规则引擎路径）
-        List<MenuItemDTO> ruleFilteredCandidates = products.stream()
-                .filter(p -> !intent.excludedCategories().contains(safe(p.getCategoryCode())))
-                .filter(p -> !matchesExcludedProductOrCategory(p, intent.excludedProducts(), intent.excludedCategories()))
-                .filter(p -> intent.itemCount() < 3 || !isFillerOnly(p))
-                .filter(p -> intent.requiredCategories().isEmpty() ||
-                        intent.requiredCategories().stream().anyMatch(category -> matchesCategory(p, category)))
-                .filter(p -> matchesTemperature(p, intent.temperature()))
-                .toList();
+        // 所有推荐路径共用同一套硬约束：品类、排除项、温度和凑单品规则。
+        List<MenuItemDTO> ruleFilteredCandidates = recommendationPolicy.filterHardConstraints(
+                products, intent, targetItemCount);
 
         if (ruleFilteredCandidates.isEmpty())
             throw new ServiceException(404, "当前门店没有同时满足「" + intent.summary() + "」的商品；可以放宽预算或让我推荐");
@@ -117,8 +116,6 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         List<MenuItemDTO> selectedProducts = null;
         String engine = "FIKA Customer Agent · rule-tools";
         List<Map<String, Object>> options = new ArrayList<>();
-
-        int targetItemCount = intent.itemCount() > 0 ? intent.itemCount() : 3;
 
         // 诊断日志：打印 intent 的所有关键字段
         log.info("=== 意图诊断 ===");
@@ -132,7 +129,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
 
         // 2a: 先用 CandidateSetService 获取精确匹配 ∪ MySQL ∪ RAG 候选集
         CandidateSetService.CandidateResult candidateResult = candidateSetService.getCandidates(
-                storeId, message.trim(), intent.requiredCategories(), products, targetItemCount,
+                storeId, message.trim(), intent.requiredCategories(), ruleFilteredCandidates, targetItemCount,
                 intent.explicitProductNames());
         List<MenuItemDTO> rawCandidates = new ArrayList<>(candidateResult.candidates());
 
@@ -147,26 +144,25 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                 candidateResult.exactMatchCodes().size(),
                 candidateResult.mysqlCodes().size());
 
-        // 应用额外过滤（排除项、温度、凑单过滤）
-        final int finalTargetCount = targetItemCount;
-        List<MenuItemDTO> candidates = rawCandidates.stream()
-                .filter(p -> !intent.excludedCategories().contains(safe(p.getCategoryCode())))
-                .filter(p -> !matchesExcludedProductOrCategory(p, intent.excludedProducts(), intent.excludedCategories()))
-                .filter(p -> finalTargetCount < 3 || !isFillerOnly(p))
-                .filter(p -> intent.requiredCategories().isEmpty()
-                        || intent.requiredCategories().stream().anyMatch(category -> matchesCategory(p, category)))
-                .filter(p -> matchesTemperature(p, intent.temperature()))
-                .toList();
+        // 候选检索只是召回，最终交给模型前再次套用同一套硬约束。
+        List<MenuItemDTO> filteredCandidates = recommendationPolicy.filterHardConstraints(
+                rawCandidates, intent, targetItemCount);
 
-        if (candidates.isEmpty())
+        if (filteredCandidates.isEmpty())
             throw new ServiceException(404, "当前门店没有同时满足「" + intent.summary() + "」的商品；可以放宽预算或让我推荐");
 
-        // 过滤后的集合才是模型的唯一输入；原始 RAG/分类集合不能绕过硬约束。
+        // 先按统一综合分排序，再把这个顺序传给 LLM 和规则降级。
+        Map<String, Double> retrievalScores = candidateResult.semanticScores();
+        List<MenuItemDTO> candidates = recommendationPolicy.rank(filteredCandidates, text, favCodes, favCats, hotNames,
+                ratings, retrievalScores, intent, priceRank(storeId, filteredCandidates, intent));
+
+        // 过滤后的集合才是模型的唯一输入；restrictTo 必须保留综合排序顺序。
         CandidateSetService.CandidateResult safeCandidateResult = candidateResult.restrictTo(candidates);
         Map<String, Double> semanticScores = safeCandidateResult.semanticScores();
 
         // 2b: 使用 LLM 选择器从候选集中选择组合
         if (!candidates.isEmpty()) {
+            boolean rankedSingleSelection = false;
             LlmToolOrchestrator.ToolResult toolResult = toolOrchestrator.selectFromCandidates(
                     storeId, message.trim(), intent, safeCandidateResult);
 
@@ -176,68 +172,83 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                     .map(p -> p.getName() + "(" + p.getCode() + ")")
                     .collect(Collectors.joining(", ")));
 
-            if (!toolResult.productCodes().isEmpty()) {
-                List<MenuItemDTO> toolSelected = toolResult.productCodes().stream()
-                        .map(code -> candidates.stream()
-                                .filter(p -> code.equals(p.getCode()))
-                                .findFirst().orElse(null))
-                        .filter(Objects::nonNull)
-                        .toList();
+            List<MenuItemDTO> toolSelected = toolResult.productCodes().stream()
+                    .map(code -> candidates.stream()
+                            .filter(p -> code.equals(p.getCode()))
+                            .findFirst().orElse(null))
+                    .filter(Objects::nonNull)
+                    .toList();
 
-                log.info("LLM 选中商品: {}", toolSelected.stream()
-                        .map(MenuItemDTO::getName).collect(Collectors.joining(", ")));
-                log.info("期望数量: {}, 实际选中: {}", targetItemCount, toolSelected.size());
+            // 单品推荐的候选方案必须遵循服务端统一排序，避免 LLM 在候选集内
+            // 任意挑出低分商品；用户明确点名时保留精确商品优先级。
+            if (targetItemCount == 1 && intent.explicitProductNames().isEmpty()) {
+                Optional<MenuItemDTO> firstValid = candidates.stream()
+                        .filter(candidate -> isValidRecommendationSelection(storeId, List.of(candidate), intent))
+                        .findFirst();
+                if (firstValid.isPresent()) {
+                    toolSelected = List.of(firstValid.get());
+                    rankedSingleSelection = true;
+                    log.info("单品推荐采用统一排序首个可行商品: {}", firstValid.get().getCode());
+                }
+            }
 
-                if (!toolSelected.isEmpty() && toolSelected.size() == targetItemCount) {
-                    // 硬约束校验：精确点名也不能绕过品类、预算、温度和排除项
-                    double totalPrice = toolSelected.stream()
-                            .mapToDouble(p -> minimumPrice(storeId, p)).sum();
-                    IntentValidator.ValidationResult validation = intentValidator.validateCombo(
-                            toolSelected, intent, totalPrice);
+            log.info("LLM/排序选中商品: {}", toolSelected.stream()
+                    .map(MenuItemDTO::getName).collect(Collectors.joining(", ")));
+            log.info("期望数量: {}, 实际选中: {}", targetItemCount, toolSelected.size());
 
-                    if (validation.valid() && hasSufficientInventory(storeId, toolSelected)) {
-                        selectedProducts = toolSelected;
-                        engine = "FIKA Customer Agent · llm-select(" + toolResult.status() + ")";
-                        log.info("LLM 选择通过校验: {}", selectedProducts.stream()
-                                .map(MenuItemDTO::getName).collect(Collectors.joining(" + ")));
+            if (!toolSelected.isEmpty() && toolSelected.size() == targetItemCount) {
+                // 硬约束校验：精确点名也不能绕过品类、预算、温度和排除项
+                double totalPrice = toolSelected.stream()
+                        .mapToDouble(p -> minimumPrice(storeId, p)).sum();
+                IntentValidator.ValidationResult validation = intentValidator.validateCombo(
+                        toolSelected, intent, totalPrice);
 
-                        // 生成多个方案（基于候选集变体）
-                        Set<String> optionSignatures = new HashSet<>();
-                        for (int variant = 0; variant < 3 && options.size() < 3; variant++) {
-                            List<MenuItemDTO> variantProducts = generateVariant(
-                                    toolSelected, candidates, variant, intent);
-                            List<Map<String, Object>> optionItems = planItems(storeId, variantProducts, text,
-                                    favCodes, hotNames, ratings, intent);
-                            double optionTotal = optionItems.stream()
-                                    .mapToDouble(i -> ((Number) i.get("estimatedPrice")).doubleValue() *
-                                            ((Number) i.get("quantity")).intValue()).sum();
-                            if (intent.budget() != null && optionTotal > intent.budget() + 0.0001) continue;
+                if (isValidRecommendationSelection(storeId, toolSelected, intent)) {
+                    selectedProducts = toolSelected;
+                    engine = rankedSingleSelection
+                            ? "FIKA Customer Agent · ranked-select"
+                            : "FIKA Customer Agent · llm-select(" + toolResult.status() + ")";
+                    log.info("LLM/排序选择通过校验: {}", selectedProducts.stream()
+                            .map(MenuItemDTO::getName).collect(Collectors.joining(" + ")));
 
-                            String signature = optionItems.stream()
-                                    .map(i -> String.valueOf(i.get("productCode"))).sorted().collect(Collectors.joining("|"));
-                            if (!optionSignatures.add(signature)) continue;
+                    // 生成多个方案（基于候选集变体）
+                    Set<String> optionSignatures = new HashSet<>();
+                    for (int variant = 0; variant < MAX_RECOMMENDATION_OPTIONS
+                            && options.size() < MAX_RECOMMENDATION_OPTIONS; variant++) {
+                        List<MenuItemDTO> variantProducts = generateVariant(
+                                toolSelected, candidates, variant, intent);
+                        if (!isValidRecommendationSelection(storeId, variantProducts, intent)) continue;
+                        List<Map<String, Object>> optionItems = planItems(storeId, variantProducts, text,
+                                favCodes, hotNames, ratings, intent);
+                        double optionTotal = optionItems.stream()
+                                .mapToDouble(i -> ((Number) i.get("estimatedPrice")).doubleValue() *
+                                        ((Number) i.get("quantity")).intValue()).sum();
+                        if (intent.budget() != null && optionTotal > intent.budget() + 0.0001) continue;
 
-                            Map<String, Object> optionPromotion = new LinkedHashMap<>(
-                                    promotionHint(storeId, optionItems, products, intent));
-                            List<AgentOrderLine> optionLines = optionItems.stream()
-                                    .map(this::toAgentOrderLine).toList();
-                            List<AgentOrderLine> addOnLines = addOnLines(optionPromotion);
-                            optionPromotion.put("canAddOn", !addOnLines.isEmpty());
+                        String signature = optionItems.stream()
+                                .map(i -> String.valueOf(i.get("productCode"))).sorted().collect(Collectors.joining("|"));
+                        if (!optionSignatures.add(signature)) continue;
 
-                            String optionToken = issuePlanToken(new AgentOrderPlan(storeId, userId, guestId,
-                                    optionLines, addOnLines,
-                                    "Agent 点单：" + message.trim().substring(0, Math.min(100, message.trim().length()))));
-                            if (optionToken == null) continue;
-                            String title = "方案 " + (options.size() + 1) + " · " +
-                                    variantProducts.stream().map(MenuItemDTO::getName).collect(Collectors.joining(" + "));
-                            options.add(Map.of("title", title, "items", optionItems,
-                                    "planToken", optionToken, "promotion", optionPromotion));
-                        }
-                    } else if (validation.valid()) {
-                        log.info("LLM 选择因库存不足被拦截");
-                    } else {
-                        log.info("LLM 选择结果校验失败: {}", validation.reasons());
+                        Map<String, Object> optionPromotion = new LinkedHashMap<>(
+                                promotionHint(storeId, optionItems, products, intent));
+                        List<AgentOrderLine> optionLines = optionItems.stream()
+                                .map(this::toAgentOrderLine).toList();
+                        List<AgentOrderLine> addOnLines = addOnLines(optionPromotion);
+                        optionPromotion.put("canAddOn", !addOnLines.isEmpty());
+
+                        String optionToken = issuePlanToken(new AgentOrderPlan(storeId, userId, guestId,
+                                optionLines, addOnLines,
+                                "Agent 点单：" + message.trim().substring(0, Math.min(100, message.trim().length()))));
+                        if (optionToken == null) continue;
+                        String title = "方案 " + (options.size() + 1) + " · " +
+                                variantProducts.stream().map(MenuItemDTO::getName).collect(Collectors.joining(" + "));
+                        options.add(Map.of("title", title, "items", optionItems,
+                                "planToken", optionToken, "promotion", optionPromotion));
                     }
+                } else if (validation.valid()) {
+                    log.info("LLM/排序选择因统一商品/库存校验被拦截");
+                } else {
+                    log.info("LLM/排序选择结果校验失败: {}", validation.reasons());
                 }
             }
         }
@@ -246,7 +257,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         if (selectedProducts == null && !intent.explicitProductNames().isEmpty()) {
             log.info("Tool 路径未命中，尝试强制精确匹配: {}", intent.explicitProductNames());
             selectedProducts = forceExactMatch(candidates, intent.explicitProductNames(), targetItemCount);
-            if (selectedProducts != null && hasSufficientInventory(storeId, selectedProducts)) {
+            if (selectedProducts != null && isValidRecommendationSelection(storeId, selectedProducts, intent)) {
                 engine = "FIKA Customer Agent · exact-match";
                 log.info("强制精确匹配成功: {}", selectedProducts.stream().map(MenuItemDTO::getName).collect(Collectors.joining(" + ")));
             } else {
@@ -256,23 +267,17 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         }
 
         // 第四层：降级到 LLM Combo Generator（旧路径，保留兼容性）
-        if (selectedProducts == null && (intent.requiredCategories().size() >= 2 || intent.itemCount() >= 2)) {
+        if (selectedProducts == null && (intent.requiredCategories().size() >= 2 || targetItemCount >= 2)) {
             log.info("Tool 路径未命中，降级到 LLM Combo Generator");
             List<CustomerOrderComboGenerator.ComboPlan> llmCombos = comboGenerator.generateCombos(candidates, intent,
                     intent.budget() != null ? intent.budget() : Double.MAX_VALUE);
 
             List<CustomerOrderComboGenerator.ComboPlan> validCombos = new ArrayList<>();
             for (CustomerOrderComboGenerator.ComboPlan combo : llmCombos) {
-                double totalPrice = combo.products().stream()
-                        .mapToDouble(p -> minimumPrice(storeId, p)).sum();
-                IntentValidator.ValidationResult result = intentValidator.validateCombo(
-                        combo.products(), intent, totalPrice);
-                if (result.valid() && hasSufficientInventory(storeId, combo.products())) {
+                if (isValidRecommendationSelection(storeId, combo.products(), intent)) {
                     validCombos.add(combo);
-                } else if (result.valid()) {
-                    log.info("LLM 组合因库存不足被拦截: {}", combo.productCodes());
                 } else {
-                    log.info("LLM 组合被校验层拦截: {} - {}", combo.productCodes(), result.reasons());
+                    log.info("LLM 组合被统一校验层拦截: {}", combo.productCodes());
                 }
             }
 
@@ -309,7 +314,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                             combo.products().stream().map(MenuItemDTO::getName).collect(Collectors.joining(" + "));
                     options.add(Map.of("title", title, "items", optionItems,
                             "planToken", optionToken, "promotion", optionPromotion));
-                    if (options.size() == 3) break;
+                    if (options.size() == MAX_RECOMMENDATION_OPTIONS) break;
                 }
             }
         }
@@ -325,40 +330,34 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                     options.add(singleOption);
                 }
             }
-            List<MenuItemDTO> priceOrdered = priceSelectionTool.sort(storeId, candidates, intent.pricePreference());
-            Map<String, Integer> priceRank = new HashMap<>();
-            for (int index = 0; index < priceOrdered.size(); index++)
-                priceRank.put(priceOrdered.get(index).getCode(), index);
-
-            List<Scored> ranked = candidates.stream()
+            Map<String, Integer> priceRank = priceRank(storeId, candidates, intent);
+            List<MenuItemDTO> rankedProducts = recommendationPolicy.rank(candidates, text, favCodes, favCats,
+                    hotNames, ratings, semanticScores, intent, priceRank);
+            List<Scored> ranked = rankedProducts.stream()
                     .map(p -> new Scored(p, score(p, text, favCodes, favCats, hotNames, ratings, semanticScores, intent)))
-                    .sorted(Comparator.comparingInt((Scored item) -> priceRank.getOrDefault(
-                            item.product().getCode(), Integer.MAX_VALUE))
-                            .thenComparing(Comparator.comparingInt(Scored::score).reversed())
-                            .thenComparing(x -> x.product().getId()))
                     .toList();
 
-            List<Scored> pairingRanked = products.stream()
-                    .filter(p -> !intent.excludedCategories().contains(safe(p.getCategoryCode())))
-                    .map(p -> new Scored(p, score(p, text, favCodes, favCats, hotNames, ratings, semanticScores, intent)))
-                    .sorted(Comparator.comparingInt(Scored::score).reversed()
-                            .thenComparing(x -> x.product().getId()))
-                    .toList();
+            // 搭配候选也必须来自同一份硬约束集合，不能从全量 products 绕过品类、温度和排除项。
+            List<Scored> pairingRanked = ranked;
 
             if (intent.requiredCategories().size() >= 2) {
                 selectedProducts = buildMultiCategoryBundle(ranked, intent.requiredCategories(),
-                        storeId, intent.budget(), intent.itemCount());
-            } else if (intent.itemCount() >= 3) {
-                selectedProducts = bestBundle(ranked, intent.itemCount(), storeId, intent.budget());
+                        storeId, intent.budget(), targetItemCount);
+            } else if (targetItemCount >= 2) {
+                selectedProducts = bestBundle(ranked, targetItemCount, storeId, intent.budget());
             } else {
-                MenuItemDTO main = primaryCategoryFirst(ranked, intent.requiredCategories()).product();
-                MenuItemDTO pairing = explicitMentionedPair(pairingRanked, main, text, intent, storeId);
-                selectedProducts = new ArrayList<>(List.of(main));
-                if (pairing != null) selectedProducts.add(pairing);
+                // 按统一排序寻找第一个同时满足预算、身份和库存的单品；
+                // 不能因为第一名超预算就直接失败，也不能自动追加第二件。
+                selectedProducts = ranked.stream()
+                        .map(Scored::product)
+                        .filter(product -> isValidRecommendationSelection(storeId, List.of(product), intent))
+                        .findFirst()
+                        .map(List::of)
+                        .orElseGet(List::of);
             }
 
-            if (selectedProducts != null && !hasSufficientInventory(storeId, selectedProducts)) {
-                log.info("规则组合因库存不足被拦截");
+            if (selectedProducts != null && !isValidRecommendationSelection(storeId, selectedProducts, intent)) {
+                log.info("规则组合未通过统一商品/数量/预算/库存校验");
                 selectedProducts = null;
             }
 
@@ -371,6 +370,8 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
 
         if (selectedProducts == null || selectedProducts.isEmpty())
             throw new ServiceException(404, "当前门店暂无可推荐的搭配");
+        if (!isValidRecommendationSelection(storeId, selectedProducts, intent))
+            throw new ServiceException(409, "推荐方案未通过商品、数量、预算或库存校验，请重新描述需求");
 
         MenuItemDTO main = selectedProducts.get(0);
         List<Map<String, Object>> items = planItems(storeId, selectedProducts, text,
@@ -388,7 +389,9 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
 
         String evidence = favCodes.contains(main.getCode()) ? "沿用了你常点的口味"
                 : hotNames.contains(main.getName()) ? "它也是门店近期热选"
-                : "它与你这次描述的口味最接近";
+                : !semanticScores.isEmpty() || !intent.preferenceTags().isEmpty()
+                ? "它与你这次描述的需求匹配度更高"
+                : "它符合当前门店的可售菜单与稳定推荐规则";
         String chosenNames = selectedProducts.stream()
                 .map(product -> "「" + product.getName() + "」")
                 .collect(Collectors.joining(" + "));
@@ -431,6 +434,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         response.put("understanding", intent.summary());
         response.put("note", "请选择一套真实菜单方案；确认后会直接创建待支付订单并进入收银台，最终价格、库存和优惠以服务端结算为准。");
         response.put("engine", engine);
+        response.put("recommendationMode", semanticScores.isEmpty() ? "structured-fallback" : "semantic-plus-structured");
         response.put("storeName", store.get("name"));
         response.put("planToken", selected.get("planToken"));
         response.put("expiresInSeconds", 300);
@@ -441,7 +445,10 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                 "pairing", intent.pairing(),
                 "temperature", intent.temperature().toString(),
                 "excludedCategories", intent.excludedCategories(),
-                "excludedProducts", intent.excludedProducts()
+                "excludedProducts", intent.excludedProducts(),
+                "preferenceTags", intent.preferenceTags(),
+                "targetItemCount", targetItemCount,
+                "maxRecommendationOptions", MAX_RECOMMENDATION_OPTIONS
         ));
         return response;
     }
@@ -612,6 +619,27 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                 .allMatch(entry -> inventoryService.hasAvailable(storeId, entry.getKey(), entry.getValue()));
     }
 
+    /** 所有方案在生成 token 前都必须经过同一套意图、价格和库存校验。 */
+    private boolean isValidRecommendationSelection(Long storeId,
+                                                    List<MenuItemDTO> products,
+                                                    CustomerOrderIntentParser.Intent intent) {
+        if (products == null || products.isEmpty() || intent == null) return false;
+        // 先确认候选仍是当前门店的有效菜单快照，再计算价格；不能让异常/幻觉商品
+        // 先进入 calculatePrice 或校验日志，所有推荐路径都必须经过这道身份闸门。
+        if (products.stream().anyMatch(product -> !validMenuSnapshot(product))) return false;
+        double totalPrice = products.stream().mapToDouble(p -> minimumPrice(storeId, p)).sum();
+        IntentValidator.ValidationResult validation = intentValidator.validateCombo(products, intent, totalPrice);
+        if (!validation.valid()) {
+            log.info("推荐方案被统一校验拦截: {}", validation.reasons());
+            return false;
+        }
+        if (!hasSufficientInventory(storeId, products)) {
+            log.info("推荐方案被库存校验拦截");
+            return false;
+        }
+        return true;
+    }
+
     private boolean validMenuSnapshot(MenuItemDTO product) {
         return product != null && product.getId() != null && product.getId() > 0
                 && product.getCode() != null && !product.getCode().isBlank()
@@ -635,6 +663,8 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                                                           String message) {
         List<Map<String, Object>> options = new ArrayList<>();
         Set<String> optionSignatures = new HashSet<>();
+
+        if (!isValidRecommendationSelection(storeId, selectedProducts, intent)) return options;
 
         List<Map<String, Object>> primaryItems = planItems(storeId, selectedProducts, text,
                 favCodes, hotNames, ratings, intent);
@@ -662,9 +692,10 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
             }
         }
 
-        if (intent.requiredCategories().size() >= 2 || intent.itemCount() >= 3) {
+        if (intent.requiredCategories().size() >= 2 || intent.itemCount() >= 2) {
             List<List<MenuItemDTO>> optionBundles = generateOptionBundles(ranked, intent, storeId);
             for (List<MenuItemDTO> optionProducts : optionBundles) {
+                if (!isValidRecommendationSelection(storeId, optionProducts, intent)) continue;
                 List<Map<String, Object>> optionItems = planItems(storeId, optionProducts, text,
                         favCodes, hotNames, ratings, intent);
                 double optionTotal = optionItems.stream()
@@ -690,14 +721,16 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                         optionProducts.stream().map(MenuItemDTO::getName).collect(Collectors.joining(" + "));
                 options.add(Map.of("title", title, "items", optionItems,
                         "planToken", optionToken, "promotion", optionPromotion));
-                if (options.size() == 3) break;
+                if (options.size() == MAX_RECOMMENDATION_OPTIONS) break;
             }
         } else {
             for (Scored choice : ranked) {
                 MenuItemDTO optionMain = choice.product();
-                MenuItemDTO optionPairing = explicitMentionedPair(pairingRanked, optionMain, text, intent, storeId);
+                MenuItemDTO optionPairing = intent.itemCount() > 1 || intent.requiredCategories().size() >= 2
+                        ? explicitMentionedPair(pairingRanked, optionMain, text, intent, storeId) : null;
                 List<MenuItemDTO> optionProducts = new ArrayList<>(List.of(optionMain));
                 if (optionPairing != null) optionProducts.add(optionPairing);
+                if (!isValidRecommendationSelection(storeId, optionProducts, intent)) continue;
 
                 List<Map<String, Object>> optionItems = planItems(storeId, optionProducts, text,
                         favCodes, hotNames, ratings, intent);
@@ -722,7 +755,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                 if (optionToken == null) continue;
                 options.add(Map.of("title", "方案 " + (options.size() + 1) + " · " + optionMain.getName(),
                         "items", optionItems, "planToken", optionToken, "promotion", optionPromotion));
-                if (options.size() == 3) break;
+                if (options.size() == MAX_RECOMMENDATION_OPTIONS) break;
             }
         }
         return options;
@@ -731,24 +764,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     private int score(MenuItemDTO p, String t, Set<String> codes, Set<String> cats,
                       Set<String> hot, Map<Long, Double> ratings,
                       Map<String, Double> semanticScores, CustomerOrderIntentParser.Intent intent) {
-        int s = 10 + Math.floorMod((p.getCode() + t).hashCode(), 7);
-        String c = safe(p.getCategoryCode()), temp = safe(p.getTemperature());
-        if (codes.contains(p.getCode())) s += 36;
-        if (cats.contains(c)) s += 15;
-        if (hot.contains(p.getName())) s += 13;
-        if (ratings.getOrDefault(p.getId(), 0d) >= 4.2) s += 10;
-        if (directlyMentioned(t, p)) s += 90;
-        if (has(t, "咖啡", "提神", "熬夜", "困", "苦") && "coffee".equals(c)) s += 21;
-        if (has(t, "茶", "清爽", "轻", "低糖", "不苦") && "tea".equals(c)) s += 22;
-        if (has(t, "甜", "蛋糕", "下午茶") && "dessert".equals(c)) s += 19;
-        if (has(t, "饿", "午餐", "咸", "轻食", "吃的", "吃点", "正餐", "小吃") && matchesCategory(p, "food"))
-            s += 28;
-        s += Math.max(0, (int) Math.round(semanticScores.getOrDefault(p.getCode(), 0d) * 28));
-        if (intent.temperature() == CustomerOrderIntentParser.Temperature.COLD)
-            s += ("COLD".equals(temp) || "BOTH".equals(temp)) ? 20 : -18;
-        if (intent.temperature() == CustomerOrderIntentParser.Temperature.HOT)
-            s += ("HOT".equals(temp) || "BOTH".equals(temp)) ? 20 : -18;
-        return s;
+        return recommendationPolicy.score(p, t, codes, cats, hot, ratings, semanticScores, intent);
     }
 
     private boolean complement(String a, String b) {
@@ -768,6 +784,19 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
             }
         }
         return out;
+    }
+
+    private Map<String, Integer> priceRank(Long storeId, List<MenuItemDTO> products,
+                                           CustomerOrderIntentParser.Intent intent) {
+        if (products == null || products.isEmpty()) return Map.of();
+        List<MenuItemDTO> ordered = priceSelectionTool.sort(storeId, products,
+                intent == null ? CustomerOrderIntentParser.PricePreference.NONE : intent.pricePreference());
+        Map<String, Integer> result = new HashMap<>();
+        for (int index = 0; index < ordered.size(); index++) {
+            MenuItemDTO product = ordered.get(index);
+            if (product != null && product.getCode() != null) result.putIfAbsent(product.getCode(), index);
+        }
+        return result;
     }
 
     private Map<String, Object> storeMeta(Long storeId) {
@@ -813,18 +842,11 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     }
 
     private boolean directlyMentioned(String text, MenuItemDTO product) {
-        String query = normalizeProductText(text);
-        String name = normalizeProductText(product.getName());
-        String code = normalizeProductText(product.getCode());
-        if ((!name.isBlank() && query.contains(name)) || (!code.isBlank() && query.contains(code)))
-            return true;
-        return (name.contains("汉堡") && query.contains("汉堡")) ||
-                (name.contains("薯条") && query.contains("薯条")) ||
-                (name.contains("健达") && (query.contains("健达") || query.contains("奇趣蛋")));
+        return CustomerOrderIntentCatalog.directlyMentioned(text, product);
     }
 
     private String normalizeProductText(String value) {
-        return safe(value).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\u4e00-\\u9fa5]", "");
+        return CustomerOrderIntentCatalog.normalize(value);
     }
 
     private Scored primaryCategoryFirst(List<Scored> ranked, List<String> categories) {
@@ -838,48 +860,13 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         return minimumPrice(storeId, product) <= budget;
     }
 
-    private static final Map<String, Set<String>> CATEGORY_KEYWORDS = new HashMap<>();
-
-    static {
-        CATEGORY_KEYWORDS.put("tea", Set.of("奶茶", "茶饮", "果茶", "珍珠奶茶", "普洱", "红茶", "绿茶", "乌龙", "茉莉", "柠檬茶", "手打柠檬"));
-        CATEGORY_KEYWORDS.put("coffee", Set.of("咖啡", "拿铁", "美式", "浓缩", "摩卡", "冷萃", "卡布奇诺"));
-        CATEGORY_KEYWORDS.put("food", Set.of("轻食", "三明治", "沙拉", "贝果", "汉堡", "薯条", "炸鸡", "小吃", "鸡翅"));
-        CATEGORY_KEYWORDS.put("dessert", Set.of("甜点", "蛋糕", "甜品", "曲奇", "可颂"));
-        CATEGORY_KEYWORDS.put("ice", Set.of("冰淇淋", "冰激凌", "冰沙", "沙冰", "思慕雪", "冰饮", "冷饮", "冰的饮料", "冰的喝的"));
-    }
-
     private boolean matchesTemperature(MenuItemDTO product, CustomerOrderIntentParser.Temperature temperature) {
-        if (temperature == null || temperature == CustomerOrderIntentParser.Temperature.ANY) return true;
-        String temp = safe(product.getTemperature()).toUpperCase(Locale.ROOT);
-        if (temperature == CustomerOrderIntentParser.Temperature.COLD) {
-            if ("HOT".equals(temp)) return false;
-            return true;
-        }
-        if (temperature == CustomerOrderIntentParser.Temperature.HOT) {
-            if ("COLD".equals(temp)) return false;
-            return true;
-        }
-        return true;
+        return recommendationPolicy.matchesTemperature(product, temperature);
     }
 
     private boolean matchesExcludedProductOrCategory(MenuItemDTO product, Set<String> excludedTerms,
                                                      Set<String> excludedCategories) {
-        String name = safe(product.getName()).toLowerCase(Locale.ROOT);
-        String desc = safe(product.getDescription()).toLowerCase(Locale.ROOT);
-        String full = name + " " + desc;
-        for (String term : excludedTerms) {
-            String t = term.toLowerCase(Locale.ROOT);
-            if (full.contains(t) || t.contains(name) || name.contains(t)) return true;
-        }
-        for (String cat : excludedCategories) {
-            Set<String> keywords = CATEGORY_KEYWORDS.get(cat);
-            if (keywords != null) {
-                for (String kw : keywords) {
-                    if (name.contains(kw) || desc.contains(kw)) return true;
-                }
-            }
-        }
-        return false;
+        return recommendationPolicy.matchesExcludedProductOrCategory(product, excludedTerms, excludedCategories);
     }
 
     private Map<String, Object> promotionHint(Long storeId, List<Map<String, Object>> selectedItems,
@@ -935,8 +922,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                                          CustomerOrderIntentParser.Intent intent, double gap) {
         List<MenuItemDTO> candidates = products.stream()
                 .filter(p -> p.getTopup() != null && p.getTopup() == 1)
-                .filter(p -> !intent.excludedCategories().contains(safe(p.getCategoryCode())) &&
-                        !matchesExcludedProductOrCategory(p, intent.excludedProducts(), intent.excludedCategories()))
+                .filter(p -> !matchesExcludedProductOrCategory(p, intent.excludedProducts(), intent.excludedCategories()))
                 .sorted(Comparator.comparingDouble(p -> menuService.calculatePrice(storeId, p.getCode(),
                         "MEDIUM", null, List.of())))
                 .limit(12).toList();
@@ -984,10 +970,12 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                                                        CustomerOrderIntentParser.Intent intent,
                                                        Long userId, String guestId) {
         try {
+            if (!isValidRecommendationSelection(storeId, products, intent)) return null;
             List<Map<String, Object>> optionItems = planItems(storeId, products, text, favCodes, hotNames, ratings, intent);
             double optionTotal = optionItems.stream()
                     .mapToDouble(i -> ((Number) i.get("estimatedPrice")).doubleValue() *
                             ((Number) i.get("quantity")).intValue()).sum();
+            if (intent.budget() != null && optionTotal > intent.budget() + 0.0001) return null;
 
             List<AgentOrderLine> optionLines = optionItems.stream()
                     .map(this::toAgentOrderLine).toList();
@@ -1057,7 +1045,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         String reason = codes.contains(p.getCode()) ? "根据你的收藏偏好"
                 : r != null && r >= 4.2 ? "用户反馈评分较高"
                 : hot.contains(p.getName()) ? "近期销量表现突出"
-                : "匹配本次口味需求";
+                : "符合当前门店的可售菜单与推荐规则";
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("productCode", p.getCode());
         item.put("productId", p.getId());
@@ -1074,13 +1062,11 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     }
 
     private boolean matchesCategory(MenuItemDTO product, String category) {
-        return category != null && category.equalsIgnoreCase(safe(product.getCategoryCode()));
+        return recommendationPolicy.matchesCategory(product, category);
     }
 
     private boolean isFillerOnly(MenuItemDTO product) {
-        if (product.getTopup() == null || product.getTopup() != 1) return false;
-        String text = normalizeProductText(product.getName() + " " + product.getCode() + " " + product.getDescription());
-        return has(text, "小料", "珍珠", "椰果", "芋圆", "矿泉水", "气泡水");
+        return recommendationPolicy.isFillerOnly(product);
     }
 
     private List<MenuItemDTO> buildMultiCategoryBundle(List<Scored> ranked,
@@ -1161,7 +1147,8 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         int targetSize = Math.max(intent.itemCount(), minSize);
         List<Scored> candidates = ranked.stream()
                 .filter(item -> !isFillerOnly(item.product())).limit(20).toList();
-        for (int attempt = 0; attempt < candidates.size() && bundles.size() < 3; attempt++) {
+        for (int attempt = 0; attempt < candidates.size()
+                && bundles.size() < MAX_RECOMMENDATION_OPTIONS; attempt++) {
             List<MenuItemDTO> bundle = new ArrayList<>();
             Set<String> usedCodes = new HashSet<>();
             List<String> shuffledCats = new ArrayList<>(categories);

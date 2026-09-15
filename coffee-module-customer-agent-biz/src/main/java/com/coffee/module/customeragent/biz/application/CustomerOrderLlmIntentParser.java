@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
 final class CustomerOrderLlmIntentParser {
     private static final Logger log = LoggerFactory.getLogger(CustomerOrderLlmIntentParser.class);
     private static final Pattern RAW_QUANTITY = Pattern.compile(
-            "(\\d{1,2}|[一二三四五六七八九十两兩]+)\\s*(?:个|份|样|种|品|杯|碗|块|根|条|片|件|款)");
+            "(\\d{1,2}|[一二三四五六七八九十两兩]+)\\s*(?:个|份|品|杯|碗|块|根|条|片|件)");
 
     private static final String SYSTEM_PROMPT = """
             你是咖啡馆点单意图解析器。将用户的自然语言需求解析为严格的 JSON 结构。
@@ -101,66 +101,24 @@ final class CustomerOrderLlmIntentParser {
         if (node == null || !node.isObject()) return null;
         CustomerOrderIntentParser.Intent rawIntent = fallbackParser.parse(rawText);
         // 模型字段只能作为候选提示，必须先被原始用户文本验证，避免示例值或幻觉变成约束。
-        List<String> tags = groundedTerms(rawText, readStringArray(node, "tags"));
-        List<String> mustInclude = groundedTerms(rawText, readStringArray(node, "must_include"));
+        List<String> groundedTags = groundedTerms(rawText, readStringArray(node, "tags"));
+        List<String> mustInclude = groundedPositiveTerms(rawText, readStringArray(node, "must_include"));
         List<String> avoid = groundedNegatedTerms(rawText, readStringArray(node, "avoid"));
+        List<String> tags = CustomerOrderIntentCatalog.canonicalPreferenceTags(rawText, groundedTags);
 
-        List<String> requiredCategories = new ArrayList<>();
+        // 品类由统一词典从原文提取；LLM 只能补充原文中确实出现的商品关键词。
+        List<String> requiredCategories = new ArrayList<>(rawIntent.requiredCategories());
         Set<String> excludedCategories = new LinkedHashSet<>(rawIntent.excludedCategories());
 
-        // === 强制规则：检查用户原始输入中的品类关键词 ===
-        // 这是最高优先级，确保 LLM 即使解析错误也能正确识别
-
-        // 检查原始文本中的食物关键词
-        boolean hasFoodKeyword = containsAny(rawText,
-                "汉堡", "薯条", "三明治", "热狗", "鸡翅", "小吃", "披萨",
-                "面包", "轻食", "沙拉", "卷饼", "塔可", "主食");
-        boolean hasDessertKeyword = containsAny(rawText, "蛋糕", "甜点", "甜品", "曲奇", "可颂", "芝士蛋糕");
-        // 检查 must_include 中的食物关键词
-        boolean mustIncludeHasFood = mustInclude.stream().anyMatch(m -> containsAny(m,
-                "汉堡", "薯条", "三明治", "热狗", "鸡翅", "小吃", "披萨",
-                "面包", "轻食", "沙拉", "卷饼", "塔可", "主食"));
-        boolean mustIncludeHasDessert = mustInclude.stream().anyMatch(m -> containsAny(m,
-                "蛋糕", "甜点", "甜品", "曲奇", "可颂", "芝士蛋糕"));
-
-        if (hasFoodKeyword || mustIncludeHasFood) {
-            requiredCategories.add("food");
-        }
-        if (hasDessertKeyword || mustIncludeHasDessert
-                || tags.stream().anyMatch(t -> containsAny(t, "甜点", "甜品", "蛋糕"))) {
-            requiredCategories.add("dessert");
-        }
-
-        // 检查原始文本中的冰饮关键词
-        boolean hasIceKeyword = containsAny(rawText, "冰沙", "冰淇淋", "冰饮", "沙冰", "思慕雪", "刨冰");
-        boolean mustIncludeHasIce = mustInclude.stream().anyMatch(m ->
-                containsAny(m, "冰沙", "冰淇淋", "冰饮", "沙冰", "思慕雪", "刨冰"));
-        if (hasIceKeyword || mustIncludeHasIce) {
-            requiredCategories.add("ice");
-        }
-
-        // 检查原始文本中的奶茶/茶饮关键词
-        boolean hasTeaKeyword = containsAny(rawText, "奶茶", "茶饮", "果茶", "珍珠奶茶", "抹茶");
-        if (hasTeaKeyword || tags.stream().anyMatch(t -> containsAny(t, "奶茶", "茶饮", "果茶"))) {
-            requiredCategories.add("tea");
-        }
-
-        // 检查原始文本中的咖啡关键词
-        boolean hasCoffeeKeyword = containsAny(rawText,
-                "咖啡", "拿铁", "美式", "浓缩", "摩卡", "冷萃", "卡布奇诺", "玛奇朵", "提神");
-        boolean mustIncludeHasCoffee = mustInclude.stream().anyMatch(m ->
-                containsAny(m, "咖啡", "拿铁", "美式", "浓缩", "摩卡", "冷萃", "卡布奇诺", "玛奇朵"));
-        if (hasCoffeeKeyword || mustIncludeHasCoffee) {
-            requiredCategories.add("coffee");
+        for (String category : CustomerOrderIntentCatalog.categoriesFromText(String.join(" ", mustInclude))) {
+            if (!requiredCategories.contains(category)) requiredCategories.add(category);
         }
 
         // === 排除品类处理 ===
         for (String a : avoid) {
-            if (containsAny(a, "奶茶", "茶", "茶饮", "果茶")) excludedCategories.add("tea");
-            if (containsAny(a, "咖啡", "美式", "拿铁")) excludedCategories.add("coffee");
-            if (containsAny(a, "冰沙", "冰淇淋", "冰", "冷")) excludedCategories.add("ice");
-            if (containsAny(a, "甜点", "蛋糕", "甜品")) excludedCategories.add("dessert");
-            if (containsAny(a, "汉堡", "薯条", "三明治", "吃的", "小吃", "咸食")) excludedCategories.add("food");
+            // avoid 中的词已经经过原文否定校验；只有明确的泛化品类词才能排除整类，
+            // “甜的饮品/冰的咖啡”仍按属性偏好处理，不能误杀整个品类。
+            excludedCategories.addAll(CustomerOrderIntentCatalog.explicitlyExcludedCategoriesFromTerm(a));
         }
 
         requiredCategories.removeAll(excludedCategories);
@@ -197,9 +155,10 @@ final class CustomerOrderLlmIntentParser {
                 budgetMax,
                 pairing,
                 itemCount,
-                CustomerOrderIntentParser.PricePreference.NONE,
+                rawIntent.pricePreference(),
                 summary,
-                List.copyOf(mustInclude)
+                List.copyOf(mustInclude),
+                tags
         );
     }
 
@@ -232,15 +191,33 @@ final class CustomerOrderLlmIntentParser {
                 .toList();
     }
 
+    private List<String> groundedPositiveTerms(String rawText, List<String> values) {
+        return groundedTerms(rawText, values).stream()
+                .filter(term -> hasPositiveOccurrence(rawText, term))
+                .toList();
+    }
+
+    private boolean hasPositiveOccurrence(String rawText, String term) {
+        String text = rawText == null ? "" : rawText.toLowerCase(Locale.ROOT);
+        String normalizedTerm = stripLeadingQuantity(term).toLowerCase(Locale.ROOT).trim();
+        if (normalizedTerm.isBlank()) return false;
+        int from = 0;
+        while (from < text.length()) {
+            int index = text.indexOf(normalizedTerm, from);
+            if (index < 0) return false;
+            if (!CustomerOrderIntentCatalog.isNegatedAt(text, index)) return true;
+            from = index + normalizedTerm.length();
+        }
+        return false;
+    }
+
     private boolean isNegated(String rawText, String term) {
         String text = rawText == null ? "" : rawText.toLowerCase(Locale.ROOT);
         String normalizedTerm = stripLeadingQuantity(term).toLowerCase(Locale.ROOT).trim();
+        if (normalizedTerm.isBlank()) return false;
         int from = text.indexOf(normalizedTerm);
         while (from >= 0) {
-            String prefix = text.substring(Math.max(0, from - 8), from);
-            if (prefix.contains("不要") || prefix.contains("不喝") || prefix.contains("别")
-                    || prefix.contains("不想") || prefix.contains("忌") || prefix.contains("不是")
-                    || prefix.contains("并非") || prefix.contains("不吃") || prefix.contains("不选")) {
+            if (CustomerOrderIntentCatalog.isNegatedAt(text, from)) {
                 return true;
             }
             from = text.indexOf(normalizedTerm, from + normalizedTerm.length());
@@ -251,7 +228,7 @@ final class CustomerOrderLlmIntentParser {
     private String stripLeadingQuantity(String value) {
         if (value == null) return "";
         return value.trim().replaceFirst(
-                "^(?:\\d{1,2}|[一二三四五六七八九十两兩]+)\\s*(?:个|份|样|种|品|杯|碗|块|根|条|片|件|款)?", "");
+                "^(?:\\d{1,2}|[一二三四五六七八九十两兩]+)\\s*(?:个|份|品|杯|碗|块|根|条|片|件)?", "");
     }
 
     private String compact(String value) {
@@ -263,6 +240,7 @@ final class CustomerOrderLlmIntentParser {
         Matcher matcher = RAW_QUANTITY.matcher(rawText == null ? "" : rawText);
         int total = 0;
         while (matcher.find()) {
+            if (CustomerOrderIntentCatalog.isNegatedAt(rawText, matcher.start())) continue;
             int count = parseQuantity(matcher.group(1));
             if (count > 0) total = Math.min(10, total + count);
         }
@@ -284,14 +262,6 @@ final class CustomerOrderLlmIntentParser {
             return "一二三四五六七八九十".indexOf(value) + 1;
         }
         return 0;
-    }
-
-    private boolean containsAny(String text, String... keywords) {
-        if (text == null) return false;
-        for (String kw : keywords) {
-            if (text.contains(kw)) return true;
-        }
-        return false;
     }
 
     /**
@@ -403,7 +373,6 @@ final class CustomerOrderLlmIntentParser {
     }
 
     private String catName(String category) {
-        return Map.of("coffee", "咖啡", "food", "轻食", "dessert", "甜点",
-                "tea", "茶饮", "ice", "冰淇淋").getOrDefault(category, category);
+        return CustomerOrderIntentCatalog.categoryName(category);
     }
 }

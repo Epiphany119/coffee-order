@@ -123,9 +123,7 @@ public class CandidateSetService {
         List<MenuItemDTO> mysqlOnly = allProducts.stream()
                 .filter(p -> mysqlMatchedCodes.contains(p.getCode()))
                 .filter(p -> !addedCodes.contains(p.getCode()))
-                .sorted(Comparator.comparingDouble(
-                        (MenuItemDTO p) -> raScores.getOrDefault(p.getCode(), 0.0))
-                        .reversed())
+                .sorted(semanticComparator(raScores))
                 .collect(Collectors.toList());
 
         for (MenuItemDTO p : mysqlOnly) {
@@ -142,9 +140,7 @@ public class CandidateSetService {
 
             List<MenuItemDTO> raOnly = allProducts.stream()
                     .filter(p -> !addedCodes.contains(p.getCode()))
-                    .sorted(Comparator.comparingDouble(
-                            (MenuItemDTO p) -> raScores.getOrDefault(p.getCode(), 0.0))
-                            .reversed())
+                    .sorted(semanticComparator(raScores))
                     .limit(needMore * 3L)
                     .collect(Collectors.toList());
 
@@ -160,9 +156,7 @@ public class CandidateSetService {
         if (candidates.isEmpty()) {
             log.info("无任何命中，退化为纯 RAG 结果");
             candidates = allProducts.stream()
-                    .sorted(Comparator.comparingDouble(
-                            (MenuItemDTO p) -> raScores.getOrDefault(p.getCode(), 0.0))
-                            .reversed())
+                    .sorted(semanticComparator(raScores))
                     .limit(itemCount != null ? itemCount * 3L : 30L)
                     .collect(Collectors.toList());
         }
@@ -196,8 +190,21 @@ public class CandidateSetService {
 
     /** 品类是硬约束：候选集不把 dessert 自动当作 food，也不跨饮品品类替代。 */
     private boolean matchesCategoryStrict(MenuItemDTO product, String category) {
-        String productCat = product.getCategoryCode();
-        return productCat != null && category != null && category.equalsIgnoreCase(productCat);
+        return CustomerOrderIntentCatalog.matchesCategory(product, category);
+    }
+
+    private Comparator<MenuItemDTO> semanticComparator(Map<String, Double> semanticScores) {
+        return Comparator.comparingDouble((MenuItemDTO p) ->
+                        semanticScores.getOrDefault(p.getCode(), 0.0))
+                .reversed()
+                .thenComparing(Comparator.comparing(MenuItemDTO::getId,
+                        Comparator.nullsLast(Long::compareTo)))
+                .thenComparing(p -> safe(p.getCode()))
+                .thenComparing(p -> safe(p.getName()));
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 
     /** 候选集查询结果 */
@@ -236,8 +243,15 @@ public class CandidateSetService {
                     .map(MenuItemDTO::getCode)
                     .filter(Objects::nonNull)
                     .collect(Collectors.toCollection(LinkedHashSet::new));
-            List<MenuItemDTO> restricted = candidates.stream()
-                    .filter(p -> p != null && allowedCodes.contains(p.getCode()))
+            Set<String> candidateCodes = candidates.stream()
+                    .map(MenuItemDTO::getCode)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            // 按上游传入的综合排序保留顺序；旧实现重新按 CandidateSet 原始顺序过滤，
+            // 会把规则排序结果悄悄改回数据库/RAG 的顺序。
+            List<MenuItemDTO> restricted = allowed.stream()
+                    .filter(p -> p != null && allowedCodes.contains(p.getCode())
+                            && candidateCodes.contains(p.getCode()))
                     .toList();
             if (restricted.isEmpty()) restricted = List.copyOf(allowed);
             Map<String, Double> restrictedScores = semanticScores.entrySet().stream()

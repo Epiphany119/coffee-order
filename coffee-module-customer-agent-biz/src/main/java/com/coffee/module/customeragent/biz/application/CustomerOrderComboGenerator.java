@@ -86,8 +86,9 @@ final class CustomerOrderComboGenerator {
             double price = p.getPriceMedium() != null ? p.getPriceMedium() :
                     p.getBasePrice() != null ? p.getBasePrice() : 0;
             sb.append(String.format(Locale.ROOT,
-                    "  {\"code\":\"%s\", \"name\":\"%s\", \"category\":\"%s\", \"price\":%.1f, \"temperature\":\"%s\"}%n",
-                    safe(p.getCode()), safe(p.getName()), categoryName, price, safe(p.getTemperature())));
+                    "  {\"code\":\"%s\", \"name\":\"%s\", \"description\":\"%s\", \"category\":\"%s\", \"price\":%.1f, \"temperature\":\"%s\"}%n",
+                    safe(p.getCode()), safe(p.getName()), safe(p.getDescription()), categoryName, price,
+                    safe(p.getTemperature())));
         }
         return sb.toString();
     }
@@ -100,6 +101,8 @@ final class CustomerOrderComboGenerator {
         sb.append("目标件数: ").append(intent.itemCount()).append("\n");
         sb.append("最大预算: ¥").append(maxBudget).append("\n");
         sb.append("偏好温度: ").append(intent.temperature()).append("\n");
+        if (!intent.preferenceTags().isEmpty())
+            sb.append("口味/场景偏好: ").append(intent.preferenceTags()).append("\n");
         sb.append("需要 mix 组合: ").append(intent.pairing()).append("\n");
         return sb.toString();
     }
