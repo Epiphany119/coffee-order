@@ -77,8 +77,6 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     public Map<String, Object> plan(Long storeId, Long userId, String guestId, String message) {
         if (message == null || message.trim().isEmpty())
             throw new ServiceException(400, "告诉我你的口味、预算或饮用场景吧");
-        if (message.trim().length() > 300)
-            throw new ServiceException(400, "点单需求不能超过 300 字");
 
         List<MenuItemDTO> products = menuService.getAllProducts(storeId).stream()
                 .filter(this::validMenuSnapshot)
