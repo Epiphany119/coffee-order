@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { customerAgentApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import type { CustomerAgentItem, CustomerAgentOption, CustomerAgentPlan } from '@/api/types'
+import { StreamingSpeechSession } from '@/services/streamingSpeech'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean]; checkout: [planToken: string, includeAddOn: boolean, runId?: string] }>()
@@ -58,6 +59,8 @@ let voiceCommittedText = ''
 let voiceSessionFinalText = ''
 let voiceInterimText = ''
 let voiceNoResultTimer: ReturnType<typeof setTimeout> | null = null
+let streamingSpeech: StreamingSpeechSession | null = null
+let streamingTranscriptKeys = new Set<string>()
 
 function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
   if (typeof window === 'undefined') return null
@@ -68,7 +71,12 @@ function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null 
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null
 }
 
-const voiceSupported = computed(() => Boolean(getSpeechRecognitionConstructor()))
+const streamingVoiceSupported = computed(() => typeof window !== 'undefined'
+  && Boolean(navigator.mediaDevices?.getUserMedia)
+  && typeof window.WebSocket !== 'undefined'
+  && Boolean(window.AudioContext)
+  && 'audioWorklet' in AudioContext.prototype)
+const voiceSupported = computed(() => streamingVoiceSupported.value || Boolean(getSpeechRecognitionConstructor()))
 
 const stageMessages: Record<string, string> = {
   intent_parsing: '正在理解你的需求…',
@@ -132,6 +140,28 @@ function getVoiceTranscript() {
   return `${voiceCommittedText}${voiceSessionFinalText}${voiceInterimText}`.trim()
 }
 
+function resetVoiceTranscript() {
+  // 默认示例文案不是用户输入，第一次说话时直接替换它；已有文字则继续追加。
+  voiceBaseText = input.value.trim() === defaultInput ? '' : input.value.trim()
+  voiceText.value = ''
+  voiceCommittedText = ''
+  voiceSessionFinalText = ''
+  voiceInterimText = ''
+  streamingTranscriptKeys = new Set<string>()
+}
+
+function appendStreamingTranscript(transcript: string, key?: string) {
+  const text = transcript.trim()
+  if (!text) return
+  // 只按服务端事件 ID 去重，不能用“文本结尾相同”判断，否则用户重复说同一句会被误删。
+  if (key && streamingTranscriptKeys.has(key)) return
+  if (key) streamingTranscriptKeys.add(key)
+  voiceCommittedText += text
+  voiceText.value = voiceCommittedText.trim()
+  mergeVoiceText(voiceText.value)
+  voiceStatus.value = '已识别一段，可继续说话；说完后点击停止'
+}
+
 function speechErrorMessage(code: string): string {
   const messages: Record<string, string> = {
     'not-allowed': '浏览器没有麦克风权限，请允许后再试。',
@@ -185,6 +215,23 @@ async function ensureMicrophoneAccess(): Promise<boolean> {
 
 function stopVoiceInput() {
   if (voiceStopping.value) return
+  if (streamingSpeech) {
+    shouldKeepListening = false
+    const session = streamingSpeech
+    streamingSpeech = null
+    const stoppingSessionId = voiceSessionId
+    voiceStarting.value = false
+    voiceStopping.value = true
+    voiceStatus.value = voiceText.value ? '正在整理最后一段识别结果…' : '正在停止语音输入…'
+    void session.stop().finally(() => {
+      // 等待 stop/commit 返回的最终转写事件后，再使本次会话失效，避免吞掉最后几个字。
+      if (voiceSessionId === stoppingSessionId) voiceSessionId += 1
+      voiceStopping.value = false
+      isListening.value = false
+      voiceStatus.value = voiceText.value ? '识别完成，请检查文字后再发送' : '没有识别到内容，请再试一次。'
+    })
+    return
+  }
   shouldKeepListening = false
   clearVoiceNoResultTimer()
   const currentRecognition = recognition
@@ -224,13 +271,79 @@ async function startVoiceInput() {
   }
 
   const Recognition = getSpeechRecognitionConstructor()
-  if (!Recognition) {
+  if (!streamingVoiceSupported.value && !Recognition) {
     ElMessage.info('当前浏览器暂不支持语音识别，请直接输入文字')
+    return
+  }
+  const speechStoreId = store.currentStore?.storeId
+  if (!speechStoreId) {
+    ElMessage.warning('先选择一家门店，再使用语音点单')
     return
   }
 
   voiceStarting.value = true
   const pendingSessionId = ++voiceSessionId
+  resetVoiceTranscript()
+
+  // 优先走服务端代理的 PCM 流式 ASR；浏览器原生识别只作为兼容性兜底。
+  if (streamingVoiceSupported.value) {
+    const session = new StreamingSpeechSession({
+      createSession: async () => {
+        // 游客首次点击语音时可能还没有游客令牌，先建立身份再申请语音票据。
+        if (!store.isLoggedIn) await store.ensureGuestId()
+        return customerAgentApi.transcriptionSession(speechStoreId)
+      },
+      webSocketUrl: customerAgentApi.transcriptionWebSocketUrl,
+      onTranscript: (transcript, key) => {
+        if (pendingSessionId === voiceSessionId) appendStreamingTranscript(transcript, key)
+      },
+      onStatus: (message) => {
+        if (pendingSessionId === voiceSessionId) voiceStatus.value = message
+      },
+      onError: (error) => {
+        if (pendingSessionId !== voiceSessionId) return
+        if (streamingSpeech === session) streamingSpeech = null
+        shouldKeepListening = false
+        isListening.value = false
+        voiceStatus.value = error.message
+        ElMessage.warning(error.message)
+      }
+    })
+    streamingSpeech = session
+    try {
+      await session.start()
+      if (pendingSessionId !== voiceSessionId) {
+        await session.stop()
+        return
+      }
+      shouldKeepListening = true
+      isListening.value = true
+      voiceStarting.value = false
+      voiceStatus.value = '流式识别已连接，正在持续听取；说完后点击停止'
+      return
+    } catch (error: unknown) {
+      if (streamingSpeech === session) streamingSpeech = null
+      if (pendingSessionId !== voiceSessionId) return
+      const message = error instanceof Error ? error.message : '流式语音识别暂不可用'
+      console.warn('[fika-speech] streaming ASR unavailable, fallback to browser recognition:', message)
+      if (!Recognition) {
+        shouldKeepListening = false
+        voiceStarting.value = false
+        voiceStatus.value = message
+        ElMessage.warning(message)
+        return
+      }
+      voiceStatus.value = '流式识别暂不可用，正在切换浏览器语音识别…'
+    }
+  }
+
+  if (!Recognition) {
+    voiceStarting.value = false
+    shouldKeepListening = false
+    voiceStatus.value = '当前浏览器不支持语音识别，请直接输入文字。'
+    return
+  }
+
   voiceStatus.value = '正在检查麦克风权限…'
   try {
     if (!await ensureMicrophoneAccess()) return
@@ -240,12 +353,6 @@ async function startVoiceInput() {
   // 用户在权限弹窗期间关闭弹窗或改用文字输入时，丢弃这次启动请求。
   if (pendingSessionId !== voiceSessionId) return
 
-  // 默认示例文案不是用户输入，第一次说话时直接替换它；已有文字则继续追加。
-  voiceBaseText = input.value.trim() === defaultInput ? '' : input.value.trim()
-  voiceText.value = ''
-  voiceCommittedText = ''
-  voiceSessionFinalText = ''
-  voiceInterimText = ''
   shouldKeepListening = true
   const currentSessionId = pendingSessionId
   voiceStatus.value = '正在听，请说出你的口味、冷热、预算或数量…'
@@ -325,7 +432,8 @@ async function startVoiceInput() {
       voiceStopping.value = false
       if (shouldKeepListening) {
         voiceStatus.value = voiceText.value ? '正在继续听…' : '没有听到声音，继续听…'
-        window.setTimeout(startRecognitionSession, 120)
+        // 兼容兜底仍尽快重启；主链路使用持续 PCM 流，不依赖这里恢复音频。
+        window.setTimeout(startRecognitionSession, 10)
         return
       }
       isListening.value = false

@@ -482,6 +482,25 @@ export const customerAgentApi = {
   plan: (data: { storeId: number; userId?: number | null; guestId?: string | null; message: string }) =>
     request.post<any, CustomerAgentPlan>('/customer-agent/plan', data),
 
+  /** 签发一次性短时语音 WebSocket 凭证，避免把智谱 API Key 暴露到浏览器。 */
+  transcriptionSession: (storeId: number) =>
+    request.post<any, { ticket: string; expiresInSeconds: number }>('/customer-agent/transcription/session', { storeId }),
+
+  /** 根据当前 API 地址生成同源/后端 WebSocket 地址。 */
+  transcriptionWebSocketUrl: (ticket: string) => {
+    const baseURL = request.defaults.baseURL || ''
+    const path = `/ws/customer-agent/transcription?ticket=${encodeURIComponent(ticket)}`
+    if (/^https?:\/\//i.test(baseURL)) {
+      const url = new URL(baseURL)
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+      url.pathname = url.pathname.replace(/\/api\/?$/, '') + '/ws/customer-agent/transcription'
+      url.search = `ticket=${encodeURIComponent(ticket)}`
+      return url.toString()
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${window.location.host}${path}`
+  },
+
   /** 流式 plan — SSE 防止 timeout，支持进度回调 */
   planStream: (data: { storeId: number; userId?: number | null; guestId?: string | null; message: string },
                callbacks: {

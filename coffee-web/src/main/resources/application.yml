@@ -157,6 +157,12 @@ coffee:
       embedding-model: ${ZHIPU_EMBEDDING_MODEL:embedding-3}
       # 512 维兼顾中文菜单召回质量、MySQL 缓存体积和接口成本。
       embedding-dimensions: ${ZHIPU_EMBEDDING_DIMENSIONS:512}
+      # 语音转写只由后端调用，浏览器端不接触 API Key。
+      # GLM-ASR-2512 单次音频最长 30 秒，WebSocket 入口会在 Java 端滚动分段。
+      transcription-endpoint: ${ZHIPU_TRANSCRIPTION_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/audio/transcriptions}
+      transcription-model: ${ZHIPU_TRANSCRIPTION_MODEL:glm-asr-2512}
+      transcription-segment-seconds: ${ZHIPU_TRANSCRIPTION_SEGMENT_SECONDS:20}
+      transcription-hotwords: ${ZHIPU_TRANSCRIPTION_HOTWORDS:咖啡,美式,拿铁,卡布奇诺,摩卡,燕麦奶,冰美式,低糖,无糖,少冰,热饮,甜点,蛋糕}
       # 交互型 Agent 的时间预算；超时会立即回退到受控规则方案。
       timeout-seconds: ${ZHIPU_TIMEOUT_SECONDS:15}
       # Chat 模型首包延迟更长，独立给 25 秒预算；流式响应在生成完成后立即释放连接。

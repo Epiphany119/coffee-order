@@ -51,6 +51,14 @@ export default defineConfig(({ mode }) => {
           timeout: 10000,
           proxyTimeout: 10000,
           ws: false
+        },
+        // 持续语音识别走 WebSocket；代理必须打开 ws，否则浏览器端会在首次握手时断开。
+        '/ws': {
+          target: apiTarget,
+          changeOrigin: true,
+          timeout: 0,
+          proxyTimeout: 0,
+          ws: true
         }
       }
     }
