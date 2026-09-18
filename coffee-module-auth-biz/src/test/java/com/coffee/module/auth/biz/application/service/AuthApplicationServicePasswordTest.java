@@ -84,6 +84,7 @@ class AuthApplicationServicePasswordTest {
         user.setEmails(List.of("amy@qq.com"));
         when(users.findById(16L)).thenReturn(user);
         when(emails.findEmailsByUserId(16L)).thenReturn(List.of("amy@qq.com"));
+        when(verification.normalizeEmail("amy@qq.com")).thenReturn("amy@qq.com");
 
         AuthResponse response = service.unbindEmail(16L, "amy@qq.com");
 

@@ -13,6 +13,11 @@
     <name>coffee-module-inventory-biz</name>
     <dependencies>
         <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>com.coffee</groupId>
             <artifactId>coffee-common</artifactId>
         </dependency>

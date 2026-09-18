@@ -111,13 +111,13 @@ sequenceDiagram
 
 | 能力 | 建议组件 | 用途 | 状态 |
 |---|---|---|---|
-| 缓存与分布式锁 | Redis 7 + Redisson | 菜单缓存、热点库存、幂等键、限流 | 下一阶段 |
-| 消息队列 | RocketMQ 5 | 订单事件、积分、通知、削峰、死信 | 下一阶段 |
+| 缓存与分布式锁 | Redis 7 + Redisson | 菜单缓存、热点库存、幂等键、限流 | 已实现（Redis profile；默认关闭） |
+| 消息队列 | RocketMQ 5 | 订单事件、积分、通知、削峰、死信 | 已实现（rocketmq profile；默认关闭） |
 | 服务治理 | Nacos 2 + Spring Cloud Alibaba | 注册发现、配置中心 | 后续演进 |
 | 网关与保护 | Spring Cloud Gateway + Sentinel | 鉴权、灰度、限流、熔断 | 后续演进 |
 | 搜索 | Elasticsearch | 商品、订单、门店全文检索 | 后续演进 |
 | 定时任务 | XXL-JOB | 关单、过期券、补偿扫描、日报 | 后续演进 |
-| 可观测性 | Actuator、Micrometer、Prometheus、Grafana、SkyWalking | 健康、指标、告警、链路 | Actuator/Micrometer 本阶段落地 |
+| 可观测性 | Actuator、Micrometer、Prometheus、Grafana、SkyWalking | 健康、指标、告警、链路 | Actuator/Micrometer 已实现；Prometheus/Grafana/SkyWalking 仅规划 |
 | 对象存储 | MinIO / OSS | 商品图、资质、评价图 | 后续演进 |
 
 ## 6. 可观测性与安全设计
