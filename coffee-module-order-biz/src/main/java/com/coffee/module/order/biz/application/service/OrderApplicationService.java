@@ -366,22 +366,11 @@ public class OrderApplicationService implements OrderService {
             membershipService.restoreVoucher(order.getUserId(), order.getVoucherNo());
         }
         if (newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.UNPAID) {
-            orderRepository.findItemsByOrderId(orderId).forEach(item ->
-                    inventoryService.release(order.getStoreId(), item.getProductId(), item.getQuantity()));
+            releaseReservedInventory(orderId, order);
         }
         eventPublisher.publishEvent(OrderDomainEvent.statusChanged(orderId, order.getBeverageName(), newStatus.name()));
         // 消费累计 + 积分入账：仅在订单完成的那一刻计入（状态机单向，只会触发一次），取消/未完成不计入
-        if (!asyncMembershipEnabled && isCompletionStatus(newStatus) && !isCompletionStatus(previousStatus)
-                && order.getUserId() != null && order.getUserId() > 0) {
-            memberService.addSpending(order.getUserId(), order.getFinalPrice());
-            membershipService.addConsumptionPoints(order.getUserId(), order.getFinalPrice());
-        }
-        // 取消回滚：已完成订单被取消时，累计消费与积分按实付金额扣回（先扣消费，积分按回滚后重算）
-        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.COMPLETED
-                && order.getUserId() != null && order.getUserId() > 0) {
-            memberService.subtractSpending(order.getUserId(), order.getFinalPrice());
-            membershipService.deductConsumptionPoints(order.getUserId(), order.getFinalPrice());
-        }
+        applyMembershipAccounting(order, previousStatus, newStatus);
 
         OrderResponse response = new OrderResponse();
         response.setOrderId(order.getId());
@@ -411,22 +400,11 @@ public class OrderApplicationService implements OrderService {
             throw new ServiceException(409, "订单状态已变化，请刷新后重试");
         }
         if (newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.UNPAID) {
-            orderRepository.findItemsByOrderId(orderId).forEach(item ->
-                    inventoryService.release(order.getStoreId(), item.getProductId(), item.getQuantity()));
+            releaseReservedInventory(orderId, order);
         }
         eventPublisher.publishEvent(OrderDomainEvent.statusChanged(orderId, order.getBeverageName(), newStatus.name()));
         // 消费累计 + 积分入账：仅在订单完成的那一刻计入（状态机单向，只会触发一次），取消/未完成不计入
-        if (!asyncMembershipEnabled && isCompletionStatus(newStatus) && !isCompletionStatus(previousStatus)
-                && order.getUserId() != null && order.getUserId() > 0) {
-            memberService.addSpending(order.getUserId(), order.getFinalPrice());
-            membershipService.addConsumptionPoints(order.getUserId(), order.getFinalPrice());
-        }
-        // 取消回滚：已完成订单被取消时，累计消费与积分按实付金额扣回（先扣消费，积分按回滚后重算）
-        if (!asyncMembershipEnabled && newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.COMPLETED
-                && order.getUserId() != null && order.getUserId() > 0) {
-            memberService.subtractSpending(order.getUserId(), order.getFinalPrice());
-            membershipService.deductConsumptionPoints(order.getUserId(), order.getFinalPrice());
-        }
+        applyMembershipAccounting(order, previousStatus, newStatus);
 
         OrderResponse response = new OrderResponse();
         response.setOrderId(order.getId());
@@ -492,6 +470,28 @@ public class OrderApplicationService implements OrderService {
 
     private boolean isCompletionStatus(Order.OrderStatus status) {
         return status == Order.OrderStatus.COMPLETED || status == Order.OrderStatus.DELIVERED;
+    }
+
+    /** 取消未支付订单时释放所有已预扣库存，统一顾客端和商家端行为。 */
+    private void releaseReservedInventory(Long orderId, Order order) {
+        orderRepository.findItemsByOrderId(orderId).forEach(item ->
+                inventoryService.release(order.getStoreId(), item.getProductId(), item.getQuantity()));
+    }
+
+    /** 同步会员累计与积分；异步模式交给订单事件消费者处理。 */
+    private void applyMembershipAccounting(Order order, Order.OrderStatus previousStatus,
+                                           Order.OrderStatus newStatus) {
+        Long userId = order.getUserId();
+        if (asyncMembershipEnabled || userId == null || userId <= 0) return;
+        if (isCompletionStatus(newStatus) && !isCompletionStatus(previousStatus)) {
+            memberService.addSpending(userId, order.getFinalPrice());
+            membershipService.addConsumptionPoints(userId, order.getFinalPrice());
+        }
+        // 已完成订单取消时回滚累计消费和积分。
+        if (newStatus == Order.OrderStatus.CANCELED && previousStatus == Order.OrderStatus.COMPLETED) {
+            memberService.subtractSpending(userId, order.getFinalPrice());
+            membershipService.deductConsumptionPoints(userId, order.getFinalPrice());
+        }
     }
 
     private OrderResponse statusResponse(Order order, Order.OrderStatus status) {
