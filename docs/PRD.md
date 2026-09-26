@@ -638,3 +638,6 @@ PENDING 待支付、PROCESSING 处理中、PAID 已支付、FAILED 支付失败�
 - 代码、数据库迁移、API 文档和本 PRD 的功能口径发生变化时，应同步更新。
 - 新增能力必须标注已实现、部分实现或规划。
 - 未经评测集、压测或线上数据验证的准确率、延迟、成本和业务提升数字不得写入 PRD。
+# AI 平台优化目标
+
+本项目的 AI 平台优化目标、模拟支付边界、业务闭环和内部服务鉴权标准见：[`AI_PLATFORM_OPTIMIZATION_PRD.md`](AI_PLATFORM_OPTIMIZATION_PRD.md)。

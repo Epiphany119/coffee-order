@@ -45,6 +45,9 @@ management:
       endpoint: ${COFFEE_OTLP_TRACING_ENDPOINT}
 
 coffee:
+  ai:
+    plan-registry:
+      redis-enabled: ${COFFEE_AI_PLAN_REGISTRY_REDIS_ENABLED:true}
   auth:
     token-secret: ${COFFEE_AUTH_TOKEN_SECRET}
     token-expires-seconds: ${COFFEE_AUTH_TOKEN_EXPIRES_SECONDS:28800}

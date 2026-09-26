@@ -5,6 +5,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -22,12 +25,15 @@ public class AgentKnowledgeService {
     private final JdbcTemplate jdbc;
     private final ZhipuEmbeddingClient embeddingClient;
     private final MilvusKnowledgeVectorStore vectorStore;
+    private final KnowledgeEmbeddingSyncService embeddingSync;
 
     public AgentKnowledgeService(JdbcTemplate jdbc, ZhipuEmbeddingClient embeddingClient,
-                                 MilvusKnowledgeVectorStore vectorStore) {
+                                 MilvusKnowledgeVectorStore vectorStore,
+                                 KnowledgeEmbeddingSyncService embeddingSync) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
         this.vectorStore = vectorStore;
+        this.embeddingSync = embeddingSync;
     }
 
     public List<KnowledgeHit> retrieve(String query, Long storeId, int limit) {
@@ -44,7 +50,7 @@ public class AgentKnowledgeService {
     private List<KnowledgeHit> keywordRetrieve(String normalized, Long storeId, int limit) {
         List<String> terms = tokenize(normalized);
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT id, store_id, title, content, source, updated_at
+                SELECT id, store_id, title, content, source, updated_at, document_version, embedding_status
                 FROM agent_knowledge_document
                 WHERE enabled = 1 AND (store_id IS NULL OR store_id = ?)
                 ORDER BY updated_at DESC LIMIT 200
@@ -57,6 +63,7 @@ public class AgentKnowledgeService {
                         String.valueOf(row.get("content")),
                         String.valueOf(row.get("source")),
                         row.get("updated_at") == null ? null : String.valueOf(row.get("updated_at")),
+                        number(row.get("document_version")), String.valueOf(row.get("embedding_status")),
                         score(row, terms)))
                 .filter(hit -> hit.score() > 0)
                 .sorted(Comparator.comparingInt(KnowledgeHit::score).reversed().thenComparing(KnowledgeHit::id))
@@ -82,20 +89,34 @@ public class AgentKnowledgeService {
         LocalDateTime now = LocalDateTime.now();
         for (KnowledgeDocument document : valid) {
             jdbc.update("""
-                    INSERT INTO agent_knowledge_document(store_id,title,content,source,enabled,updated_at)
-                    VALUES (?,?,?,?,1,?)
-                    ON DUPLICATE KEY UPDATE content=VALUES(content),source=VALUES(source),enabled=1,updated_at=VALUES(updated_at)
-                    """, storeId, document.title(), document.content(), document.source(), now);
+                    INSERT INTO agent_knowledge_document(store_id,title,content,source,enabled,updated_at,content_hash,document_version,embedding_status,embedding_error)
+                    VALUES (?,?,?,?,1,?,?,1,'PENDING',NULL)
+                    ON DUPLICATE KEY UPDATE content=VALUES(content),source=VALUES(source),enabled=1,updated_at=VALUES(updated_at),
+                        document_version=IF(NOT (content_hash <=> VALUES(content_hash)), document_version+1, document_version),
+                        embedding_status=IF(NOT (content_hash <=> VALUES(content_hash)), 'PENDING', embedding_status),
+                        embedding_error=IF(NOT (content_hash <=> VALUES(content_hash)), NULL, embedding_error),
+                        content_hash=VALUES(content_hash)
+                    """, storeId, document.title(), document.content(), document.source(), now,
+                    sha256(document.title() + "\n" + document.content()));
         }
         List<Long> ids = valid.stream().map(document -> jdbc.queryForObject("""
                 SELECT id FROM agent_knowledge_document WHERE store_id <=> ? AND title = ?
                 """, Long.class, storeId, document.title())).toList();
         embeddingClient.embed(valid.stream().map(document -> document.title() + "\n" + document.content()).toList())
-                .ifPresent(vectors -> {
+                .ifPresentOrElse(vectors -> {
+                    List<Long> retry = new ArrayList<>();
                     for (int index = 0; index < valid.size(); index++) {
-                        if (ids.get(index) != null) vectorStore.upsert(ids.get(index), storeId, vectors.get(index));
+                        Long id = ids.get(index);
+                        if (id == null || index >= vectors.size() || vectors.get(index) == null
+                                || !vectorStore.upsert(id, storeId, vectors.get(index))) {
+                            if (id != null) retry.add(id);
+                        }
                     }
-                });
+                    if (!retry.isEmpty()) updateEmbeddingStatus(retry, "PENDING", "vector upsert failed");
+                    List<Long> ready = ids.stream().filter(id -> id != null && !retry.contains(id)).toList();
+                    if (!ready.isEmpty()) updateEmbeddingStatus(ready, "READY", null);
+                    embeddingSync.enqueue(retry);
+                }, () -> { updateEmbeddingStatus(ids, "PENDING", "embedding unavailable"); embeddingSync.enqueue(ids); });
     }
 
     private List<KnowledgeHit> loadSemanticHits(List<MilvusKnowledgeVectorStore.VectorHit> vectorHits, Long storeId) {
@@ -106,7 +127,7 @@ public class AgentKnowledgeService {
         List<Object> args = new ArrayList<>(ranks.keySet());
         args.add(storeId);
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT id, store_id, title, content, source, updated_at
+                SELECT id, store_id, title, content, source, updated_at, document_version, embedding_status
                 FROM agent_knowledge_document
                 WHERE enabled = 1 AND id IN (%s) AND (store_id IS NULL OR store_id = ?)
                 """.formatted(placeholders), args.toArray());
@@ -115,6 +136,7 @@ public class AgentKnowledgeService {
                     return new KnowledgeHit(id, (Long) row.get("store_id"), String.valueOf(row.get("title")),
                             String.valueOf(row.get("content")), String.valueOf(row.get("source")),
                             row.get("updated_at") == null ? null : String.valueOf(row.get("updated_at")),
+                            number(row.get("document_version")), String.valueOf(row.get("embedding_status")),
                             Math.round(ranks.get(id).score() * 100));
                 }).sorted(Comparator.comparingInt(KnowledgeHit::score).reversed())
                 .limit(Math.max(1, Math.min(vectorHits.size(), 10))).toList();
@@ -141,7 +163,24 @@ public class AgentKnowledgeService {
     }
 
     public record KnowledgeHit(long id, Long storeId, String title, String content,
-                               String source, String updatedAt, int score) { }
+                               String source, String updatedAt, long documentVersion, String embeddingStatus, int score) { }
 
     public record KnowledgeDocument(String title, String content, String source) { }
+
+    void updateEmbeddingStatus(List<Long> ids, String status, String error) {
+        if (ids == null || ids.isEmpty()) return;
+        String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        List<Object> args = new ArrayList<>();
+        args.add(status); args.add(error); args.add(status); args.addAll(ids);
+        jdbc.update("UPDATE agent_knowledge_document SET embedding_status=?,embedding_error=?,embedding_updated_at=CASE WHEN ?='READY' THEN NOW() ELSE embedding_updated_at END WHERE id IN (" + placeholders + ")", args.toArray());
+    }
+
+    private long number(Object value) {
+        return value instanceof Number n ? n.longValue() : 1L;
+    }
+
+    private String sha256(String value) {
+        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }
+        catch (Exception ex) { throw new IllegalStateException("Cannot hash knowledge document", ex); }
+    }
 }

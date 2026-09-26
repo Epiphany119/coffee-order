@@ -8,9 +8,12 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,6 +30,7 @@ public class MerchantGrowthAgentApplicationService implements MerchantGrowthAgen
     private final ObjectMapper json;
     private final ZhipuChatClient chatClient;
     private final GrowthActionPolicy actionPolicy;
+    private final GrowthActionOutboxService outbox;
     private final String templateStoreCode;
     private final MerchantGrowthIntentParser intentParser = new MerchantGrowthIntentParser();
 
@@ -35,11 +39,13 @@ public class MerchantGrowthAgentApplicationService implements MerchantGrowthAgen
             ObjectMapper json,
             ZhipuChatClient chatClient,
             GrowthActionPolicy actionPolicy,
+            GrowthActionOutboxService outbox,
             @Value("${coffee.ai.template-store-code:jingan}") String templateStoreCode) {
         this.jdbc = jdbc;
         this.json = json;
         this.chatClient = chatClient;
         this.actionPolicy = actionPolicy;
+        this.outbox = outbox;
         this.templateStoreCode = templateStoreCode;
     }
 
@@ -106,11 +112,14 @@ public class MerchantGrowthAgentApplicationService implements MerchantGrowthAgen
     }
 
     @Override
-    public Long createAction(Long merchantId, Long storeId, String type, String title, Map<String, Object> proposal) {
+    public Long createAction(Long merchantId, Long storeId, String analysisId, Integer proposalVersion,
+                             String type, String title, Map<String, Object> proposal) {
         GrowthActionPolicy.ApprovedAction action = actionPolicy.approve(type, title, proposal);
         try {
-            jdbc.update("INSERT INTO growth_agent_action (merchant_id,store_id,action_type,title,proposal_json,status,created_at) VALUES (?,?,?,?,?,'PENDING',NOW())",
-                    merchantId, storeId, action.type().name(), action.title(), json.writeValueAsString(action.proposal()));
+            String proposalJson = json.writeValueAsString(action.proposal());
+            jdbc.update("INSERT INTO growth_agent_action (merchant_id,store_id,analysis_id,proposal_version,proposal_hash,action_type,title,proposal_json,status,created_at) VALUES (?,?,?,?,?,?,?,?, 'PENDING',NOW())",
+                    merchantId, storeId, analysisId, proposalVersion == null ? 1 : Math.max(1, proposalVersion),
+                    sha256(proposalJson), action.type().name(), action.title(), proposalJson);
             return jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
         } catch (ServiceException ex) {
             throw ex;
@@ -120,32 +129,38 @@ public class MerchantGrowthAgentApplicationService implements MerchantGrowthAgen
     }
 
     @Override
+    @Transactional
     public Map<String, Object> executeAction(Long merchantId, Long storeId, Long actionId) {
         try {
             List<Map<String, Object>> rows = jdbc.queryForList(
                     "SELECT action_type AS actionType,title,proposal_json AS proposalJson,status FROM growth_agent_action WHERE id=? AND merchant_id=? AND store_id=?",
                     actionId, merchantId, storeId);
-            if (rows.isEmpty()) throw new ServiceException(404, "Agent 操作不存在");
+            if (rows.isEmpty()) throw new ServiceException(404, "Agent action not found");
             Map<String, Object> action = rows.get(0);
-            if (!"PENDING".equals(action.get("status"))) throw new ServiceException(409, "该方案已经处理");
-            if (jdbc.update("UPDATE growth_agent_action SET status='EXECUTING' WHERE id=? AND status='PENDING'", actionId) != 1) {
-                throw new ServiceException(409, "方案正在执行");
+            String current = String.valueOf(action.get("status"));
+            if ("EXECUTED".equals(current)) return Map.of("id", actionId, "status", "EXECUTED", "message", "Action already completed");
+            if ("EXECUTING".equals(current)) return Map.of("id", actionId, "status", "EXECUTING", "message", "Action is already queued");
+            if ("FAILED".equals(current)) {
+                jdbc.update("UPDATE growth_agent_outbox SET status='PENDING',attempts=0,next_attempt_at=NOW(),locked_at=NULL,last_error=NULL WHERE action_id=? AND status='FAILED'", actionId);
+            } else if (!"PENDING".equals(current)) {
+                throw new ServiceException(409, "Action state does not allow execution");
+            }
+            if (jdbc.update("UPDATE growth_agent_action SET status='EXECUTING',queued_at=NOW() WHERE id=? AND status IN ('PENDING','FAILED')", actionId) != 1) {
+                throw new ServiceException(409, "Action is already executing");
             }
             Map<String, Object> proposal = json.readValue(String.valueOf(action.get("proposalJson")), new TypeReference<>() { });
-            int affectedUsers = "CREATE_VOUCHERS".equals(action.get("actionType"))
-                    ? vouchers(storeId, String.valueOf(action.get("title")), proposal)
-                    : notify(storeId, String.valueOf(action.get("title")), proposal);
-            jdbc.update("UPDATE growth_agent_action SET status='EXECUTED',executed_at=NOW() WHERE id=?", actionId);
-            return Map.of("id", actionId, "status", "EXECUTED", "affectedUsers", affectedUsers,
-                    "message", "Agent 操作已执行，并已写入审计记录");
+            int affectedUsers = outbox.enqueue(actionId, merchantId, storeId, String.valueOf(action.get("actionType")), String.valueOf(action.get("title")), proposal);
+            if (affectedUsers == 0) {
+                jdbc.update("UPDATE growth_agent_action SET status='EXECUTED',executed_at=NOW() WHERE id=?", actionId);
+                return Map.of("id", actionId, "status", "EXECUTED", "affectedUsers", 0, "message", "No eligible customers");
+            }
+            return Map.of("id", actionId, "status", "EXECUTING", "affectedUsers", affectedUsers,
+                    "message", "Action queued for durable delivery");
         } catch (ServiceException ex) {
             throw ex;
         } catch (Exception ex) {
-            try {
-                jdbc.update("UPDATE growth_agent_action SET status='FAILED' WHERE id=? AND status='EXECUTING'", actionId);
-            } catch (Exception ignored) {
-                // 保留原始异常，避免清理失败覆盖真正原因。
-            }
+            try { jdbc.update("UPDATE growth_agent_action SET status='FAILED' WHERE id=? AND status='EXECUTING'", actionId); }
+            catch (Exception ignored) { }
             throw migration(ex);
         }
     }
@@ -154,7 +169,7 @@ public class MerchantGrowthAgentApplicationService implements MerchantGrowthAgen
     public List<Map<String, Object>> listActions(Long merchantId, Long storeId, int limit) {
         try {
             return jdbc.queryForList(
-                    "SELECT id,action_type AS actionType,title,status,created_at AS createdAt,executed_at AS executedAt FROM growth_agent_action WHERE merchant_id=? AND store_id=? ORDER BY id DESC LIMIT ?",
+                    "SELECT id,analysis_id AS analysisId,proposal_version AS proposalVersion,proposal_hash AS proposalHash,action_type AS actionType,title,status,queued_at AS queuedAt,created_at AS createdAt,executed_at AS executedAt FROM growth_agent_action WHERE merchant_id=? AND store_id=? ORDER BY id DESC LIMIT ?",
                     merchantId, storeId, Math.max(1, Math.min(50, limit)));
         } catch (Exception ex) {
             throw migration(ex);
@@ -303,6 +318,17 @@ public class MerchantGrowthAgentApplicationService implements MerchantGrowthAgen
 
     private long elapsedMs(long started) {
         return Math.max(0, (System.nanoTime() - started) / 1_000_000);
+    }
+
+    private String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder out = new StringBuilder(digest.length * 2);
+            for (byte item : digest) out.append(String.format(Locale.ROOT, "%02x", item));
+            return out.toString();
+        } catch (Exception ex) {
+            throw new IllegalStateException("Cannot hash proposal", ex);
+        }
     }
 
     private ServiceException migration(Exception ex) {

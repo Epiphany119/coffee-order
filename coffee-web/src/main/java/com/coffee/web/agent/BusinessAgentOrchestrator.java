@@ -52,14 +52,15 @@ public class BusinessAgentOrchestrator {
     public AgentAnswer execute(RequestIdentity identity, String scene, Long storeId, String sessionId, String question) {
         String safeScene = "merchant".equalsIgnoreCase(scene) ? "merchant" : "customer";
         String owner = ownerKey(identity);
+        String sessionOwner = scopedOwner(owner, storeId);
         if ("merchant".equals(safeScene)) assertMerchantOwnsStore(identity, storeId);
 
         String input = question == null ? "" : question.trim();
         if (input.isBlank() || input.length() > 800) {
             throw new IllegalArgumentException("问题长度需在 1 到 800 字之间");
         }
-        String session = conversations.ensureSession(sessionId, owner, safeScene);
-        conversations.append(session, owner, "user", input);
+        String session = conversations.ensureSession(sessionId, sessionOwner, safeScene);
+        conversations.append(session, sessionOwner, "user", input);
 
         String runId = audit.start(identity, safeScene, storeId, session, input);
         List<ToolResult> toolResults = new ArrayList<>();
@@ -75,11 +76,11 @@ public class BusinessAgentOrchestrator {
                 audit.recordToolCall(runId, sequence++, result);
             }
 
-            String answer = answer(safeScene, input, conversations.recent(session, owner, 8), route.plan(), toolResults);
-            conversations.append(session, owner, "assistant", answer);
+            String answer = answer(safeScene, input, conversations.recent(session, sessionOwner, 8), route.plan(), toolResults);
+            conversations.append(session, sessionOwner, "assistant", answer);
             audit.finish(identity, runId, "SUCCEEDED", answer, null, toolResults.size());
             return new AgentAnswer(session, route.plan().steps().stream().map(AgentPlan.Step::purpose).toList(),
-                    toolResults, answer, route.engine(), runId, route.plan());
+                    toolResults, answer, route.engine(), runId, route.plan(), sources(toolResults));
         } catch (Exception ex) {
             audit.finish(identity, runId, "FAILED", null, safeError(ex), toolResults.size());
             if (ex instanceof RuntimeException runtimeException) throw runtimeException;
@@ -225,8 +226,12 @@ public class BusinessAgentOrchestrator {
         List<Map<String, Object>> data = hits.stream().map(hit -> {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("title", hit.title());
+            row.put("id", hit.id());
             row.put("content", clip(hit.content()));
             row.put("source", hit.source());
+            row.put("updatedAt", hit.updatedAt());
+            row.put("documentVersion", hit.documentVersion());
+            row.put("embeddingStatus", hit.embeddingStatus());
             row.put("score", hit.score());
             return row;
         }).toList();
@@ -294,6 +299,15 @@ public class BusinessAgentOrchestrator {
         return chat.chat(system, prompt).orElse(fallback);
     }
 
+    public List<AnswerSource> sources(List<ToolResult> tools) {
+        return tools.stream()
+                .flatMap(tool -> tool.data().stream().map(row -> new AnswerSource(
+                        tool.name(), String.valueOf(row.getOrDefault("title", tool.name())),
+                        row.get("source") == null ? null : String.valueOf(row.get("source")),
+                        row.get("score") instanceof Number n ? n.intValue() : null)))
+                .toList();
+    }
+
     private boolean matches(String input, Map<String, Object> row) {
         String text = (String.valueOf(row.get("name")) + " " + row.get("category_code") + " "
                 + row.get("description")).toLowerCase(Locale.ROOT);
@@ -332,6 +346,10 @@ public class BusinessAgentOrchestrator {
         return identity.kind().name() + ":" + (identity.id() == null ? identity.guestId() : identity.id());
     }
 
+    private String scopedOwner(String owner, Long storeId) {
+        return owner + "|STORE:" + (storeId == null ? "GLOBAL" : storeId);
+    }
+
     private String safeError(Exception ex) {
         String message = ex.getMessage();
         return message == null || message.isBlank()
@@ -352,8 +370,15 @@ public class BusinessAgentOrchestrator {
             String answer,
             String engine,
             String runId,
-            AgentPlan structuredPlan) {
+            AgentPlan structuredPlan,
+            List<AnswerSource> sources) {
+        public AgentAnswer(String sessionId, List<String> plan, List<ToolResult> tools, String answer,
+                           String engine, String runId, AgentPlan structuredPlan) {
+            this(sessionId, plan, tools, answer, engine, runId, structuredPlan, List.of());
+        }
     }
+
+    public record AnswerSource(String tool, String title, String source, Integer score) { }
 
     public record ToolResult(
             String name,

@@ -106,6 +106,7 @@ public class BusinessAgentController {
                         "steps", result.plan(),
                         "structuredPlan", result.structuredPlan())));
                 emitter.send(SseEmitter.event().name("tools").data(result.tools()));
+                emitter.send(SseEmitter.event().name("sources").data(orchestrator.sources(result.tools())));
                 for (int index = 0; index < result.answer().length(); index += 8) {
                     emitter.send(SseEmitter.event().name("delta").data(result.answer().substring(index, Math.min(index + 8, result.answer().length()))));
                 }

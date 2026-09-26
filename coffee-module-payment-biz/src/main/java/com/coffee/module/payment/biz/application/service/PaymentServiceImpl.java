@@ -145,7 +145,13 @@ public class PaymentServiceImpl implements PaymentService {
         if (payment == null) {
             throw new ServiceException(404, "支付单不存在");
         }
-        if (payment.getStatus() == Payment.PaymentStatus.PAID) return toResponse(payment);
+      if (payment.getStatus() == Payment.PaymentStatus.PAID) {
+          String incomingTransactionNo = requireTransactionNo(transactionNo);
+          if (payment.getTransactionNo() != null && payment.getTransactionNo().equals(incomingTransactionNo)) {
+              return toResponse(payment);
+          }
+          throw new ServiceException(409, "支付回调交易流水号冲突");
+      }
         if (payment.getStatus() != Payment.PaymentStatus.PENDING
                 && payment.getStatus() != Payment.PaymentStatus.PROCESSING) {
             throw new ServiceException(409, "支付单当前状态不接受回调");

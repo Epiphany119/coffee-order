@@ -4,6 +4,10 @@ import com.coffee.common.core.exception.ServiceException;
 import com.coffee.module.customeragent.api.dto.AgentOrderLine;
 import com.coffee.module.customeragent.api.dto.AgentOrderPlan;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -28,11 +32,25 @@ public class CustomerAgentPlanRegistry {
     private static final int MAX_PLAN_LINES = 10;
     private static final Set<String> ALLOWED_SIZES = Set.of("SMALL", "MEDIUM", "LARGE", "CUSTOM");
     private static final Pattern IDEMPOTENCY_KEY_PATTERN = Pattern.compile("[A-Za-z0-9_-]{16,128}");
+    private static final String REDIS_PLAN_PREFIX = "fika:agent:plan:";
+    private static final String REDIS_CLAIM_SUFFIX = ":claim";
     private final ConcurrentHashMap<String, Entry> plans = new ConcurrentHashMap<>();
     private final ObjectMapper jsonMapper;
+    private final StringRedisTemplate redis;
+    private final boolean redisEnabled;
 
+    /** Kept for unit tests and local profiles where Redis is intentionally disabled. */
     public CustomerAgentPlanRegistry(ObjectMapper jsonMapper) {
+        this(jsonMapper, null, false);
+    }
+
+    @Autowired
+    public CustomerAgentPlanRegistry(ObjectMapper jsonMapper,
+                                     ObjectProvider<StringRedisTemplate> redisProvider,
+                                     @Value("${coffee.ai.plan-registry.redis-enabled:false}") boolean redisEnabled) {
         this.jsonMapper = jsonMapper;
+        this.redis = redisProvider == null ? null : redisProvider.getIfAvailable();
+        this.redisEnabled = redisEnabled && this.redis != null;
     }
 
     public String issue(AgentOrderPlan plan) {
@@ -45,7 +63,13 @@ public class CustomerAgentPlanRegistry {
             throw new ServiceException(500, "Agent 方案保存失败");
         }
         String token = UUID.randomUUID().toString().replace("-", "");
-        plans.put(token, new Entry(planJson, Instant.now().plus(TTL), new AtomicReference<>()));
+        Instant expiresAt = Instant.now().plus(TTL);
+        Entry entry = new Entry(planJson, expiresAt, new AtomicReference<>());
+        if (redisEnabled) {
+            redis.opsForValue().set(REDIS_PLAN_PREFIX + token, planJson, TTL);
+        } else {
+            plans.put(token, entry);
+        }
         return token;
     }
 
@@ -55,6 +79,17 @@ public class CustomerAgentPlanRegistry {
         AgentOrderPlan resolvedPlan = resolveEntry(entry, storeId, userId, guestId, includeAddOn);
         // includeAddOn 会改变最终商品行，必须纳入同一确认声明，避免同一幂等键复用成另一份订单。
         String confirmationClaim = idempotencyKey + "|" + includeAddOn;
+        if (redisEnabled) {
+            String claimKey = REDIS_PLAN_PREFIX + token + REDIS_CLAIM_SUFFIX;
+            Boolean claimed = redis.opsForValue().setIfAbsent(claimKey, confirmationClaim, TTL);
+            if (!Boolean.TRUE.equals(claimed)) {
+                String existing = redis.opsForValue().get(claimKey);
+                if (!confirmationClaim.equals(existing)) {
+                    throw new ServiceException(409, "Agent 方案已确认，请勿重复下单");
+                }
+            }
+            return resolvedPlan;
+        }
         String owner = entry.confirmationClaim().get();
         if (owner == null && !entry.confirmationClaim().compareAndSet(null, confirmationClaim)) {
             owner = entry.confirmationClaim().get();
@@ -95,11 +130,21 @@ public class CustomerAgentPlanRegistry {
         if (token == null || !token.matches("[a-f0-9]{32}")) {
             throw new ServiceException(400, "无效的 Agent 方案确认令牌");
         }
-        Entry entry = plans.get(token);
+        Entry entry = redisEnabled
+                ? readRedisEntry(token)
+                : plans.get(token);
         if (entry == null || Instant.now().isAfter(entry.expiresAt())) {
             throw new ServiceException(410, "该 Agent 方案已过期，请重新生成");
         }
         return entry;
+    }
+
+    private Entry readRedisEntry(String token) {
+        String json = redis.opsForValue().get(REDIS_PLAN_PREFIX + token);
+        if (json == null) return null;
+        Long ttlSeconds = redis.getExpire(REDIS_PLAN_PREFIX + token);
+        Instant expiresAt = Instant.now().plusSeconds(ttlSeconds == null || ttlSeconds < 0 ? TTL.getSeconds() : ttlSeconds);
+        return new Entry(json, expiresAt, new AtomicReference<>());
     }
 
     private boolean same(Object left, Object right) { return left == null ? right == null : left.equals(right); }

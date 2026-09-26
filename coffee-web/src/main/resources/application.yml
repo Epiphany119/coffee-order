@@ -134,6 +134,24 @@ coffee:
     cors:
       allowed-origins: ${COFFEE_CORS_ALLOWED_ORIGINS:http://localhost:5174,http://127.0.0.1:5174}
   ai:
+    knowledge-sync:
+      redis-enabled: ${COFFEE_AI_KNOWLEDGE_SYNC_REDIS_ENABLED:true}
+      batch-size: ${COFFEE_AI_KNOWLEDGE_SYNC_BATCH_SIZE:20}
+      fixed-delay-ms: ${COFFEE_AI_KNOWLEDGE_SYNC_FIXED_DELAY_MS:5000}
+      initial-delay-ms: ${COFFEE_AI_KNOWLEDGE_SYNC_INITIAL_DELAY_MS:10000}
+    merchant-outbox:
+      fixed-delay-ms: ${COFFEE_AI_MERCHANT_OUTBOX_FIXED_DELAY_MS:5000}
+      max-attempts: ${COFFEE_AI_MERCHANT_OUTBOX_MAX_ATTEMPTS:8}
+    rate-limit:
+      enabled: ${COFFEE_AI_RATE_LIMIT_ENABLED:true}
+      redis-enabled: ${COFFEE_AI_RATE_LIMIT_REDIS_ENABLED:true}
+      window-seconds: ${COFFEE_AI_RATE_LIMIT_WINDOW_SECONDS:60}
+      business-requests: ${COFFEE_AI_RATE_LIMIT_BUSINESS_REQUESTS:30}
+      customer-plan-requests: ${COFFEE_AI_RATE_LIMIT_CUSTOMER_PLAN_REQUESTS:20}
+      customer-confirm-requests: ${COFFEE_AI_RATE_LIMIT_CUSTOMER_CONFIRM_REQUESTS:10}
+      merchant-requests: ${COFFEE_AI_RATE_LIMIT_MERCHANT_REQUESTS:30}
+      evaluation-requests: ${COFFEE_AI_RATE_LIMIT_EVALUATION_REQUESTS:5}
+      local-max-entries: ${COFFEE_AI_RATE_LIMIT_LOCAL_MAX_ENTRIES:10000}
     observability:
       # 记录模型调用次数和字符估算 token；成本单价可按智谱控制台配置，单位为每 1K token。
       input-cost-per-1k: ${COFFEE_AI_INPUT_COST_PER_1K:0}
@@ -145,6 +163,8 @@ coffee:
     platform:
       # 当前采用 GLM 路由 + 后端受控工具编排；未来接入 Spring AI Alibaba 时只替换适配器。
       provider: ${COFFEE_AI_PLATFORM_PROVIDER:glm}
+    plan-registry:
+      redis-enabled: ${COFFEE_AI_PLAN_REGISTRY_REDIS_ENABLED:false}
     # 静安店为 Agent 样板门店；其他门店沿用通用 GLM 提示词与输出。
     template-store-code: ${COFFEE_AI_TEMPLATE_STORE_CODE:jingan}
     zhipu:

@@ -302,14 +302,28 @@ export interface BusinessAgentAnswer {
   engine: string
   runId: string
   structuredPlan: BusinessAgentPlan
+  sources?: BusinessAgentSource[]
+}
+
+export interface BusinessAgentSource {
+  tool: string
+  title: string
+  source?: string
+  score?: number
+  documentVersion?: number
+  embeddingStatus?: string
 }
 
 export interface GrowthAgentAction {
   id: number
+  analysisId?: string | null
+  proposalVersion?: number
+  proposalHash?: string | null
   actionType: string
   title: string
   status: 'PENDING' | 'EXECUTING' | 'EXECUTED' | 'CANCELED' | 'FAILED'
   createdAt: string | number[]
+  queuedAt?: string | number[] | null
   executedAt?: string | number[] | null
 }
 
@@ -382,6 +396,15 @@ export interface CustomerAssistantResponse {
   engine: string
   action?: CustomerAssistantAction
   memorySignals?: string[]
+  sources?: CustomerAssistantSource[]
+}
+
+export interface CustomerAssistantSource {
+  id: number
+  title: string
+  source?: string
+  updatedAt?: string
+  score?: number
 }
 
 export interface CartItemRequest {

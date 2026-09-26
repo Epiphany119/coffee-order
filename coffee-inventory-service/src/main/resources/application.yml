@@ -12,7 +12,22 @@ spring:
     nacos:
       discovery:
         enabled: false
+  data:
+    redis:
+      host: ${COFFEE_REDIS_HOST:localhost}
+      port: ${COFFEE_REDIS_PORT:6379}
+      password: ${COFFEE_REDIS_PASSWORD:}
+      timeout: ${COFFEE_REDIS_TIMEOUT:2s}
 
 coffee:
   inventory:
     redis-cache-enabled: false
+  internal-auth:
+    enabled: ${COFFEE_INTERNAL_AUTH_ENABLED:true}
+    service-name: coffee-inventory-service
+    clock-skew-seconds: ${COFFEE_INTERNAL_AUTH_CLOCK_SKEW_SECONDS:300}
+    max-body-bytes: ${COFFEE_INTERNAL_AUTH_MAX_BODY_BYTES:1048576}
+    # 生产默认使用 Redis，单机开发可显式设置 COFFEE_INTERNAL_AUTH_REPLAY_STORE=in-memory。
+    replay-store: ${COFFEE_INTERNAL_AUTH_REPLAY_STORE:redis}
+    keys:
+      coffee-order-service-v1: ${COFFEE_INTERNAL_AUTH_KEY_COFFEE_ORDER_SERVICE_V1:}

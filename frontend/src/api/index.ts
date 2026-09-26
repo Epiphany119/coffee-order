@@ -93,12 +93,27 @@ const CANDIDATE_HOSTS = (() => {
 
 const PROBE_TIMEOUT_MS = 1500
 
+const CONFIGURED_API_HOST = normalizeApiHost(import.meta.env.VITE_API_HOST || '')
+const API_HOST_ALLOWLIST = new Set(
+  String(import.meta.env.VITE_API_HOST_ALLOWLIST || '')
+    .split(',')
+    .map((value) => normalizeApiHost(value))
+    .filter(Boolean)
+)
+
+function isAllowedApiHost(host: string): boolean {
+  if (!host) return false
+  if (!import.meta.env.PROD) return true
+  return API_HOST_ALLOWLIST.has(host) && host.startsWith('https://')
+}
+
 function getUrlParamHost(): string {
+  if (import.meta.env.PROD) return ''
   try {
     const params = new URLSearchParams(window.location.search)
     const host = params.get('apiHost')
     const normalized = normalizeApiHost(host)
-    if (normalized) {
+    if (normalized && isAllowedApiHost(normalized)) {
       try { localStorage.setItem('fika_api_host', normalized) } catch {}
       return normalized
     }
@@ -108,7 +123,8 @@ function getUrlParamHost(): string {
 
 function getCachedHost(): string {
   try {
-    return normalizeApiHost(localStorage.getItem('fika_api_host'))
+    const normalized = normalizeApiHost(localStorage.getItem('fika_api_host'))
+    return isAllowedApiHost(normalized) ? normalized : ''
   } catch { return '' }
 }
 
@@ -143,6 +159,11 @@ async function probeHost(host: string): Promise<boolean> {
 }
 
 async function detectApiHost(): Promise<string> {
+  if (import.meta.env.PROD) {
+    return CONFIGURED_API_HOST && isAllowedApiHost(CONFIGURED_API_HOST)
+      ? CONFIGURED_API_HOST
+      : ''
+  }
   const fromUrl = getUrlParamHost()
   if (fromUrl) return fromUrl
 
@@ -867,7 +888,7 @@ export const merchantApi = {
   /** 店长增长 Agent：受控数据分析、待审批营销动作与审计记录。 */
   growthAgentAnalyze: (merchantId: number, message: string) =>
     request.post<any, GrowthAgentAnalysis>(`/merchant/${merchantId}/growth-agent/analyze`, { message }),
-  growthAgentCreateAction: (merchantId: number, data: { actionType: string; title: string; proposal: Record<string, unknown> }) =>
+  growthAgentCreateAction: (merchantId: number, data: { analysisId?: string; proposalVersion?: number; actionType: string; title: string; proposal: Record<string, unknown> }) =>
     request.post<any, { id: number; status: string; message: string }>(`/merchant/${merchantId}/growth-agent/actions`, data),
   growthAgentExecuteAction: (merchantId: number, actionId: number) =>
     request.post<any, { id: number; status: string; affectedUsers: number; message: string }>(`/merchant/${merchantId}/growth-agent/actions/${actionId}/execute`),

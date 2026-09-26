@@ -74,9 +74,10 @@ public class CustomerSupervisorAgentOrchestrator {
             throw new ServiceException(400, "问题长度需在 1 到 800 字之间");
         }
         String owner = ownerKey(identity);
-        String sessionId = conversations.ensureSession(suppliedSessionId, owner, SCENE);
-        conversations.append(sessionId, owner, "user", input);
-        List<String> history = conversations.recent(sessionId, owner, 8);
+        String sessionOwner = scopedOwner(owner, storeId);
+        String sessionId = conversations.ensureSession(suppliedSessionId, sessionOwner, SCENE);
+        conversations.append(sessionId, sessionOwner, "user", input);
+        List<String> history = conversations.recent(sessionId, sessionOwner, 8);
         String runId = audit.start(identity, SCENE, storeId, sessionId, input);
         chat.beginUsageTracking();
         int toolCount = 0;
@@ -107,7 +108,7 @@ public class CustomerSupervisorAgentOrchestrator {
                 result = consult(identity, storeId, sessionId, runId, input, history, remembered);
                 toolCount = 3;
             }
-            conversations.append(sessionId, owner, "assistant", result.answer());
+            conversations.append(sessionId, sessionOwner, "assistant", result.answer());
             audit.finish(identity, runId, "SUCCEEDED", result.answer(), null, toolCount);
             return result;
         } catch (RuntimeException ex) {
@@ -186,7 +187,8 @@ public class CustomerSupervisorAgentOrchestrator {
                     "FIKA Supervisor → consult-sub-agent", "knowledge_retrieval_degraded");
         }
         return new AssistantAnswer(sessionId, runId, Route.CONSULT.name(), answer,
-                "FIKA Supervisor → consult-sub-agent", action("NONE", "", Map.of()), remembered.signals());
+                "FIKA Supervisor → consult-sub-agent", action("NONE", "", Map.of()), remembered.signals(),
+                hits.stream().map(hit -> new AnswerSource(hit.id(), hit.title(), hit.source(), hit.updatedAt(), hit.documentVersion(), hit.embeddingStatus(), hit.score())).toList());
     }
 
     private AssistantAnswer orderQuery(RequestIdentity identity, Long storeId, String sessionId, String runId,
@@ -352,6 +354,10 @@ public class CustomerSupervisorAgentOrchestrator {
         return identity.kind().name() + ":" + (identity.id() == null ? identity.guestId() : identity.id());
     }
 
+    private String scopedOwner(String owner, Long storeId) {
+        return owner + "|STORE:" + storeId;
+    }
+
     private Integer number(Object value) {
         if (value instanceof Number number) return number.intValue();
         try { return value == null ? null : Integer.valueOf(String.valueOf(value)); } catch (NumberFormatException ignored) { return null; }
@@ -413,7 +419,15 @@ public class CustomerSupervisorAgentOrchestrator {
     }
 
     public record AssistantAnswer(String sessionId, String runId, String route, String answer,
-                                  String engine, CustomerAction action, List<String> memorySignals) { }
+                                  String engine, CustomerAction action, List<String> memorySignals,
+                                  List<AnswerSource> sources) {
+        public AssistantAnswer(String sessionId, String runId, String route, String answer,
+                               String engine, CustomerAction action, List<String> memorySignals) {
+            this(sessionId, runId, route, answer, engine, action, memorySignals, List.of());
+        }
+    }
+
+    public record AnswerSource(long id, String title, String source, String updatedAt, long documentVersion, String embeddingStatus, int score) { }
 
     public record CustomerAction(String type, String label, Object payload) { }
 }
