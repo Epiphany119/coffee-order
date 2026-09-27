@@ -19,13 +19,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Agent 运行观测与审计：记录计划、工具调用、延迟、模型用量和最终状态。
  *
- * <p>审计写入故障不会阻断正常点单/咨询链路；执行
- * {@code sql/migrations/V20260908_24_agent_evaluation_observability.sql} 后即可
- * 获得完整的运行轨迹和评测结果。</p>
+ * <p>生产环境应在审计表和迁移完成后开启 fail-closed，避免关键运行轨迹
+ * 在数据库故障时被静默丢弃。开发环境仍允许显式降级，但会记录失败计数和错误日志。</p>
  */
 @Service
 public class AgentRunAuditService {
@@ -48,8 +48,12 @@ public class AgentRunAuditService {
     private String knowledgeVersion = "v1";
     @Value("${coffee.ai.versioning.tool-contract-version:v1}")
     private String toolContractVersion = "v1";
+    @Value("${coffee.ai.observability.audit-fail-closed:false}")
+    private boolean auditFailClosed;
 
     private volatile boolean enabled = true;
+    private final AtomicLong writeFailures = new AtomicLong();
+    private volatile String lastWriteFailure;
 
     public AgentRunAuditService(JdbcTemplate jdbc, ObjectMapper json) {
         this.jdbc = jdbc;
@@ -248,6 +252,13 @@ public class AgentRunAuditService {
         }
     }
 
+    /** 供健康检查和运营看板读取，避免审计故障只存在于日志中。 */
+    public Map<String, Object> auditStatus() {
+        return Map.of("enabled", enabled, "failClosed", auditFailClosed,
+                "writeFailures", writeFailures.get(),
+                "lastWriteFailure", lastWriteFailure == null ? "" : lastWriteFailure);
+    }
+
     public static boolean isValidRunId(String runId) {
         return runId != null && runId.matches("[a-f0-9]{32}");
     }
@@ -326,15 +337,22 @@ public class AgentRunAuditService {
     }
 
     private void write(String operation, Runnable action) {
-        if (!enabled) return;
+        if (!enabled) {
+            if (auditFailClosed) throw new ServiceException(503, "AI 审计暂时不可用，请稍后重试");
+            return;
+        }
         try {
             action.run();
         } catch (DataAccessException ex) {
+            writeFailures.incrementAndGet();
+            lastWriteFailure = operation + ":" + ex.getClass().getSimpleName();
             if (isSchemaUnavailable(ex)) {
                 disable(operation);
-            } else {
-                log.warn("Agent {} audit write skipped temporarily: {}",
-                        operation, ex.getClass().getSimpleName());
+            }
+            log.error("Agent {} audit write failed; failClosed={}, failureCount={}",
+                    operation, auditFailClosed, writeFailures.get(), ex);
+            if (auditFailClosed) {
+                throw new ServiceException(503, "AI 审计暂时不可用，请稍后重试");
             }
         }
     }

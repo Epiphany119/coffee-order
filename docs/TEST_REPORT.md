@@ -62,6 +62,8 @@ mvn -B test
 
 为内部鉴权测试补充了 `coffee-inventory-service` 的 test scope `spring-boot-starter-test` 依赖；不影响生产运行时依赖。
 
+本轮还收紧了运行时质量边界：模型客户端优先读取供应商返回的 `prompt_tokens` / `completion_tokens`，只有供应商未返回 usage 时才记录带 `estimated` 标记的估算值；生产 profile 默认开启 AI 审计 fail-closed，审计表不可用时拒绝继续产生无法追踪的 Agent 运行。
+
 ### 3.2 前端生产构建
 
 执行目录：`frontend/`
@@ -89,6 +91,13 @@ git diff --check
 ```
 
 通过，未发现已修改文件的空白错误。
+
+### 3.4 本轮安全与可验收修复
+
+- 生产 profile 默认开启 Agent 审计 fail-closed；审计表不可用时拒绝继续产生无法追踪的运行，并暴露失败计数和最近失败状态。
+- 智谱客户端优先读取供应商 `prompt_tokens` / `completion_tokens`，缺少 usage 时才使用带 `estimated` 标记的估算值。
+- 本地配置文件已改为只读取环境变量，未保留数据库、邮箱或模型密钥。
+- 新增 `scripts/acceptance-loop.sh`，统一执行后端回归、前端构建并输出绑定 Git 基线的验收摘要。
 
 ## 4. 数据库和外部依赖验证
 
