@@ -59,6 +59,7 @@ import type {
   , UserNotification
   , MerchantProfileUpdateRequest
   , BusinessAgentAnswer
+  , BusinessAgentMetrics
   , CustomerAssistantResponse
 } from './types'
 
@@ -262,6 +263,7 @@ function isMerchantApiPath(path: string): boolean {
     || path === '/store'
     || path.startsWith('/store/')
     || path.startsWith('/business-agent/knowledge')
+    || path.startsWith('/business-agent/metrics')
     || path.startsWith('/seat/list')
     || path === '/orders'
     || (path.startsWith('/orders/') && path.includes('/action'))
@@ -476,6 +478,8 @@ export const businessAgentApi = {
     request.post<any, BusinessAgentAnswer>('/business-agent/ask', data),
   readRun: (runId: string) =>
     request.get<any, Record<string, unknown>>(`/business-agent/runs/${runId}`),
+  metrics: (storeId: number, days = 7) =>
+    request.get<any, BusinessAgentMetrics>('/business-agent/metrics', { params: { storeId, days } }),
   syncMenuKnowledge: (storeId: number) =>
     request.post<any, { accepted: boolean; count: number; message: string }>('/business-agent/knowledge/bootstrap/menu', { storeId }),
   createKnowledge: (data: { storeId: number; title: string; content: string; source: string }) =>

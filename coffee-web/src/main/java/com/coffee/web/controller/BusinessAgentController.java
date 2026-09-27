@@ -4,7 +4,10 @@ import com.coffee.common.core.exception.ServiceException;
 import com.coffee.common.core.result.Result;
 import com.coffee.web.agent.AgentEvaluationCase;
 import com.coffee.web.agent.AgentEvaluationService;
+import com.coffee.web.agent.AgentBusinessMetricsService;
 import com.coffee.web.agent.BusinessAgentOrchestrator;
+import com.coffee.module.store.api.StoreService;
+import com.coffee.module.store.api.dto.StoreResponse;
 import com.coffee.web.security.AccessGuard;
 import com.coffee.web.security.RequestIdentity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -30,11 +34,17 @@ import java.util.concurrent.CompletableFuture;
 public class BusinessAgentController {
     private final BusinessAgentOrchestrator orchestrator;
     private final AgentEvaluationService evaluationService;
+    private final AgentBusinessMetricsService metricsService;
+    private final StoreService storeService;
 
     public BusinessAgentController(BusinessAgentOrchestrator orchestrator,
-                                   AgentEvaluationService evaluationService) {
+                                   AgentEvaluationService evaluationService,
+                                   AgentBusinessMetricsService metricsService,
+                                   StoreService storeService) {
         this.orchestrator = orchestrator;
         this.evaluationService = evaluationService;
+        this.metricsService = metricsService;
+        this.storeService = storeService;
     }
 
     @PostMapping("/ask")
@@ -75,6 +85,20 @@ public class BusinessAgentController {
     @GetMapping("/evaluations/summary")
     public Result<Map<String, Object>> evaluationSummary() {
         return Result.success(evaluationService.summary(AccessGuard.currentIdentity()));
+    }
+
+    @GetMapping("/metrics")
+    public Result<Map<String, Object>> metrics(@RequestParam Long storeId,
+                                               @RequestParam(defaultValue = "7") int days) {
+        RequestIdentity identity = AccessGuard.currentIdentity();
+        if (identity.kind() != RequestIdentity.Kind.MERCHANT || identity.id() == null) {
+            throw new ServiceException(403, "AI 经营指标仅允许商家查看");
+        }
+        boolean owned = storeService.listByMerchant(identity.id()).stream()
+                .map(StoreResponse::getStoreId)
+                .anyMatch(storeId::equals);
+        if (!owned) throw new ServiceException(403, "无权查看该门店指标");
+        return Result.success(metricsService.summarize(identity, storeId, days));
     }
 
     @PostMapping("/knowledge/documents")

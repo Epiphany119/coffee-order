@@ -87,7 +87,7 @@ flowchart LR
 
 ## 7. 本地运行
 
-1. 创建 MySQL 数据库 `coffee_order_pro`，导入现有结构与种子数据，并按 `sql/migrations/` 的版本顺序执行迁移；外卖模块执行 `V20260831_13_delivery_module.sql`，骑手业绩索引与联系框架执行 `V20260901_15_delivery_rider_performance_contact.sql`，三端个人资料字段执行 `V20260901_16_profile_center.sql`，Agent 运行轨迹执行 `V20260906_17_agent_observability.sql`，Agent 评测和模型/订单观测扩展执行 `V20260908_24_agent_evaluation_observability.sql`，用户侧 Supervisor 的知识、会话和偏好记忆执行 `V20260909_25_customer_agent_platform.sql`。
+1. 创建 MySQL 数据库 `coffee_order_pro`，导入现有结构与种子数据，并按 `sql/migrations/` 的版本顺序执行迁移；外卖模块执行 `V20260831_13_delivery_module.sql`，骑手业绩索引与联系框架执行 `V20260901_15_delivery_rider_performance_contact.sql`，三端个人资料字段执行 `V20260901_16_profile_center.sql`，Agent 运行轨迹执行 `V20260906_17_agent_observability.sql`，Agent 评测和模型/订单观测扩展执行 `V20260908_24_agent_evaluation_observability.sql`，用户侧 Supervisor 的知识、会话和偏好记忆执行 `V20260909_25_customer_agent_platform.sql`，P1 AI 业务闭环执行 `V20260926_25_ai_p1_completion.sql`，P2 版本审计与指标执行 `V20260927_26_ai_p2_observability.sql`。
 2. 设置 `COFFEE_DB_USERNAME`、`COFFEE_DB_PASSWORD`；开发/生产环境还必须设置 `COFFEE_AUTH_TOKEN_SECRET`（至少 32 个字符）。本地 profile 在未提供 Token 密钥时仅使用每次启动随机生成的临时密钥，重启后旧 Token 会失效；可选设置 `COFFEE_DB_URL` 和 `COFFEE_QR_BASE_URL`。公共配置已提供安全占位值。
 3. 后端运行：`mvn -pl coffee-web -am spring-boot:run`。
 4. 前端进入相邻仓库 `../coffee-order-system-pro_front`，执行 `pnpm install && pnpm dev`。

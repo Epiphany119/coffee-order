@@ -314,6 +314,39 @@ export interface BusinessAgentSource {
   embeddingStatus?: string
 }
 
+export interface BusinessAgentMetrics {
+  available: boolean
+  storeId: number
+  windowDays: number
+  runCount: number
+  succeededRuns: number
+  failedRuns: number
+  successRate: number
+  fallbackRuns: number
+  fallbackRate: number
+  averageLatencyMs: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  orderAttempts: number
+  successfulOrders: number
+  planAdoptionRate: number
+  orderConversionRate: number
+  totalModelCost: number
+  costPerSuccessfulOrder: number
+  toolCalls: number
+  knowledgeCalls: number
+  knowledgeSourceCoverage: number
+  mockPaymentOrders: number
+  mockPaymentPaid: number
+  mockPaymentRefunded: number
+  mockPaymentCompletionRate: number
+  mockPaymentRefundRate: number
+  evaluationCases: number
+  evaluationPassed: number
+  evaluationPassRate: number
+}
+
 export interface GrowthAgentAction {
   id: number
   analysisId?: string | null

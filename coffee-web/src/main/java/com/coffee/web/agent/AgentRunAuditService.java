@@ -40,6 +40,14 @@ public class AgentRunAuditService {
     private String outputCostPer1k = "0";
     @Value("${coffee.ai.observability.cost-currency:CNY}")
     private String costCurrency = "CNY";
+    @Value("${coffee.ai.versioning.prompt-version:v1}")
+    private String promptVersion = "v1";
+    @Value("${coffee.ai.versioning.model-version:unknown}")
+    private String modelVersion = "unknown";
+    @Value("${coffee.ai.versioning.knowledge-version:v1}")
+    private String knowledgeVersion = "v1";
+    @Value("${coffee.ai.versioning.tool-contract-version:v1}")
+    private String toolContractVersion = "v1";
 
     private volatile boolean enabled = true;
 
@@ -51,10 +59,12 @@ public class AgentRunAuditService {
     public String start(RequestIdentity identity, String scene, Long storeId, String sessionId, String question) {
         String runId = UUID.randomUUID().toString().replace("-", "");
         write("start run", () -> jdbc.update("""
-                INSERT INTO agent_run(run_id,owner_key,scene,store_id,session_id,question,status,started_at)
-                VALUES (?,?,?,?,?,?,?,?)
+                INSERT INTO agent_run(run_id,owner_key,scene,store_id,session_id,question,status,
+                                      prompt_version,model_version,knowledge_version,tool_contract_version,started_at)
+                VALUES (?,?,?,?,?,?,?, ?,?,?,?,?)
                 """, runId, ownerKey(identity), scene, storeId, sessionId,
-                question == null ? "" : question, "RUNNING", LocalDateTime.now()));
+                question == null ? "" : question, "RUNNING", safeVersion(promptVersion), safeVersion(modelVersion),
+                safeVersion(knowledgeVersion), safeVersion(toolContractVersion), LocalDateTime.now()));
         return runId;
     }
 
@@ -165,10 +175,13 @@ public class AgentRunAuditService {
         write("record evaluation", () -> jdbc.update("""
                 INSERT INTO agent_eval_result(
                     case_id,run_id,owner_key,tool_selection_correct,forbidden_tool_avoided,
-                    confirmation_correct,outcome_correct,passed,expected_json,actual_json,error_message,latency_ms,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    confirmation_correct,outcome_correct,passed,expected_json,actual_json,error_message,latency_ms,
+                    prompt_version,model_version,knowledge_version,tool_contract_version,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, caseId, runId, ownerKey(identity), toolSelectionCorrect, forbiddenToolAvoided,
-                confirmationCorrect, outcomeCorrect, passed, expectedJson, actualJson, error, latencyMs, LocalDateTime.now()));
+                confirmationCorrect, outcomeCorrect, passed, expectedJson, actualJson, error, latencyMs,
+                safeVersion(promptVersion), safeVersion(modelVersion), safeVersion(knowledgeVersion),
+                safeVersion(toolContractVersion), LocalDateTime.now()));
     }
 
     public Map<String, Object> readEvaluationSummary(RequestIdentity identity) {
@@ -209,6 +222,8 @@ public class AgentRunAuditService {
                            input_tokens AS inputTokens,output_tokens AS outputTokens,total_tokens AS totalTokens,
                            model_cost AS modelCost,model_cost_currency AS modelCostCurrency,
                            model_cost_source AS modelCostSource,order_success AS orderSuccess,order_id AS orderId,
+                           prompt_version AS promptVersion,model_version AS modelVersion,
+                           knowledge_version AS knowledgeVersion,tool_contract_version AS toolContractVersion,
                            started_at AS startedAt,finished_at AS finishedAt
                     FROM agent_run WHERE run_id=? AND owner_key=?
                     """, runId, ownerKey(identity));
@@ -289,6 +304,12 @@ public class AgentRunAuditService {
     private String safeCurrency() {
         return costCurrency == null || costCurrency.isBlank() ? "CNY" : costCurrency.trim().substring(0,
                 Math.min(8, costCurrency.trim().length()));
+    }
+
+    private String safeVersion(String value) {
+        if (value == null || value.isBlank()) return "unknown";
+        String normalized = value.trim();
+        return normalized.substring(0, Math.min(64, normalized.length()));
     }
 
     private String clip(String value) {

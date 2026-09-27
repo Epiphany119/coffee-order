@@ -2854,3 +2854,11 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 - `GET /api/location/recommend?latitude=31.23&longitude=121.46&limit=5`：返回营业门店，按球面距离升序；响应包含 `distanceKm`、门店坐标和基础门店信息。
 
 首次部署请执行 `sql/migrations/V20260831_12_runtime_consistency.sql`（已包含 `user_location` 表），再根据实际门店地址校正 `LocationApplicationService` 中的坐标种子。`sql_backup/location_module.sql` 仅保留作历史单模块部署参考。
+
+### 18.9 Agent business metrics (P2)
+
+**`GET /api/business-agent/metrics?storeId=5&days=7`**
+
+Merchant-only, store-scoped read API. The response includes run success and fallback rates, average latency, input/output/total tokens, plan adoption, order conversion, model cost per successful order, knowledge source coverage, mock payment completion/refund rates, and evaluation pass rate. `days` is limited to 1-90.
+
+Run the P2 migration `sql/migrations/V20260927_26_ai_p2_observability.sql` before using version fields and this endpoint. Production evaluation is disabled by default through `COFFEE_AI_EVALUATION_ENABLED=false`.

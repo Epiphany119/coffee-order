@@ -48,6 +48,13 @@ coffee:
   ai:
     plan-registry:
       redis-enabled: ${COFFEE_AI_PLAN_REGISTRY_REDIS_ENABLED:true}
+    evaluation:
+      enabled: ${COFFEE_AI_EVALUATION_ENABLED:false}
+    versioning:
+      prompt-version: ${COFFEE_AI_PROMPT_VERSION:v1}
+      model-version: ${COFFEE_AI_MODEL_VERSION:${ZHIPU_MODEL:glm-4.5-air}}
+      knowledge-version: ${COFFEE_AI_KNOWLEDGE_VERSION:v1}
+      tool-contract-version: ${COFFEE_AI_TOOL_CONTRACT_VERSION:v1}
   auth:
     token-secret: ${COFFEE_AUTH_TOKEN_SECRET}
     token-expires-seconds: ${COFFEE_AUTH_TOKEN_EXPIRES_SECONDS:28800}

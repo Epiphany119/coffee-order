@@ -157,6 +157,11 @@ coffee:
       input-cost-per-1k: ${COFFEE_AI_INPUT_COST_PER_1K:0}
       output-cost-per-1k: ${COFFEE_AI_OUTPUT_COST_PER_1K:0}
       cost-currency: ${COFFEE_AI_COST_CURRENCY:CNY}
+    versioning:
+      prompt-version: ${COFFEE_AI_PROMPT_VERSION:v1}
+      model-version: ${COFFEE_AI_MODEL_VERSION:${ZHIPU_MODEL:glm-4.5-air}}
+      knowledge-version: ${COFFEE_AI_KNOWLEDGE_VERSION:v1}
+      tool-contract-version: ${COFFEE_AI_TOOL_CONTRACT_VERSION:v1}
     evaluation:
       # 评测只调用只读 Agent；生产环境可通过 COFFEE_AI_EVALUATION_ENABLED=false 关闭接口。
       enabled: ${COFFEE_AI_EVALUATION_ENABLED:true}

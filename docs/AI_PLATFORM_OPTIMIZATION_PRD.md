@@ -176,3 +176,10 @@ COFFEE_REDIS_PORT=6379
 - MySQL 文档是事实源，Embedding 或 Milvus 暂时失败不会丢失待同步文档。
 - 队列按文档 ID 去重，定时批量消费，失败采用指数退避，最长退避 1 小时。
 - 服务重启后队列仍然存在；文档被删除或禁用时会自动清理队列项。
+
+## 11. P2 implementation record (2026-09-27)
+
+- Added configurable prompt, model, knowledge and tool contract versions to every Agent run and evaluation result.
+- Added merchant-only `GET /api/business-agent/metrics?storeId=&days=` for run success, fallback, latency, token usage, order conversion, knowledge source coverage, mock payment completion and evaluation pass rates.
+- Kept evaluation execution behind `coffee.ai.evaluation.enabled`; production profiles can disable it with `COFFEE_AI_EVALUATION_ENABLED=false`.
+- Added migration `sql/migrations/V20260927_26_ai_p2_observability.sql`. Execute it after the existing Agent observability migrations.
