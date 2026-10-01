@@ -247,11 +247,15 @@ export interface GrowthAgentAnalysis {
   signals: GrowthAgentSignal[]
   understanding?: string
   dataSources?: string[]
+  knowledgeSources?: string[]
   executionPlan?: string[]
   toolCalls?: GrowthAgentToolCall[]
   requiresConfirmation?: boolean
   planningMode?: string
   analysisId?: string
+  actionId?: number
+  proposalVersion?: number
+  proposalHash?: string
   suggestedAction: GrowthAgentProposal
   snapshot: { todayOrders: number; todayRevenue: number; pendingOrders: number; weekRevenue: number; flashSaleStock: number }
   storeId: number
@@ -269,52 +273,7 @@ export interface GrowthAgentToolCall {
   note: string
 }
 
-export interface BusinessAgentPlanStep {
-  tool: string
-  arguments: Record<string, unknown>
-  purpose: string
-}
-
-export interface BusinessAgentPlan {
-  intent: string
-  steps: BusinessAgentPlanStep[]
-  requiresConfirmation: boolean
-  rationale: string
-  source: string
-}
-
-export interface BusinessAgentToolResult {
-  name: string
-  success: boolean
-  data: Record<string, unknown>[]
-  note: string
-  callId: string
-  latencyMs: number
-  readOnly: boolean
-  arguments: Record<string, unknown>
-}
-
-export interface BusinessAgentAnswer {
-  sessionId: string
-  plan: string[]
-  tools: BusinessAgentToolResult[]
-  answer: string
-  engine: string
-  runId: string
-  structuredPlan: BusinessAgentPlan
-  sources?: BusinessAgentSource[]
-}
-
-export interface BusinessAgentSource {
-  tool: string
-  title: string
-  source?: string
-  score?: number
-  documentVersion?: number
-  embeddingStatus?: string
-}
-
-export interface BusinessAgentMetrics {
+export interface GrowthAgentMetrics {
   available: boolean
   storeId: number
   windowDays: number
@@ -352,9 +311,10 @@ export interface GrowthAgentAction {
   analysisId?: string | null
   proposalVersion?: number
   proposalHash?: string | null
+  expiresAt?: string | number[] | null
   actionType: string
   title: string
-  status: 'PENDING' | 'EXECUTING' | 'EXECUTED' | 'CANCELED' | 'FAILED'
+  status: 'DRAFT' | 'PENDING' | 'EXECUTING' | 'EXECUTED' | 'CANCELED' | 'FAILED' | 'EXPIRED'
   createdAt: string | number[]
   queuedAt?: string | number[] | null
   executedAt?: string | number[] | null

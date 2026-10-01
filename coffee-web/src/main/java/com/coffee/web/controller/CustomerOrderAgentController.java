@@ -91,16 +91,8 @@ public class CustomerOrderAgentController {
     }
 
     /**
-     * 流式 plan 端点 — SSE 逐步推送阶段状态和进度，防止 15s timeout
-     *
-     * 推送阶段：
-     * 1. intent_parsing (15%)    → "正在理解你的需求"
-     * 2. candidate_search (35%)  → "正在从菜单中搜索匹配的商品"
-     * 3. llm_selection (60%)     → "正在为你组合最优搭配"
-     * 4. integrating (85%)       → "正在整合最终结果"
-     * 5. done (100%)             → 推送最终结果
-     *
-     * 前端可以根据 stage.step 渲染不同的 loading 动画和文案
+     * 流式 plan 端点。当前方案生成服务没有可供 SSE 订阅的细粒度阶段回调，
+     * 因此只发送处理中提示，完成后发送结果，不虚报内部阶段或进度。
      */
     @PostMapping(value = "/plan/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter planStream(@RequestBody CustomerAgentRequest request) {
@@ -114,42 +106,21 @@ public class CustomerOrderAgentController {
             long started = System.nanoTime();
             chatClient.beginUsageTracking();
             try {
-                // 阶段 1: 意图解析
+                // Send the only truthful in-flight status.
                 emitter.send(SseEmitter.event().name("stage").data(Map.of(
-                        "step", "intent_parsing",
-                        "progress", 15,
-                        "message", "正在理解你的需求…")));
-
-                // 阶段 2: 候选集查询
-                emitter.send(SseEmitter.event().name("stage").data(Map.of(
-                        "step", "candidate_search",
-                        "progress", 35,
-                        "message", "正在从菜单中搜索匹配的商品…")));
-
-                // 阶段 3: LLM 选择
-                emitter.send(SseEmitter.event().name("stage").data(Map.of(
-                        "step", "llm_selection",
-                        "progress", 60,
-                        "message", "正在为你组合最优搭配…")));
-
-                // 执行实际 plan
+                        "step", "processing",
+                        "message", "正在为你生成点单方案")));
                 Map<String, Object> raw = customerOrderAgentService.plan(
                         request.storeId, identity.userId(), identity.guestId(), request.message);
                 recordPlan(runId, request.storeId, raw, elapsedMs(started));
                 Map<String, Object> result = new LinkedHashMap<>(raw);
                 result.put("runId", runId);
 
-                // 阶段 4: 整合结果
-                emitter.send(SseEmitter.event().name("stage").data(Map.of(
-                        "step", "integrating",
-                        "progress", 85,
-                        "message", "正在整合最终结果…")));
-
-                // 阶段 5: 完成
+                // Report completion after plan generation returns.
                 emitter.send(SseEmitter.event().name("stage").data(Map.of(
                         "step", "done",
                         "progress", 100,
-                        "message", "已为你配好！")));
+                        "message", "点单方案已生成")));
                 emitter.send(SseEmitter.event().name("result").data(result));
                 agentAudit.markPlanReady(runId);
                 emitter.complete();

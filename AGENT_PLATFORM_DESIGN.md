@@ -1,52 +1,61 @@
-# FIKA 业务 Agent 平台设计
+# FIKA 顾客 Agent 与店长 Agent 设计
 
-## 目标与边界
+## 职责边界
 
-将顾客点单 Agent 与店长增长 Agent 收敛到同一套可审计平台：模型负责理解和表达，业务系统负责检索、计算、权限与最终执行。Agent 不能直接创建订单、扣款、发券或改库存；这些动作继续通过已有的计划确认、幂等和服务端结算链路执行。
+产品只保留两个用户可见 Agent。顾客 Supervisor 是顾客 Agent 的统一入口；点单计划服务是它内部的业务步骤，不另算一个对话 Agent。店长增长 Agent 负责经营分析与需审批动作。顾客 Agent 与店长 Agent 不相互委派，也不共享身份或门店数据。
+
+运行观测、固定评测、指标和知识服务属于后端基础能力。`AgentOperationsController` 只提供审计和评测 API，不产生第三套聊天 Agent。原通用 `/business-agent/ask` 与 `/stream` 已删除。
 
 ```mermaid
 flowchart LR
-  U[顾客 / 店长] --> SSE[SSE 对话接口]
-  SSE --> P[Plan-Execute 编排器]
-  P --> A[意图与权限校验]
-  P --> R[RAG 检索]
-  P --> T[业务工具白名单]
-  R --> K[(知识库: MySQL / Milvus)]
-  T --> D[(菜单·订单·库存·履约)]
-  P --> L[LLM 适配器]
-  L --> SSE
-  P --> M[(会话与审计)]
+  U[顾客] --> CA[顾客 Agent / Supervisor]
+  CA --> CK[顾客公开知识检索]
+  CA --> CM[菜单与顾客业务服务]
+  CA --> CP[点单计划]
+  CP -->|显式确认| O[订单幂等服务]
+  O --> P[模拟支付状态机]
+
+  M[店长] --> MA[店长增长 Agent]
+  MA --> MK[本店知识检索]
+  MA --> MT[订单 / 履约 / 库存只读工具]
+  MA --> D[DRAFT 服务端提案]
+  D -->|店长确认 actionId + 版本| X[白名单动作服务]
+  X --> OB[Outbox 重试与审计]
+
+  CK --> KB[(MySQL 文档权限 + Milvus 向量)]
+  MK --> KB
+  CA --> AU[运行审计]
+  MA --> AU
+  OPS[Agent 运维 API] --> AU
+  OPS --> EV[固定评测]
 ```
 
-## 已落地的第一阶段
+## 顾客 Agent
 
-- `AgentKnowledgeService`：统一知识检索入口，当前使用 MySQL 文档索引作安全降级；结果携带 `source` 与分数，不允许无来源结论。
-- `AgentConversationService`：会话以 `USER:id`、`MERCHANT:id` 或 `GUEST:id` 为唯一归属，历史写入 `agent_conversation` 与 `agent_conversation_message`，重连时自动加载最近上下文。
-- `BusinessAgentOrchestrator`：固定 Plan-Execute 顺序，执行 `knowledge_retrieve`、`menu_query`，商家身份才可执行 `operation_metrics`。所有工具只读并做身份范围限制。
-- `BusinessAgentController`：`POST /api/business-agent/ask` 提供同步结果；`POST /api/business-agent/stream` 返回 SSE 事件：`status`、`plan`、`tools`、`delta`、`done`。前端可逐字渲染 `delta`，并将 `sessionId` 用于下一轮。
-- `POST /api/business-agent/knowledge/documents`：仅门店所属商家可写入本店知识文档；当前写入后立即走 MySQL 检索，Milvus 索引任务只做异步增量，不阻塞请求。
-- `CustomerSupervisorAgentOrchestrator`：用户侧统一 Supervisor 入口，按规则和安全守卫将请求分发到咨询/推荐、受控点单、订单查询和反馈/售后子 Agent；`POST /api/customer-agent/assistant` 返回 `sessionId`、`runId`、路由、回答和可确认的 UI 动作。
-- `CustomerPreferenceMemoryService`：只提取冷热、甜度、口味、品类、搭配和预算等有限偏好，按 `USER:id` / `GUEST:id` 与门店隔离写入 `agent_customer_preference`，供后续咨询和推荐使用；记忆库不可用时降级为空记忆。
-- 用户侧写操作遵循“生成方案/打开确认弹窗 → 用户确认 → 原有业务服务执行”：Supervisor 不直接创建订单、提交反馈或发起售后。
+`CustomerSupervisorAgentOrchestrator` 校验身份、门店和会话归属，将咨询/推荐、点单、订单查询和反馈入口路由到已有受控服务。只接受 USER/GUEST；商家与骑手身份拒绝。
 
-### 当前模型实现：GLM 替代 Spring AI Alibaba
+点单计划由 `CustomerOrderAgentService` 生成，后端签发短期方案令牌。计划确认后仍使用既有服务端计价、身份校验、库存和 `Idempotency-Key`。支付沿用模拟支付状态机；模型没有创建订单或发起支付的直接权限。SSE 当前只发送真实的处理中提示和最终结果，因为计划服务未暴露细粒度阶段回调。
 
-当前 `coffee.ai.platform.provider=glm`。GLM 先从工具白名单中选择需要的只读工具，再由后端执行工具并把结果作为证据交给 GLM 生成自然语言回答。模型没有数据库连接、没有支付权限，也不能自行构造 SQL 或业务命令；GLM 限流、超时或输出无效时自动退回规则工具计划。
+顾客知识仅允许 `CUSTOMER_PUBLIC`，并在向量候选 MySQL 回查和关键词检索两条路径都校验可见范围、全局/当前门店范围。
 
-## Spring AI Alibaba 与 Milvus 的第二阶段适配
+## 店长增长 Agent
 
-当前项目为 Spring Boot 3.2.4 且使用 GLM。当前用户侧 Supervisor 直接复用项目内受控服务，不依赖阿里原生 Agent API；如果后续引入 Spring AI Alibaba，也应只替换模型适配层并保留以下边界：
+`MerchantGrowthAgentApplicationService` 读取门店经营快照并生成受策略约束的建议。经营数据查询失败会返回服务不可用，不会降级成零值。
 
-1. 用 Spring AI Alibaba 的 `ChatClient` + Structured Output 生成 `AgentPlan`，而不是让模型直接调用写库接口。
-2. 将 `knowledge_retrieve`、`menu_query`、`operation_metrics` 声明为 Function/Tool Bean；工具输入只接收受限 DTO，工具执行与审计仍由应用层管理。
-3. 离线把 SOP、营销规则、菜单知识、常见售后问题切分并写入 Milvus；文档元数据至少包含 `tenant/store_id`、`visibility`、`source`、`version`。检索必须附带门店和权限过滤，避免跨店泄露。
-4. 采用混合召回（关键词 + 向量）与 rerank；命中不足时回答“未找到依据”，不能补全为事实。
-5. 对真实写操作保留“预览 → 用户确认 → 幂等执行 → 审计”四步。Spring AI 的自动工具调用只用于只读工具；发券、改价、下单必须由业务 API 二次确认。
+`POST /api/merchant/{merchantId}/growth-agent/analyze` 在服务端持久化 DRAFT，保存分析 ID、版本、哈希和规范化提案正文。确认接口只接受 actionId 和版本，服务端再次核对商户、门店、状态、有效期与提案哈希。执行接口从数据库加载已确认正文，通过动作白名单和 Outbox；客户端不能提交替代提案内容。
 
-## 数据与并发防御
+店长知识仅限商家所属门店，可以检索公开及内部知识。手工新增默认 `MERCHANT_INTERNAL`，菜单初始化文档为 `CUSTOMER_PUBLIC`。
 
-- SSE 中每个请求捕获启动时的身份快照；会话归属在数据库层二次校验。
-- 用户输入限制为 800 字；工具结果限制条数和文本长度，避免提示注入及上下文膨胀。
-- 模型超时、429 或不可用时，返回检索/工具事实摘要，绝不阻断点单和支付。
-- 订单确认仍使用现有 `Idempotency-Key`；Agent 只产生已签发的方案令牌，不能伪造商品、价格或优惠。
-- 后续 Milvus 索引需用异步 Outbox 增量同步，并保留失败重试与版本号，不能在用户请求线程中建立向量。
+## 共享运维能力
+
+- `AgentKnowledgeService`：MySQL 保存原文与可见范围，Milvus 只提供向量候选；最终授权以 MySQL 查询为准。
+- `AgentRunAuditService`：记录顾客和店长运行轨迹、模型用量及结果。
+- `AgentEvaluationService`：对固定样例调用真实顾客路由或店长分析服务；店长评测不保存提案、不执行动作。
+- `AgentOperationsController`：提供运行审计与评测，不提供普通问答或业务写操作。
+- `AgentBusinessMetricsService`：通过商家增长 Agent 路由暴露本店指标。
+
+## 接口与迁移
+
+顾客入口为 `/api/customer-agent/assistant`，点单为 `/api/customer-agent/plan` 与 `/plans/confirm`。店长接口统一位于 `/api/merchant/{merchantId}/growth-agent/...`。运行和评测接口位于 `/api/agent-operations/...`。
+
+知识可见性及提案确认/有效期字段由 `sql/migrations/V20261001_27_ai_agent_consolidation.sql` 提供。先确认 P1 与 P2 迁移已执行并备份，再由项目负责人手工执行本脚本；本轮不会自动运行数据库迁移。

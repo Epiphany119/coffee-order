@@ -31,7 +31,7 @@ function fmtTime(value: string | number[] | null | undefined) {
 }
 
 function statusText(status: string) {
-  return ({ PENDING: '待确认', EXECUTING: '执行中', EXECUTED: '已执行', FAILED: '执行失败', CANCELED: '已取消' } as Record<string, string>)[status] || status
+  return ({ DRAFT: '草稿', EXPIRED: '已过期', PENDING: '待确认', EXECUTING: '执行中', EXECUTED: '已执行', FAILED: '执行失败', CANCELED: '已取消' } as Record<string, string>)[status] || status
 }
 
 async function loadActions() {
@@ -46,7 +46,7 @@ async function analyze() {
   if (!question.value.trim()) { ElMessage.warning('先告诉 Agent 你关心的经营问题'); return }
   loading.value = true
   try {
-    analysis.value = await merchantApi.growthAgentAnalyze(merchantId, question.value.trim())
+    analysis.value = await merchantApi.growthAgentAnalyze(merchantId, question.value.trim(), mstore.joinedStore?.storeId)
   } catch (e: any) {
     ElMessage.error(e.message || 'Agent 暂时无法完成诊断')
   } finally { loading.value = false }
@@ -54,20 +54,25 @@ async function analyze() {
 
 async function confirmProposal() {
   const merchantId = mstore.merchant?.id
-  const proposal = analysis.value?.suggestedAction
-  if (!merchantId || !proposal) return
+  const actionId = analysis.value?.actionId
+  const proposalVersion = analysis.value?.proposalVersion
+  const storeId = analysis.value?.storeId
+  if (!merchantId || !actionId || proposalVersion == null || !storeId) {
+    ElMessage.warning('请重新分析并生成有效提案')
+    return
+  }
   executing.value = true
   try {
-    const created = await merchantApi.growthAgentCreateAction(merchantId, proposal)
-    const executed = await merchantApi.growthAgentExecuteAction(merchantId, created.id)
-    ElMessage.success(`${executed.message}：已影响 ${executed.affectedUsers} 位顾客`)
+    await merchantApi.growthAgentConfirmAction(merchantId, actionId, proposalVersion, storeId)
+    const executed = await merchantApi.growthAgentExecuteAction(merchantId, actionId, storeId)
+    ElMessage.success(executed.message + '：' + (executed.affectedUsers ?? 0) + ' 位顾客受到影响')
     await loadActions()
   } catch (e: any) {
-    ElMessage.error(e.message || '执行失败；请检查 Agent 数据库迁移是否已执行')
+    ElMessage.error(e.message || '提案确认或执行失败')
   } finally { executing.value = false }
 }
 
-onMounted(async () => { await loadActions(); await analyze() })
+onMounted(loadActions)
 </script>
 
 <template>
@@ -130,7 +135,7 @@ onMounted(async () => { await loadActions(); await analyze() })
       <div class="proposal-reason"><b>为什么推荐这样做</b><span>{{ analysis.suggestedAction.reason }}</span></div>
       <div class="proposal-action">
         <div><small>受控工具</small><b>{{ analysis.suggestedAction.actionType === 'CREATE_VOUCHERS' ? '批量发券 + 站内通知' : '向近期顾客发送站内通知' }}</b></div>
-        <button type="button" :disabled="executing" @click="confirmProposal">{{ executing ? '执行中…' : '确认并执行' }}</button>
+        <button v-if="analysis.actionId != null && analysis.proposalVersion != null" type="button" :disabled="executing" @click="confirmProposal">{{ executing ? '执行中…' : '确认并执行' }}</button>
       </div>
       <small class="audit-note">执行后会写入 Agent 审计记录；Agent 本身不能直接修改你的经营数据。</small>
     </section>

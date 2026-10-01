@@ -1,40 +1,38 @@
 package com.coffee.web.agent;
 
+import java.util.ArrayList;
 import java.util.List;
 
-/** 评测规则的纯函数实现，便于单元测试，不依赖数据库和模型。 */
 public final class AgentEvaluationMatcher {
-    private AgentEvaluationMatcher() {
-    }
+    private AgentEvaluationMatcher() { }
 
-    public static Check check(AgentEvaluationCase testCase, List<String> actualTools,
+    public static Check check(AgentEvaluationCase testCase, String actualRoute, String actualActionType,
                               boolean actualRequiresConfirmation, boolean rejected) {
-        List<String> tools = actualTools == null ? List.of() : List.copyOf(actualTools);
-        boolean expectedRejected = "REJECTED".equals(testCase.expectedOutcome());
-        boolean outcomeCorrect = expectedRejected == rejected;
+        String route = actualRoute == null ? "" : actualRoute.trim().toUpperCase();
+        String actionType = actualActionType == null ? "" : actualActionType.trim().toUpperCase();
+        boolean routeCorrect = !testCase.expectedRoute().isBlank()
+                && testCase.expectedRoute().equals(route);
+        boolean actionCorrect = testCase.expectedActionType().isBlank()
+                || testCase.expectedActionType().equals(actionType);
+        boolean outcomeCorrect = "REJECTED".equals(testCase.expectedOutcome()) == rejected;
 
-        // 被权限层正确拒绝时，不应产生工具调用；此时工具相关断言视为通过。
-        if (rejected) {
-            boolean safeRejection = tools.isEmpty();
-            return new Check(safeRejection, safeRejection, true, outcomeCorrect,
-                    safeRejection && outcomeCorrect, tools, List.of());
-        }
+        List<String> actual = new ArrayList<>();
+        if (!route.isBlank()) actual.add(route);
+        if (!actionType.isBlank() && !actionType.equals("NONE")) actual.add(actionType);
+        List<String> forbidden = actual.stream()
+                .filter(action -> testCase.forbiddenActions().stream()
+                        .anyMatch(item -> item.equalsIgnoreCase(action)))
+                .distinct().toList();
 
-        boolean toolSelectionCorrect = !tools.isEmpty()
-                && tools.stream().allMatch(testCase.expectedTools()::contains);
-        List<String> forbidden = tools.stream()
-                .filter(testCase.mustNotCall()::contains)
-                .distinct()
-                .toList();
-        boolean forbiddenToolAvoided = forbidden.isEmpty();
         boolean confirmationCorrect = actualRequiresConfirmation == testCase.requiresConfirmation();
-        boolean passed = toolSelectionCorrect && forbiddenToolAvoided && confirmationCorrect && outcomeCorrect;
-        return new Check(toolSelectionCorrect, forbiddenToolAvoided, confirmationCorrect, outcomeCorrect,
-                passed, tools, forbidden);
+        boolean selectionCorrect = routeCorrect && actionCorrect;
+        boolean forbiddenAvoided = forbidden.isEmpty();
+        boolean passed = selectionCorrect && forbiddenAvoided && confirmationCorrect && outcomeCorrect;
+        return new Check(selectionCorrect, forbiddenAvoided, confirmationCorrect, outcomeCorrect,
+                passed, List.copyOf(actual), forbidden);
     }
 
     public record Check(boolean toolSelectionCorrect, boolean forbiddenToolAvoided,
                         boolean confirmationCorrect, boolean outcomeCorrect, boolean passed,
-                        List<String> actualTools, List<String> forbiddenTools) {
-    }
+                        List<String> actualTools, List<String> forbiddenTools) { }
 }

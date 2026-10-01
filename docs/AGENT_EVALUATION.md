@@ -1,65 +1,63 @@
-# FIKA Agent 评测与面试演示
+# FIKA Agent 评测与运行审计
 
-## 项目定位
+## 产品 Agent 边界
 
-FIKA Agent 采用 `结构化计划 → 白名单只读工具 → 有来源证据 → 受控回答` 的链路。
-模型不直接连接数据库，也不能执行下单、扣款、发券或改库存。需要改变业务状态时，必须进入已有的“方案预览 → 人工确认 → 幂等执行 → 审计”链路。
+项目只有两个面向用户的 Agent：
 
-## 一次运行的可观察信息
+- **顾客 Agent**：`CustomerSupervisorAgentOrchestrator` 统一分流咨询/推荐、点单、订单查询和反馈入口。既有点单计划服务属于顾客 Agent 的受控业务步骤；生成计划后必须由顾客确认，服务端再校验并幂等创建订单、模拟支付。
+- **店长增长 Agent**：读取所属门店经营数据和授权知识，生成服务端保存的 DRAFT 提案；店长确认后，后端按白名单通过 Outbox 执行。
 
-执行 `V20260906_17_agent_observability.sql`、`V20260908_24_agent_evaluation_observability.sql` 和 `V20260909_25_customer_agent_platform.sql` 后，每次 `/api/business-agent/ask`、`/stream`、顾客点单 Agent 的 `plan/confirm` 以及顾客侧统一 Supervisor 都会生成 `runId`，并记录：
+`AgentOperationsController` 只提供运行轨迹、评测和汇总接口，不提供聊天，不是第三个 Agent。评测不会通过任意工具或模型输出直接写订单、支付、营销或库存。
 
-顾客侧统一入口为 `POST /api/customer-agent/assistant`；它会把咨询/推荐、点单、订单查询和反馈/售后请求关联到会话与同一套运行观测记录。
+## 运行轨迹
 
-- 结构化意图、工具步骤、模型或规则路由来源；
-- 每个工具的只读标记、执行状态、耗时、返回条数和降级说明；
-- 模型调用次数、字符估算 token、成本单价/币种/估算来源；
-- 最终运行状态、失败原因，以及 `orderSuccess` / `orderId`（顾客点单链路）。
+执行基础 Agent 观测迁移 `V20260906_17_agent_observability.sql`、评测迁移 `V20260908_24_agent_evaluation_observability.sql` 及项目要求的后续 P1/P2 迁移后，可查看：
 
-顾客侧 Supervisor 还会把咨询、点单、订单查询、反馈/售后路由与会话 ID 关联起来；偏好记忆只保存经过规则提取的有限字段，不保存无限增长的原始 Prompt。
+- 结构化路由、运行状态、模型/规则来源和失败原因；
+- 工具步骤、只读标记、耗时、返回条数和降级说明；
+- 字符估算 Token、成本来源和模型版本；
+- 顾客点单链的订单结果；商家运行的门店范围与提案确认状态。
 
-使用 `GET /api/business-agent/runs/{runId}` 可读取当前身份自己的工具调用轨迹。
+运行轨迹通过 `GET /api/agent-operations/runs/{runId}` 查询，服务端只返回当前身份自己的记录。用户侧统一入口为 `POST /api/customer-agent/assistant`；专用点单入口为 `/api/customer-agent/plan` 与 `/api/customer-agent/plans/confirm`。
 
-## 评测执行接口
+## 评测接口
 
-评测集位于 `eval/agent_cases.jsonl`，运行时从 `coffee-web/src/main/resources/agent/agent_cases.jsonl` 加载。服务端固定读取样例文本，不接受浏览器改写 Prompt；所有样例只调用 Business Agent 的只读工具，不会创建订单、扣款或修改库存。
+所有接口前缀为 `/api/agent-operations`：
 
-- `GET /api/business-agent/evaluations/cases`：查看当前版本评测集；
-- `POST /api/business-agent/evaluations/run`：执行一条样例，请求体 `{ "caseId": "customer-safety-prompt-injection", "storeId": 5 }`；
-- `POST /api/business-agent/evaluations/run-all`：按当前身份执行全部 customer 或 merchant 样例，并逐条记录工具断言；
-- `GET /api/business-agent/evaluations/summary`：读取当前身份已执行的通过数、工具选择通过数、越权工具拦截数、确认断言通过数和平均耗时。
+- `GET /evaluations/cases`：读取固定评测样例；
+- `POST /evaluations/run`：执行单条样例，请求体示例 `{ "caseId": "customer-safety-prompt-injection", "storeId": 5 }`；
+- `POST /evaluations/run-all`：按当前身份执行对应的 customer 或 merchant 样例；
+- `GET /evaluations/summary`：读取当前身份的通过数、路由/动作断言、拒绝断言和平均耗时。
 
-结果落在 `agent_eval_result`，至少包含：允许工具选择是否正确、`mustNotCall` 是否全部避开、是否按要求要求确认、是否按预期拒绝以及最终是否通过。`expectedOutcome=REJECTED` 的门店越权样例，需要用不属于当前商家的 `storeId` 执行，才能验证权限拒绝。
+顾客样例调用真实顾客 Supervisor；店长样例调用真实店长分析，但以 `prepareAction=false` 运行，不持久化提案，也不执行动作。评测记录位于 `agent_eval_result`。断言字段为 `expectedRoute`、`expectedActionType`、`forbiddenActions`、`requiresConfirmation` 和 `expectedOutcome`。这组评测不覆盖真实订单支付、Outbox 投递或跨服务集成结果。
 
-## 建议评测集
+门店归属评测要求以商户身份请求不属于该商户的 `storeId`；顾客与店长的 scene 与身份不匹配时应由权限层拒绝。
 
-评测样例位于 `eval/agent_cases.jsonl`。当前集合覆盖门店错误、商品缺货、价格错误、预算超限、重复确认、越权查询和 Prompt Injection。每条样例至少包含：
+## 知识库隔离
 
-- `scene`：`customer` 或 `merchant`；
-- `input`：用户问题；
-- `expectedTools`：允许出现的工具子集；
-- `mustNotCall`：绝不能调用的工具；
-- `requiresConfirmation`：是否应提示人工确认；
-- `expectedOutcome`：期望正常回答 `ANSWERED`，或被权限层拒绝 `REJECTED`。
+- 顾客知识检索只返回 `CUSTOMER_PUBLIC` 文档，并限制为全局或当前门店文档。
+- 店长知识检索仅返回当前所属门店的 `CUSTOMER_PUBLIC` 与 `MERCHANT_INTERNAL` 文档。
+- 向量召回后的 MySQL 回查和关键词检索都执行相同范围校验；Milvus 返回的 ID 本身不作为授权依据。
+- 手工知识默认 `MERCHANT_INTERNAL`。菜单知识同步为 `CUSTOMER_PUBLIC`。
 
-建议在模型、Prompt、召回策略发生变化后，重新执行全部样例并记录：
+新的可见性字段迁移为 `sql/migrations/V20261001_27_ai_agent_consolidation.sql`。确认 P1 `V20260926_25_ai_p1_completion.sql`、P2 `V20260927_26_ai_p2_observability.sql` 已执行并备份后，由项目负责人手工执行；应用不会自动执行该文件。
 
-1. 工具选择准确率；
-2. 门店权限隔离通过率；
-3. RAG 命中与来源引用率；
-4. 工具执行成功率和降级率；
-5. P95 延迟与单次模型成本；
-6. 重复确认造成的重复执行数，应为 0；订单确认仍由 `Idempotency-Key` 持久化幂等链路兜底。
+## 建议验证次序
 
-模型成本说明：当前 `ZhipuChatClient` 记录的是请求/响应字符估算 token，并在轨迹中以 `modelCostSource=estimated_chars` 标注；只有配置 `COFFEE_AI_INPUT_COST_PER_1K`、`COFFEE_AI_OUTPUT_COST_PER_1K` 后才会计算有价格含义的成本，未配置时显示 `estimated_chars_unpriced`，不要把它当成供应商账单。
+1. 先运行 `AgentSceneAuthorizationTest` 与 `AgentEvaluationMatcherTest`。
+2. 验证顾客公开知识可检索、内部知识不可检索，以及门店范围隔离。
+3. 验证店长提案的归属、版本、哈希、过期、重复确认和 Outbox 重试。
+4. 验证顾客 plan/confirm、重复确认和模拟支付回调幂等。
+5. 通过集成环境验证经营数据异常返回失败而不是零值，并核验两端评测 API 权限。
 
-## 面试演示脚本
+从项目根目录运行后端测试：`mvn -pl coffee-web -am test`。本轮只更新测试文件，不运行单元或集成测试；不要在测试结束前对外表述为生产级交付或质量验证通过。
 
-1. 店长提问：`最近复购下降，但今天待制作订单很多，应该怎么做？`
-2. 展示 `structuredPlan`：先读知识、订单、履约和经营指标，只读工具执行；
-3. 展示工具调用的 `callId`、耗时、返回条数和来源；
-4. Agent 给出小范围、低风险方案，并明确“未执行”；
-5. 店长确认后进入营销动作接口，重复点击仍由幂等键和状态机保护；
-6. 使用 `runId` 重新打开运行轨迹，展示完整审计记录。
+## 面试演示
 
-不要在简历中填写未经评测集测量的准确率或延迟数字。
+1. 顾客在 `/api/customer-agent/assistant` 咨询，再走点单计划、确认、订单和模拟支付链路；展示未确认不建单。
+2. 店长查看本店经营信号与知识来源，生成 DRAFT 提案；展示 actionId、版本和哈希。
+3. 确认时只传 actionId/版本；执行时服务端读取已保存正文并进入 Outbox。
+4. 以另一门店身份尝试读取或执行该提案，展示归属拒绝。
+5. 用 `/api/agent-operations/runs/{runId}` 查看运行记录，并说明它是运维观测接口，不是产品 Agent。
+
+模型准确率、延迟或成本须以实际评测和运行数据为准，不填写未经测量的数字。

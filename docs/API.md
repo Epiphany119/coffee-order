@@ -160,16 +160,18 @@
 | 17.5 | [抢购秒杀资格](#175-抢购秒杀资格) | `POST /api/flash-sales/{activityId}/claim` |
 | 17.6 | [用户通知](#176-用户通知) | `GET /api/notifications/user/{userId}` |
 
-### 十八、店长增长 Agent（4 个）
+### 十八、店长增长 Agent 与运行运维接口
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
 | 18.1 | [Agent 经营诊断](#181-agent-经营诊断) | `POST /api/merchant/{merchantId}/growth-agent/analyze` |
-| 18.2 | [创建待确认方案](#182-创建待确认方案) | `POST /api/merchant/{merchantId}/growth-agent/actions` |
-| 18.3 | [确认执行方案](#183-确认执行方案) | `POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute` |
+| 18.2 | [确认服务端提案](#182-确认服务端提案) | `POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/confirm` |
+| 18.3 | [执行已确认提案](#183-执行已确认提案) | `POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute` |
 | 18.4 | [查询 Agent 审计记录](#184-查询-agent-审计记录) | `GET /api/merchant/{merchantId}/growth-agent/actions` |
+| 18.5 | [店长知识库与指标](#185-店长知识库与指标) | `GET /api/merchant/{merchantId}/growth-agent/metrics` |
+| 18.6 | [Agent 运行审计与评测](#186-agent-运行审计与评测非产品对话-agent) | `GET /api/agent-operations/runs/{runId}` |
 
-### 十九、顾客侧多智能体（3 个）
+### 十九、顾客 Agent 统一入口与点单子流程（3 个接口）
 
 | # | 接口 | 方法与路径 |
 |---|---|---|
@@ -2392,13 +2394,13 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 ## 十八、店长增长 Agent
 
-> 响应格式：**A**。所有接口需要商家 Bearer Token，且 `merchantId` 必须与 Token 身份一致。执行营销动作前必须先创建待确认方案，再调用执行接口，不能由 Agent 直接写入业务数据。
+> 所有店长接口需要商家 Bearer Token，且 merchantId 必须与 Token 身份一致。分析接口会在服务端保存 DRAFT 提案；店长确认后，执行接口从数据库读取该版本，不能由客户端提交提案正文。
 
 ### 18.1 Agent 经营诊断
 
 **`POST /api/merchant/{merchantId}/growth-agent/analyze`**
 
-作用：读取今日订单、已完成营业额、履约队列和秒杀库存，返回诊断证据以及一个可控的营销建议；该接口只读，不会发券或触达用户。
+作用：读取今日订单、已完成营业额、履约队列、秒杀库存及本店授权知识，返回诊断证据和受策略约束的建议，并在服务端保存一条有期限的 DRAFT 提案；不会发券或触达用户。经营数据查询失败返回服务不可用，不用零值伪装成功。
 
 请求体：
 
@@ -2413,7 +2415,8 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 | answer | Agent 对本次工具调用的说明 |
 | signals | 经营信号数组（订单、营业额、履约、秒杀库存） |
 | snapshot | 原始统计快照：`todayOrders`、`todayRevenue`、`pendingOrders`、`weekRevenue`、`flashSaleStock` |
-| suggestedAction | 待确认动作：`actionType`、`title`、`summary`、`reason`、`proposal` |
+| suggestedAction | 服务端生成的待确认动作：`actionType`、`title`、`summary`、`reason`、`proposal` |
+| actionId / proposalVersion / proposalHash | 服务端提案记录 ID、版本和完整性校验值；确认请求只提交 ID 与版本 |
 | toolCalls | 本次诊断实际调用的只读工具、状态、耗时和返回条数 |
 | executionPlan | Agent 展示给店长的受控执行步骤 |
 | requiresConfirmation | 是否需要店长确认后才能进入写操作链路 |
@@ -2421,95 +2424,54 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 `actionType` 当前只允许 `NOTIFY_MEMBERS`（站内通知）和 `CREATE_VOUCHERS`（发券并通知）。规则引擎可替换为 LLM Function Calling，但 LLM 只能选择受控工具，不能获得直接写库权限。
 
-### 18.2 创建待确认方案
+### 18.2 确认服务端提案
 
-**`POST /api/merchant/{merchantId}/growth-agent/actions`**
+分析接口已在服务端创建并保存 DRAFT 提案，响应包含 `actionId`、`proposalVersion` 和 `proposalHash`。客户端不得提交提案正文。
 
-作用：将 Agent 建议写入 `growth_agent_action`，状态为 `PENDING`。必须由商家进一步确认后才执行。
+**`POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/confirm`**
 
-请求体：
+请求体只包含 `{ "storeId": 5, "proposalVersion": 1 }`。服务端核对当前商家、门店、状态、版本、过期时间和数据库中的提案哈希，再将状态改为 `PENDING` 并记录 `confirmed_at`。重复确认幂等返回，不会覆盖提案内容。
+### 18.3 执行已确认提案
 
-```json
-{
-  "actionType": "CREATE_VOUCHERS",
-  "title": "老客唤醒 · 满48减8限时券",
-  "proposal": {
-    "discount": 8,
-    "minimum": 48,
-    "targetDays": 30,
-    "expiresDays": 3,
-    "message": "FIKA 为你留了一张满 ¥48 减 ¥8 的限时心意券，3 天内可用。"
-  }
-}
-```
+**`POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute?storeId=5`**
 
-### 18.3 确认执行方案
-
-**`POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute`**
-
-作用：以状态条件更新锁定 `PENDING` 方案并执行。`NOTIFY_MEMBERS` 向近期开单用户写入站内通知；`CREATE_VOUCHERS` 发放卡券并写入通知。重复执行返回 `409`。
-
-成功响应：`data.affectedUsers` 为本次实际触达的用户数，执行状态会写入审计表。
-
+该接口不接受客户端提案正文，只从当前商家及门店下读取已确认的数据库记录，经动作白名单和 Outbox 执行。重复请求不会重复触达；正在执行时返回当前状态，失败动作按既有重试策略恢复。成功响应包含 `affectedUsers` 和动作状态。
 ### 18.4 查询 Agent 审计记录
 
 **`GET /api/merchant/{merchantId}/growth-agent/actions?limit=20`**
 
 作用：查询最近的 Agent 方案与执行记录。`limit` 范围 1-50，默认 20。
 
-成功响应：`data` 为数组，包含 `id`、`actionType`、`title`、`status`、`createdAt`、`executedAt`。
+成功响应：`data` 为数组，包含 `id`、`analysisId`、`proposalVersion`、`actionType`、`title`、`status`、`createdAt`、`expiresAt`、`executedAt`。
 
 > 使用 Agent 运行审计前请先执行 [V20260906_17_agent_observability.sql](../sql/migrations/V20260906_17_agent_observability.sql) 和 [V20260908_24_agent_evaluation_observability.sql](../sql/migrations/V20260908_24_agent_evaluation_observability.sql)。
 
-### 18.5 统一只读 Agent 与运行轨迹
+### 18.5 店长知识库与指标
 
-**`POST /api/business-agent/ask`**
+**`POST /api/merchant/{merchantId}/growth-agent/knowledge/documents`**
 
-作用：根据 `scene` 在顾客或商家范围内生成结构化计划，并执行当前场景允许的只读工具。模型输出会经过工具白名单、场景和只读属性校验；该接口不会直接下单、扣款、发券或修改库存。
+商家只能维护自己门店的文档。请求字段包括 `storeId`、`title`、`content`、`source` 和 `visibility`；可见范围只能是 `MERCHANT_INTERNAL` 或 `CUSTOMER_PUBLIC`，省略时默认为内部。顾客检索只返回顾客公开文档。
 
-请求体：
+**`POST /api/merchant/{merchantId}/growth-agent/knowledge/bootstrap/menu`**
 
-```json
-{
-  "scene": "merchant",
-  "storeId": 5,
-  "message": "最近复购下降，但今天待制作订单很多，应该怎么做？"
-}
-```
+为该商家门店排队同步菜单知识，菜单文档设为 `CUSTOMER_PUBLIC`。
 
-成功响应的 `data` 包含 `runId`、`structuredPlan`、`tools`、`answer` 和 `engine`。`structuredPlan.steps` 中的每一步包含 `tool`、受限 `arguments` 和 `purpose`；`tools` 中包含 `callId`、`latencyMs`、`readOnly`、`success` 和返回数据。
+**`GET /api/merchant/{merchantId}/growth-agent/metrics?storeId=5&days=7`**
 
-**`POST /api/business-agent/stream`**
+返回指定门店的 AI 运行、降级、时延、Token、转化、知识来源覆盖、模拟支付完成和评测指标；商家数据查询异常会返回服务不可用，不会以零值代替。
 
-以 SSE 推送 `status`、`plan`、`tools`、`delta` 和 `done` 事件；`plan` 与 `done` 事件均携带 `runId`。
+### 18.6 Agent 运行审计与评测（非产品对话 Agent）
 
-**`GET /api/business-agent/runs/{runId}`**
+Agent 运维接口统一位于 `/api/agent-operations`，不承担顾客或店长聊天，也不构成第三个产品 Agent：
 
-仅返回当前身份自己的 Agent 运行轨迹。执行 [V20260906_17_agent_observability.sql](../sql/migrations/V20260906_17_agent_observability.sql) 和 [V20260908_24_agent_evaluation_observability.sql](../sql/migrations/V20260908_24_agent_evaluation_observability.sql) 后，响应会包含运行状态、降级原因、模型用量/成本、最终下单结果和按顺序排列的工具调用记录；未执行迁移时只提示审计不可用，不影响只读 Agent 降级回答。
+- `GET /api/agent-operations/runs/{runId}`：只读当前身份自己的运行轨迹；
+- `GET /api/agent-operations/evaluations/cases`：读取服务端固定评测集；
+- `POST /api/agent-operations/evaluations/run`：执行单个样例；
+- `POST /api/agent-operations/evaluations/run-all`：按当前身份执行对应 customer 或 merchant 样例；
+- `GET /api/agent-operations/evaluations/summary`：读取当前身份评测汇总。
 
-**`GET /api/business-agent/evaluations/cases`**
-
-返回固定的 Agent 安全评测样例。覆盖错误门店、缺货、价格不一致、预算超限、重复确认、越权查询和 Prompt Injection。
-
-**`POST /api/business-agent/evaluations/run`**
-
-执行固定评测样例并将断言结果写入 `agent_eval_result`。请求体示例：
-
-```json
-{"caseId":"customer-safety-prompt-injection","storeId":5}
-```
-
-响应会返回 `passed`、实际工具列表、被调用的禁用工具、确认断言、预期拒绝断言、`runId` 和本次耗时。该接口只复用只读 Business Agent，不会创建订单或付款。
-
-**`POST /api/business-agent/evaluations/run-all`**
-
-按当前身份执行评测集中对应场景的全部样例（顾客身份执行 customer 样例，商家身份执行 merchant 样例），每条样例独立写入 `agent_eval_result`。请求体可传 `{ "storeId": 5 }`；商家想验证“未授权门店”时，应传一个不属于当前商家的门店 ID。
-
-**`GET /api/business-agent/evaluations/summary`**
-
-返回当前身份已执行评测的累计通过数、工具选择通过数、禁用工具拦截数、确认断言通过数、预期拒绝通过数和平均耗时。
-
-## 十九、顾客侧多智能体
+评测会调用真实的顾客 Supervisor 或店长分析服务；店长评测不会持久化提案或执行营销动作。评测断言 `expectedRoute`、`expectedActionType`、确认要求和拒绝结果，不再断言已删除的通用工具注册表。
+## 十九、顾客 Agent 统一入口与点单子流程
 
 > 响应格式：**A**。该接口只输出当前菜单中的受控商品方案，绝不直接创建订单；顾客确认后由前端携带 `planToken` 和 `runId` 调用 `POST /api/customer-agent/plans/confirm`，因此身份校验、订单幂等、库存、服务端计价和支付流程保持不变。
 
@@ -2857,8 +2819,8 @@ YYMMDD-{商家6位}-{类目3位}-{顺序3位}
 
 ### 18.9 Agent business metrics (P2)
 
-**`GET /api/business-agent/metrics?storeId=5&days=7`**
+**`GET /api/merchant/{merchantId}/growth-agent/metrics?storeId=5&days=7`**
 
-Merchant-only, store-scoped read API. The response includes run success and fallback rates, average latency, input/output/total tokens, plan adoption, order conversion, model cost per successful order, knowledge source coverage, mock payment completion/refund rates, and evaluation pass rate. `days` is limited to 1-90.
+商家专属、门店范围的只读接口。响应包含运行成功和降级率、平均耗时、Token、方案采纳、订单转化、每个成功订单成本、知识来源覆盖、模拟支付完成/退款率和评测通过率。`days` 限制为 1-90。
 
 Run the P2 migration `sql/migrations/V20260927_26_ai_p2_observability.sql` before using version fields and this endpoint. Production evaluation is disabled by default through `COFFEE_AI_EVALUATION_ENABLED=false`.

@@ -337,9 +337,7 @@ public class CustomerSupervisorAgentOrchestrator {
     }
 
     private void requireCustomer(RequestIdentity identity) {
-        if (identity == null || (identity.kind() != RequestIdentity.Kind.USER && identity.kind() != RequestIdentity.Kind.GUEST)) {
-            throw new ServiceException(403, "FIKA 顾客助手仅支持顾客或游客身份");
-        }
+        AgentSceneAuthorization.requireCustomer(identity);
     }
 
     private Long userId(RequestIdentity identity) {

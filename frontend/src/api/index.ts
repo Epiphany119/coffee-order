@@ -58,8 +58,7 @@ import type {
   , VirtualCallResponse
   , UserNotification
   , MerchantProfileUpdateRequest
-  , BusinessAgentAnswer
-  , BusinessAgentMetrics
+  , GrowthAgentMetrics
   , CustomerAssistantResponse
 } from './types'
 
@@ -262,8 +261,6 @@ function isMerchantApiPath(path: string): boolean {
   return path.startsWith('/merchant/')
     || path === '/store'
     || path.startsWith('/store/')
-    || path.startsWith('/business-agent/knowledge')
-    || path.startsWith('/business-agent/metrics')
     || path.startsWith('/seat/list')
     || path === '/orders'
     || (path.startsWith('/orders/') && path.includes('/action'))
@@ -300,15 +297,7 @@ request.interceptors.request.use(async (config) => {
   const customerAgentRequest = path.startsWith('/customer-agent/')
   const riderRequest = isDeliveryRiderApiPath(path)
   // 商家端订单、座位、店铺接口也必须使用商家令牌；用户与商家同时登录时不能误带用户令牌。
-  let businessAgentMerchantRequest = false
-  if (path === '/business-agent/ask') {
-    try {
-      const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data
-      businessAgentMerchantRequest = body?.scene === 'merchant'
-    } catch {}
-  }
-  const merchantRequest = !customerAgentRequest && !riderRequest
-    && (isMerchantApiPath(path) || businessAgentMerchantRequest)
+  const merchantRequest = !customerAgentRequest && !riderRequest && isMerchantApiPath(path)
   const guestRequest = isGuestApiRequest(path, config)
   // 显式游客请求优先使用游客 token；其余请求保持用户、商家、配送员的域隔离。
   const guestToken = guestRequest ? readGuestAccessToken() : null
@@ -350,16 +339,9 @@ request.interceptors.response.use(
         if (authDomain === 'guest') {
           sessionStorage.removeItem('fikaGuestToken')
         } else {
-          let merchantBusinessAgent = false
-          if (path === '/business-agent/ask') {
-            try {
-              const body = typeof err.config?.data === 'string' ? JSON.parse(err.config.data) : err.config?.data
-              merchantBusinessAgent = body?.scene === 'merchant'
-            } catch {}
-          }
           const sessionDomain = authDomain || (isDeliveryRiderApiPath(path)
             ? 'rider'
-            : isMerchantApiPath(path) || merchantBusinessAgent ? 'merchant' : 'user')
+            : isMerchantApiPath(path) ? 'merchant' : 'user')
           if (sessionDomain === 'rider') {
             localStorage.removeItem('fikaRider')
           } else if (sessionDomain === 'merchant') {
@@ -473,20 +455,19 @@ export const menuApi = {
 }
 
 /** 商家端 AI 知识库：菜单事实同步与人工维护的运营规则都会写入 MySQL，并同步向量到 Milvus。 */
-export const businessAgentApi = {
-  ask: (data: { scene: 'customer' | 'merchant'; storeId?: number | null; sessionId?: string; message: string }) =>
-    request.post<any, BusinessAgentAnswer>('/business-agent/ask', data),
+export const agentOperationsApi = {
   readRun: (runId: string) =>
-    request.get<any, Record<string, unknown>>(`/business-agent/runs/${runId}`),
-  metrics: (storeId: number, days = 7) =>
-    request.get<any, BusinessAgentMetrics>('/business-agent/metrics', { params: { storeId, days } }),
-  syncMenuKnowledge: (storeId: number) =>
-    request.post<any, { accepted: boolean; count: number; message: string }>('/business-agent/knowledge/bootstrap/menu', { storeId }),
-  createKnowledge: (data: { storeId: number; title: string; content: string; source: string }) =>
-    request.post<any, { accepted: boolean; message: string }>('/business-agent/knowledge/documents', data)
+    request.get<any, Record<string, unknown>>('/agent-operations/runs/' + runId),
+  evaluationCases: () =>
+    request.get<any, Record<string, unknown>[]>('/agent-operations/evaluations/cases'),
+  runEvaluation: (caseId: string, storeId?: number, sessionId?: string) =>
+    request.post<any, Record<string, unknown>>('/agent-operations/evaluations/run', { caseId, storeId, sessionId }),
+  runAllEvaluations: (storeId?: number) =>
+    request.post<any, Record<string, unknown>[]>('/agent-operations/evaluations/run-all', { storeId }),
+  evaluationSummary: () =>
+    request.get<any, Record<string, unknown>>('/agent-operations/evaluations/summary')
 }
 
-/** 用户侧检索与个性化推荐（由服务端按当前身份和店铺计算） */
 export const discoveryApi = {
   search: (storeId: number, keyword: string, limit = 12) =>
     request.get<any, Product[]>('/discovery/search', { params: { storeId, keyword, limit } }),
@@ -890,14 +871,27 @@ export const merchantApi = {
     request.get<any, MerchantDashboard>(`/merchant/${merchantId}/dashboard`, { params: { range } }),
 
   /** 店长增长 Agent：受控数据分析、待审批营销动作与审计记录。 */
-  growthAgentAnalyze: (merchantId: number, message: string) =>
-    request.post<any, GrowthAgentAnalysis>(`/merchant/${merchantId}/growth-agent/analyze`, { message }),
-  growthAgentCreateAction: (merchantId: number, data: { analysisId?: string; proposalVersion?: number; actionType: string; title: string; proposal: Record<string, unknown> }) =>
-    request.post<any, { id: number; status: string; message: string }>(`/merchant/${merchantId}/growth-agent/actions`, data),
-  growthAgentExecuteAction: (merchantId: number, actionId: number) =>
-    request.post<any, { id: number; status: string; affectedUsers: number; message: string }>(`/merchant/${merchantId}/growth-agent/actions/${actionId}/execute`),
-  growthAgentActions: (merchantId: number) =>
-    request.get<any, GrowthAgentAction[]>(`/merchant/${merchantId}/growth-agent/actions`)
+  growthAgentAnalyze: (merchantId: number, message: string, storeId?: number) =>
+    request.post<any, GrowthAgentAnalysis>('/merchant/' + merchantId + '/growth-agent/analyze', { message, storeId }),
+  growthAgentConfirmAction: (merchantId: number, actionId: number, proposalVersion: number, storeId?: number) =>
+    request.post<any, { id: number; status: string; message: string }>(
+      '/merchant/' + merchantId + '/growth-agent/actions/' + actionId + '/confirm', { storeId, proposalVersion }),
+  growthAgentExecuteAction: (merchantId: number, actionId: number, storeId?: number) =>
+    request.post<any, { id: number; status: string; affectedUsers?: number; message: string }>(
+      '/merchant/' + merchantId + '/growth-agent/actions/' + actionId + '/execute', undefined, { params: { storeId } }),
+  growthAgentActions: (merchantId: number, storeId?: number) =>
+    request.get<any, GrowthAgentAction[]>('/merchant/' + merchantId + '/growth-agent/actions', { params: { storeId } }),
+  growthAgentMetrics: (merchantId: number, storeId?: number, days = 7) =>
+    request.get<any, GrowthAgentMetrics>('/merchant/' + merchantId + '/growth-agent/metrics', { params: { storeId, days } }),
+  growthAgentSyncMenuKnowledge: (merchantId: number, storeId: number) =>
+    request.post<any, { accepted: boolean; message: string; storeId: number }>(
+      '/merchant/' + merchantId + '/growth-agent/knowledge/bootstrap/menu', { storeId }),
+  growthAgentCreateKnowledge: (merchantId: number, data: {
+    storeId: number; title: string; content: string; source: string;
+    visibility: 'MERCHANT_INTERNAL' | 'CUSTOMER_PUBLIC'
+  }) =>
+    request.post<any, { accepted: boolean; visibility: string }>(
+      '/merchant/' + merchantId + '/growth-agent/knowledge/documents', data)
 }
 
 export const storeApi = {

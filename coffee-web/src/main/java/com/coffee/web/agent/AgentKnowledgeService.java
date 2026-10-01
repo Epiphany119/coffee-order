@@ -1,6 +1,7 @@
 package com.coffee.web.agent;
 
 import com.coffee.common.ai.ZhipuEmbeddingClient;
+import com.coffee.common.core.exception.ServiceException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -37,28 +38,40 @@ public class AgentKnowledgeService {
     }
 
     public List<KnowledgeHit> retrieve(String query, Long storeId, int limit) {
-        String normalized = query == null ? "" : query.trim();
-        if (normalized.isBlank()) return List.of();
-        List<KnowledgeHit> semanticHits = embeddingClient.embed(List.of(normalized))
-                .flatMap(vector -> vectorStore.search(vector.get(0), storeId, limit))
-                .map(hits -> loadSemanticHits(hits, storeId))
-                .orElse(List.of());
-        if (!semanticHits.isEmpty()) return semanticHits;
-        return keywordRetrieve(normalized, storeId, limit);
+        return retrieveScoped(query, storeId, limit, false);
     }
 
-    private List<KnowledgeHit> keywordRetrieve(String normalized, Long storeId, int limit) {
+    public List<KnowledgeHit> retrieveForMerchant(String query, Long storeId, int limit) {
+        return retrieveScoped(query, storeId, limit, true);
+    }
+
+    private List<KnowledgeHit> retrieveScoped(String query, Long storeId, int limit, boolean merchant) {
+        String normalized = query == null ? "" : query.trim();
+        if (normalized.isBlank()) return List.of();
+        int candidateLimit = merchant ? Math.max(limit, Math.min(limit * 4, 40)) : limit;
+        List<KnowledgeHit> semanticHits = embeddingClient.embed(List.of(normalized))
+                .flatMap(vector -> vectorStore.search(vector.get(0), storeId, candidateLimit))
+                .map(hits -> loadSemanticHits(hits, storeId, limit, merchant))
+                .orElse(List.of());
+        if (!semanticHits.isEmpty()) return semanticHits;
+        return keywordRetrieve(normalized, storeId, limit, merchant);
+    }
+
+    private List<KnowledgeHit> keywordRetrieve(String normalized, Long storeId, int limit, boolean merchant) {
         List<String> terms = tokenize(normalized);
+        String scope = merchant
+                ? "store_id = ? AND visibility IN ('CUSTOMER_PUBLIC','MERCHANT_INTERNAL')"
+                : "visibility = 'CUSTOMER_PUBLIC' AND (store_id IS NULL OR store_id = ?)";
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT id, store_id, title, content, source, updated_at, document_version, embedding_status
                 FROM agent_knowledge_document
-                WHERE enabled = 1 AND (store_id IS NULL OR store_id = ?)
+                WHERE enabled = 1 AND %s
                 ORDER BY updated_at DESC LIMIT 200
-                """, storeId);
+                """.formatted(scope), storeId);
         return rows.stream()
                 .map(row -> new KnowledgeHit(
                         ((Number) row.get("id")).longValue(),
-                        (Long) row.get("store_id"),
+                        row.get("store_id") == null ? null : ((Number) row.get("store_id")).longValue(),
                         String.valueOf(row.get("title")),
                         String.valueOf(row.get("content")),
                         String.valueOf(row.get("source")),
@@ -73,7 +86,11 @@ public class AgentKnowledgeService {
 
     /** 原文先写 MySQL，再以文档 ID 增量同步到 Milvus。 */
     public void upsert(Long storeId, String title, String content, String source) {
-        upsertBatch(storeId, List.of(new KnowledgeDocument(title, content, source)));
+        upsert(storeId, title, content, source, "MERCHANT_INTERNAL");
+    }
+
+    public void upsert(Long storeId, String title, String content, String source, String visibility) {
+        upsertBatch(storeId, List.of(new KnowledgeDocument(title, content, source, normalizeVisibility(visibility))));
     }
 
     /** 单次请求最多 64 条，适合菜单等结构化知识初始化。 */
@@ -83,20 +100,21 @@ public class AgentKnowledgeService {
                 .filter(document -> document != null && document.title() != null && !document.title().isBlank()
                         && document.content() != null && !document.content().isBlank())
                 .map(document -> new KnowledgeDocument(document.title().trim(), document.content().trim(),
-                        document.source() == null || document.source().isBlank() ? "manual" : document.source().trim()))
+                        document.source() == null || document.source().isBlank() ? "manual" : document.source().trim(),
+                        normalizeVisibility(document.visibility())))
                 .limit(64).toList();
         if (valid.isEmpty()) return;
         LocalDateTime now = LocalDateTime.now();
         for (KnowledgeDocument document : valid) {
             jdbc.update("""
-                    INSERT INTO agent_knowledge_document(store_id,title,content,source,enabled,updated_at,content_hash,document_version,embedding_status,embedding_error)
-                    VALUES (?,?,?,?,1,?,?,1,'PENDING',NULL)
-                    ON DUPLICATE KEY UPDATE content=VALUES(content),source=VALUES(source),enabled=1,updated_at=VALUES(updated_at),
+                    INSERT INTO agent_knowledge_document(store_id,title,content,source,visibility,enabled,updated_at,content_hash,document_version,embedding_status,embedding_error)
+                    VALUES (?,?,?,?,?,1,?,?,1,'PENDING',NULL)
+                    ON DUPLICATE KEY UPDATE content=VALUES(content),source=VALUES(source),visibility=VALUES(visibility),enabled=1,updated_at=VALUES(updated_at),
                         document_version=IF(NOT (content_hash <=> VALUES(content_hash)), document_version+1, document_version),
                         embedding_status=IF(NOT (content_hash <=> VALUES(content_hash)), 'PENDING', embedding_status),
                         embedding_error=IF(NOT (content_hash <=> VALUES(content_hash)), NULL, embedding_error),
                         content_hash=VALUES(content_hash)
-                    """, storeId, document.title(), document.content(), document.source(), now,
+                    """, storeId, document.title(), document.content(), document.source(), document.visibility(), now,
                     sha256(document.title() + "\n" + document.content()));
         }
         List<Long> ids = valid.stream().map(document -> jdbc.queryForObject("""
@@ -119,27 +137,33 @@ public class AgentKnowledgeService {
                 }, () -> { updateEmbeddingStatus(ids, "PENDING", "embedding unavailable"); embeddingSync.enqueue(ids); });
     }
 
-    private List<KnowledgeHit> loadSemanticHits(List<MilvusKnowledgeVectorStore.VectorHit> vectorHits, Long storeId) {
+    private List<KnowledgeHit> loadSemanticHits(List<MilvusKnowledgeVectorStore.VectorHit> vectorHits,
+                                                Long storeId, int limit, boolean merchant) {
         if (vectorHits.isEmpty()) return List.of();
         Map<Long, MilvusKnowledgeVectorStore.VectorHit> ranks = vectorHits.stream()
                 .collect(java.util.stream.Collectors.toMap(MilvusKnowledgeVectorStore.VectorHit::documentId, hit -> hit));
         String placeholders = String.join(",", java.util.Collections.nCopies(ranks.size(), "?"));
         List<Object> args = new ArrayList<>(ranks.keySet());
         args.add(storeId);
+        String scope = merchant
+                ? "store_id = ? AND visibility IN ('CUSTOMER_PUBLIC','MERCHANT_INTERNAL')"
+                : "visibility = 'CUSTOMER_PUBLIC' AND (store_id IS NULL OR store_id = ?)";
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT id, store_id, title, content, source, updated_at, document_version, embedding_status
                 FROM agent_knowledge_document
-                WHERE enabled = 1 AND id IN (%s) AND (store_id IS NULL OR store_id = ?)
-                """.formatted(placeholders), args.toArray());
+                WHERE enabled = 1 AND id IN (%s) AND %s
+                """.formatted(placeholders, scope), args.toArray());
         return rows.stream().map(row -> {
                     long id = ((Number) row.get("id")).longValue();
-                    return new KnowledgeHit(id, (Long) row.get("store_id"), String.valueOf(row.get("title")),
-                            String.valueOf(row.get("content")), String.valueOf(row.get("source")),
+                    return new KnowledgeHit(id,
+                            row.get("store_id") == null ? null : ((Number) row.get("store_id")).longValue(),
+                            String.valueOf(row.get("title")), String.valueOf(row.get("content")),
+                            String.valueOf(row.get("source")),
                             row.get("updated_at") == null ? null : String.valueOf(row.get("updated_at")),
                             number(row.get("document_version")), String.valueOf(row.get("embedding_status")),
                             Math.round(ranks.get(id).score() * 100));
                 }).sorted(Comparator.comparingInt(KnowledgeHit::score).reversed())
-                .limit(Math.max(1, Math.min(vectorHits.size(), 10))).toList();
+                .limit(Math.max(1, Math.min(limit, 10))).toList();
     }
 
     private int score(Map<String, Object> row, List<String> terms) {
@@ -165,7 +189,19 @@ public class AgentKnowledgeService {
     public record KnowledgeHit(long id, Long storeId, String title, String content,
                                String source, String updatedAt, long documentVersion, String embeddingStatus, int score) { }
 
-    public record KnowledgeDocument(String title, String content, String source) { }
+    public record KnowledgeDocument(String title, String content, String source, String visibility) {
+        public KnowledgeDocument(String title, String content, String source) {
+            this(title, content, source, "CUSTOMER_PUBLIC");
+        }
+    }
+
+    private String normalizeVisibility(String visibility) {
+        String value = visibility == null || visibility.isBlank() ? "MERCHANT_INTERNAL" : visibility.trim().toUpperCase(Locale.ROOT);
+        if (!value.equals("CUSTOMER_PUBLIC") && !value.equals("MERCHANT_INTERNAL")) {
+            throw new ServiceException(400, "涓嶆敮鎸佺殑鐭ヨ瘑鍙鑼冨洿");
+        }
+        return value;
+    }
 
     void updateEmbeddingStatus(List<Long> ids, String status, String error) {
         if (ids == null || ids.isEmpty()) return;

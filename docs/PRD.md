@@ -536,7 +536,7 @@ flowchart TB
 | 支付 | POST /api/pay/pay、GET /api/pay/{paymentNo} |
 | 外卖地址 | GET/POST/PUT/DELETE /api/delivery/addresses |
 | 顾客 Agent | POST /api/customer-agent/plan、POST /api/customer-agent/plans/confirm |
-| 统一 Agent | POST /api/business-agent/ask、POST /api/business-agent/stream、GET /api/business-agent/runs/{runId} |
+| 顾客统一 Agent | POST /api/customer-agent/assistant；点单子流程 POST /api/customer-agent/plan、POST /api/customer-agent/plans/confirm |
 
 ### 11.2 商家和配送员关键接口
 
@@ -545,7 +545,7 @@ flowchart TB
 | 商家认证和入驻 | POST /api/merchant/register（传 storeId 入驻现有店铺；不传则创建商家档案）、POST /api/merchant/login |
 | 商家菜单 | GET/POST/PUT /api/store/{storeId}/menu、POST /api/store/{storeId}/menu/image |
 | 商家订单 | GET /api/orders?storeId={storeId}、POST /api/orders/{id}/action |
-| 增长 Agent | POST /api/merchant/{merchantId}/growth-agent/analyze、POST /api/merchant/{merchantId}/growth-agent/actions、POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute |
+| 店长增长 Agent | POST /api/merchant/{merchantId}/growth-agent/analyze、POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/confirm、POST /api/merchant/{merchantId}/growth-agent/actions/{actionId}/execute |
 | 骑手订单 | GET /api/delivery/rider/orders/available、POST /api/delivery/rider/orders/{id}/claim、POST /api/delivery/rider/orders/{id}/action |
 | 骑手业绩 | GET /api/delivery/rider/performance |
 

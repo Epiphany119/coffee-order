@@ -27,9 +27,11 @@ Embedding 维度必须与 Milvus collection 的向量维度完全一致。调整
 
 ## RAG 流程
 
-1. 管理端调用 `POST /api/business-agent/knowledge/documents`，原始文档先写入 MySQL。
+1. 商家调用 `POST /api/merchant/{merchantId}/growth-agent/knowledge/documents`，原始文档和可见范围先写入 MySQL。
 2. Spring Boot 调用智谱 `embedding-3` 生成向量，并以 MySQL 文档 ID 写入 Milvus。
-3. 用户提问时，问题会被向量化，Milvus 用 COSINE 检索 Top-K；服务端再回查 MySQL 原文，保证内容和权限均以业务库为准。
-4. Milvus、Embedding 服务或网络异常时，自动使用 MySQL 关键词检索，点单和 Agent 主流程不会中断。
+3. 顾客检索只回查 `CUSTOMER_PUBLIC` 且属于全局或当前门店的文档；店长检索只回查其所属门店的公开与内部文档。Milvus 候选 ID 不作为授权依据，最终内容与权限均以 MySQL 为准。
+4. Milvus、Embedding 服务或网络异常时，自动使用 MySQL 关键词检索，并执行相同的可见范围过滤。
 
 > 不要把 API Key 写入 `application.yml` 或提交到 Git。生产环境应设置 `MILVUS_TOKEN` 并启用 Milvus 鉴权。
+
+新建知识默认为 `MERCHANT_INTERNAL`；只有明确标注 `CUSTOMER_PUBLIC` 的文档会进入顾客回答。执行 `sql/migrations/V20261001_27_ai_agent_consolidation.sql` 后可使用该字段。

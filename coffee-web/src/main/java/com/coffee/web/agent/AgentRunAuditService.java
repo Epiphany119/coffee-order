@@ -68,14 +68,6 @@ public class AgentRunAuditService {
         return runId;
     }
 
-    public void recordPlan(String runId, AgentPlan plan, String engine) {
-        recordPlan(runId, plan, engine, null);
-    }
-
-    public void recordPlan(String runId, AgentPlan plan, String engine, String fallbackReason) {
-        recordPlanJson(runId, plan, engine, fallbackReason);
-    }
-
     /** 允许 customer-agent 记录自己的结构化方案，但不把一次性 planToken 写入审计。 */
     public void recordPlanJson(String runId, Object plan, String engine, String fallbackReason) {
         write("record plan", () -> jdbc.update(
@@ -88,13 +80,7 @@ public class AgentRunAuditService {
                 "UPDATE agent_run SET status='PLAN_READY' WHERE run_id=? AND status='RUNNING'", runId));
     }
 
-    public void recordToolCall(String runId, int sequence, BusinessAgentOrchestrator.ToolResult result) {
-        recordStep(runId, sequence, result.name(), result.readOnly(),
-                result.success() ? "SUCCEEDED" : "FAILED", result.latencyMs(), result.data().size(),
-                result.arguments(), result.note());
-    }
-
-    /** 记录不属于 BusinessAgentOrchestrator 的受控步骤，例如 customer-agent 下单。 */
+    /** 记录由顾客 Agent、店长 Agent 及其受控业务步骤产生的运行轨迹。 */
     public void recordStep(String runId, int sequence, String stepName, boolean readOnly, String status,
                            long latencyMs, int resultCount, Map<String, Object> arguments, String note) {
         write("record step", () -> insertStep(runId, sequence, stepName, readOnly, status, latencyMs,

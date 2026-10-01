@@ -116,8 +116,9 @@ public class AiRateLimitInterceptor implements HandlerInterceptor {
 
     private Limit limitFor(String path) {
         if (path == null) return null;
-        if (path.equals("/api/business-agent/ask") || path.equals("/api/business-agent/stream")) {
-            return new Limit("business", properties.getBusinessRequests());
+
+        if (path.equals("/api/customer-agent/assistant")) {
+            return new Limit("customer-assistant", properties.getCustomerPlanRequests());
         }
         if (path.equals("/api/customer-agent/plan") || path.equals("/api/customer-agent/plan/stream")) {
             return new Limit("customer-plan", properties.getCustomerPlanRequests());
@@ -125,7 +126,7 @@ public class AiRateLimitInterceptor implements HandlerInterceptor {
         if (path.equals("/api/customer-agent/plans/confirm")) {
             return new Limit("customer-confirm", properties.getCustomerConfirmRequests());
         }
-        if (path.startsWith("/api/business-agent/evaluations/")) {
+        if (path.startsWith("/api/agent-operations/evaluations/")) {
             return new Limit("evaluation", properties.getEvaluationRequests());
         }
         if (path.matches("/api/merchant/[^/]+/growth-agent/.*")) {

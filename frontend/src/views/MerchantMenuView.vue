@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { useMerchantStore } from '@/stores/merchant'
-import { businessAgentApi, storeApi } from '@/api'
+import { merchantApi, storeApi } from '@/api'
 import type { Category, Product } from '@/api/types'
 import { isTemplateStore, templateProducts } from '@/templates/merchantTemplates'
 
@@ -45,7 +45,7 @@ const formRef = ref<FormInstance>()
 const syncingKnowledge = ref(false)
 const knowledgeDialogOpen = ref(false)
 const savingKnowledge = ref(false)
-const knowledgeForm = ref({ title: '', content: '' })
+const knowledgeForm = ref({ title: '', content: '', visibility: 'MERCHANT_INTERNAL' as 'MERCHANT_INTERNAL' | 'CUSTOMER_PUBLIC' })
 
 const filtered = computed(() =>
   activeCategory.value === '全部'
@@ -234,8 +234,10 @@ async function syncMenuKnowledge() {
   if (storeId.value == null) return
   syncingKnowledge.value = true
   try {
-    const result = await businessAgentApi.syncMenuKnowledge(storeId.value)
-    ElMessage.success(result.count > 0 ? `已同步 ${result.count} 条菜单知识到 AI` : '菜单知识已是最新，无需重复同步')
+    const merchantId = mstore.merchant?.id
+    if (!merchantId) return
+    const result = await merchantApi.growthAgentSyncMenuKnowledge(merchantId, storeId.value)
+    ElMessage.success(result.accepted ? '菜单知识同步已进入队列' : '菜单知识同步未能进入队列')
   } catch (e: any) {
     ElMessage.error(e.message || '菜单知识同步失败，请检查后端服务')
   } finally {
@@ -244,7 +246,7 @@ async function syncMenuKnowledge() {
 }
 
 function openKnowledgeDialog() {
-  knowledgeForm.value = { title: '', content: '' }
+  knowledgeForm.value = { title: '', content: '', visibility: 'MERCHANT_INTERNAL' }
   knowledgeDialogOpen.value = true
 }
 
@@ -258,7 +260,12 @@ async function saveKnowledge() {
   }
   savingKnowledge.value = true
   try {
-    await businessAgentApi.createKnowledge({ storeId: storeId.value, title, content, source: 'merchant-operation' })
+    const merchantId = mstore.merchant?.id
+    if (!merchantId) return
+    await merchantApi.growthAgentCreateKnowledge(merchantId, {
+      storeId: storeId.value, title, content, source: 'merchant-operation',
+      visibility: knowledgeForm.value.visibility
+    })
     knowledgeDialogOpen.value = false
     ElMessage.success('AI 业务知识已保存并同步到知识库')
   } catch (e: any) {
@@ -483,6 +490,12 @@ function pickImage(e: Event) {
       <el-form label-width="72px">
         <el-form-item label="知识标题" required>
           <el-input v-model="knowledgeForm.title" maxlength="80" show-word-limit placeholder="如：陆家嘴店午间套餐规则" />
+        </el-form-item>
+        <el-form-item label="顾客可见范围">
+          <el-select v-model="knowledgeForm.visibility">
+            <el-option label="仅商家内部可见" value="MERCHANT_INTERNAL" />
+            <el-option label="顾客可见（已确认公开）" value="CUSTOMER_PUBLIC" />
+          </el-select>
         </el-form-item>
         <el-form-item label="具体内容" required>
           <el-input v-model="knowledgeForm.content" type="textarea" :rows="6" maxlength="1000" show-word-limit placeholder="如：工作日 11:00 至 14:00，汉堡与薯条可优先作为组合推荐；实际优惠以结算页为准。" />
