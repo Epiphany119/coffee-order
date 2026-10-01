@@ -153,10 +153,12 @@ coffee:
       evaluation-requests: ${COFFEE_AI_RATE_LIMIT_EVALUATION_REQUESTS:5}
       local-max-entries: ${COFFEE_AI_RATE_LIMIT_LOCAL_MAX_ENTRIES:10000}
     observability:
-      # 记录模型调用次数和字符估算 token；成本单价可按智谱控制台配置，单位为每 1K token。
+      # 优先记录供应商 usage；供应商未返回时才使用估算并标记 estimated。
       input-cost-per-1k: ${COFFEE_AI_INPUT_COST_PER_1K:0}
       output-cost-per-1k: ${COFFEE_AI_OUTPUT_COST_PER_1K:0}
       cost-currency: ${COFFEE_AI_COST_CURRENCY:CNY}
+      # 开发环境可降级；生产 profile 默认 fail-closed，避免关键审计静默丢失。
+      audit-fail-closed: ${COFFEE_AI_AUDIT_FAIL_CLOSED:false}
     versioning:
       prompt-version: ${COFFEE_AI_PROMPT_VERSION:v1}
       model-version: ${COFFEE_AI_MODEL_VERSION:${ZHIPU_MODEL:glm-4.5-air}}

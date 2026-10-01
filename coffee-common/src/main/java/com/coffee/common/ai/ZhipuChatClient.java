@@ -61,12 +61,15 @@ public class ZhipuChatClient {
         if (!requestPermit.tryAcquire()) return Optional.empty();
         boolean billable = false;
         String output = "";
+        int providerInputTokens = -1;
+        int providerOutputTokens = -1;
         try {
             String body = json.writeValueAsString(Map.of(
                     "model", model,
                     "temperature", 0.4,
                     // 流式响应能先建立连接再输出内容，避免模型生成完成前触发 HTTP 超时。
                     "stream", true,
+                    "stream_options", Map.of("include_usage", true),
                     // 点单/经营说明不需要长链路推理，直接生成最终文本以确保交互响应速度。
                     "thinking", Map.of("type", "disabled"),
                     "max_tokens", 160,
@@ -104,8 +107,12 @@ public class ZhipuChatClient {
                     JsonNode delta = json.readTree(data).at("/choices/0/delta/content");
                     if (delta.isTextual()) {
                         content.append(delta.asText());
-                        // 本项目只需要 1-2 句说明；拿到完整首句就释放 HTTP 连接，避免尾部生成拖慢页面。
-                        if (content.length() >= 16 && endsSentence(content)) break;
+                        // 继续消费到流末尾，以便读取供应商最后发送的 usage 统计。
+                    }
+                    JsonNode usage = json.readTree(data).path("usage");
+                    if (usage.isObject()) {
+                        providerInputTokens = usage.path("prompt_tokens").asInt(-1);
+                        providerOutputTokens = usage.path("completion_tokens").asInt(-1);
                     }
                 }
             }
@@ -118,7 +125,7 @@ public class ZhipuChatClient {
             }
             log.warn("Zhipu chat request failed: {}", e.getClass().getSimpleName());
         } finally {
-            recordUsage(systemPrompt, userPrompt, output, billable);
+            recordUsage(systemPrompt, userPrompt, output, billable, providerInputTokens, providerOutputTokens);
             requestPermit.release();
         }
         return Optional.empty();
@@ -130,6 +137,8 @@ public class ZhipuChatClient {
         if (!requestPermit.tryAcquire()) return Optional.empty();
         boolean billable = false;
         String output = "";
+        int providerInputTokens = -1;
+        int providerOutputTokens = -1;
         try {
             String body = json.writeValueAsString(Map.of(
                     "model", model,
@@ -162,6 +171,9 @@ public class ZhipuChatClient {
                 return Optional.empty();
             }
             JsonNode root = json.readTree(response.body());
+            JsonNode usage = root.path("usage");
+            providerInputTokens = usage.path("prompt_tokens").asInt(-1);
+            providerOutputTokens = usage.path("completion_tokens").asInt(-1);
             JsonNode contentNode = root.at("/choices/0/message/content");
             if (contentNode.isTextual()) {
                 output = contentNode.asText().trim();
@@ -176,7 +188,7 @@ public class ZhipuChatClient {
                 log.warn("Zhipu callJson failed: {}", e.getClass().getSimpleName(), e);
             }
         } finally {
-            recordUsage(systemPrompt, userPrompt, output, billable);
+            recordUsage(systemPrompt, userPrompt, output, billable, providerInputTokens, providerOutputTokens);
             requestPermit.release();
         }
         return Optional.empty();
@@ -229,14 +241,19 @@ public class ZhipuChatClient {
         return separator > 0 ? apiKey.substring(0, separator) : "configured";
     }
 
-    private void recordUsage(String systemPrompt, String userPrompt, String output, boolean billable) {
+    private void recordUsage(String systemPrompt, String userPrompt, String output, boolean billable,
+                             int providerInputTokens, int providerOutputTokens) {
         UsageAccumulator accumulator = usageTracking.get();
         if (accumulator != null && billable) {
-            accumulator.add(estimateTokens(systemPrompt) + estimateTokens(userPrompt), estimateTokens(output));
+            if (providerInputTokens >= 0 && providerOutputTokens >= 0) {
+                accumulator.addProvider(providerInputTokens, providerOutputTokens);
+            } else {
+                accumulator.addEstimated(estimateTokens(systemPrompt) + estimateTokens(userPrompt), estimateTokens(output));
+            }
         }
     }
 
-    /** 当前客户端未要求供应商返回 usage，因此以字符数估算；审计中会明确标注 estimated。 */
+    /** 仅在供应商没有返回 usage 时估算；正常响应优先使用供应商计量。 */
     private int estimateTokens(String value) {
         if (value == null || value.isBlank()) return 0;
         int codePoints = value.codePointCount(0, value.length());
@@ -252,20 +269,26 @@ public class ZhipuChatClient {
         private int modelCalls;
         private int inputTokens;
         private int outputTokens;
+        private boolean estimated = false;
 
         private UsageAccumulator(String model) {
             this.model = model;
         }
 
-        private void add(int input, int output) {
+        private void addProvider(int input, int output) {
             modelCalls++;
             inputTokens += input;
             outputTokens += output;
         }
 
+        private void addEstimated(int input, int output) {
+            estimated = true;
+            addProvider(input, output);
+        }
+
         private UsageSnapshot snapshot() {
             return new UsageSnapshot(model, modelCalls, inputTokens, outputTokens,
-                    inputTokens + outputTokens, true);
+                    inputTokens + outputTokens, estimated);
         }
     }
 }

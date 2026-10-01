@@ -50,6 +50,8 @@ coffee:
       redis-enabled: ${COFFEE_AI_PLAN_REGISTRY_REDIS_ENABLED:true}
     evaluation:
       enabled: ${COFFEE_AI_EVALUATION_ENABLED:false}
+    observability:
+      audit-fail-closed: ${COFFEE_AI_AUDIT_FAIL_CLOSED:true}
     versioning:
       prompt-version: ${COFFEE_AI_PROMPT_VERSION:v1}
       model-version: ${COFFEE_AI_MODEL_VERSION:${ZHIPU_MODEL:glm-4.5-air}}
