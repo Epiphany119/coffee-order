@@ -87,6 +87,7 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     @Override
+    @Transactional
     public PaymentResponse pay(String paymentNo, String channelCode) {
         Payment payment = paymentRepository.findByPaymentNo(paymentNo);
         if (payment == null) {
@@ -102,44 +103,28 @@ public class PaymentServiceImpl implements PaymentService {
             throw new ServiceException(409, "支付请求正在处理中，请稍后查询支付状态");
         }
         payment.setStatus(Payment.PaymentStatus.PROCESSING);
-        boolean paidPersisted = false;
-        try {
-            PaymentChannel channel = resolveChannel(channelCode);
-            String normalizedChannel = channelCode.trim().toUpperCase(Locale.ROOT);
-            String transactionNo = requireTransactionNo(channel.pay(payment)); // Mock 直接成功；真实渠道骨架抛 501
-            LocalDateTime paidAt = LocalDateTime.now();
-            if (!paymentStateService.markPaidIfProcessing(payment.getId(), normalizedChannel, transactionNo, paidAt)) {
-                throw new ServiceException(409, "支付状态已变化，请重新查询");
-            }
-            paidPersisted = true;
-
-            payment.setChannel(normalizedChannel);
-            payment.setTransactionNo(transactionNo);
-            payment.setStatus(Payment.PaymentStatus.PAID);
-            payment.setPaidAt(paidAt);
-            payment.setUpdatedAt(paidAt);
-            try {
-                if (!orderPaymentService.markPaid(payment.getOrderId())) {
-                    throw new ServiceException(409, "订单已取消，支付结果未进入订单，请核对支付状态");
-                }
-            } catch (RuntimeException exception) {
-                // MOCK 没有真实资金，订单并发取消时可以安全标记为已冲正；真实渠道必须接入原渠道退款 API。
-                if (Payment.Channel.MOCK.name().equals(normalizedChannel)) {
-                    paymentStateService.markRefundedIfPaid(payment.getId());
-                    payment.setStatus(Payment.PaymentStatus.REFUNDED);
-                }
-                throw exception;
-            }
-            return toResponse(payment);
-        } catch (RuntimeException exception) {
-            if (!paidPersisted && payment.getStatus() == Payment.PaymentStatus.PROCESSING) {
-                paymentStateService.resetProcessing(payment.getId());
-            }
-            throw exception;
+        PaymentChannel channel = resolveChannel(channelCode);
+        String normalizedChannel = channelCode.trim().toUpperCase(Locale.ROOT);
+        String transactionNo = requireTransactionNo(channel.pay(payment)); // Mock 直接成功；真实渠道骨架抛 501
+        LocalDateTime paidAt = LocalDateTime.now();
+        if (!paymentStateService.markPaidIfProcessing(payment.getId(), normalizedChannel, transactionNo, paidAt)) {
+            throw new ServiceException(409, "支付状态已变化，请重新查询");
         }
+
+        payment.setChannel(normalizedChannel);
+        payment.setTransactionNo(transactionNo);
+        payment.setStatus(Payment.PaymentStatus.PAID);
+        payment.setPaidAt(paidAt);
+        payment.setUpdatedAt(paidAt);
+        if (!orderPaymentService.markPaid(payment.getOrderId())) {
+            // Both writes participate in this transaction; throwing rolls the payment update back too.
+            throw new ServiceException(409, "订单已取消，支付结果未进入订单，请核对支付状态");
+        }
+        return toResponse(payment);
     }
 
     @Override
+    @Transactional
     public PaymentResponse handleCallback(String channelCode, String paymentNo, String transactionNo) {
         Payment payment = paymentRepository.findByPaymentNo(paymentNo);
         if (payment == null) {
@@ -175,16 +160,9 @@ public class PaymentServiceImpl implements PaymentService {
         payment.setStatus(Payment.PaymentStatus.PAID);
         payment.setPaidAt(paidAt);
         payment.setUpdatedAt(paidAt);
-        try {
-            if (!orderPaymentService.markPaid(payment.getOrderId())) {
-                throw new ServiceException(409, "订单已取消，支付结果未进入订单，请核对支付状态");
-            }
-        } catch (RuntimeException exception) {
-            if (Payment.Channel.MOCK.name().equals(normalizedChannel)) {
-                paymentStateService.markRefundedIfPaid(payment.getId());
-                payment.setStatus(Payment.PaymentStatus.REFUNDED);
-            }
-            throw exception;
+        if (!orderPaymentService.markPaid(payment.getOrderId())) {
+            // Both writes participate in this transaction; throwing rolls the payment update back too.
+            throw new ServiceException(409, "订单已取消，支付结果未进入订单，请核对支付状态");
         }
         return toResponse(payment);
     }
