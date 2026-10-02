@@ -251,6 +251,83 @@ public class MerchantGrowthAgentApplicationService implements MerchantGrowthAgen
         }
     }
 
+    private Map<String, Object> buildAction(MerchantGrowthIntentParser.Intent intent, int pending, int stock, int orders) {
+        Map<String, Object> action = new LinkedHashMap<>();
+        // Fulfillment risk takes priority over marketing so growth actions do not disrupt store operations.
+        if (intent.has(MerchantGrowthIntentParser.Focus.FULFILLMENT) || pending > 3) {
+            action.put("actionType", "NOTIFY_MEMBERS");
+            action.put("title", "服务节奏提醒 · 暂缓营销触达");
+            action.put("summary", "当前有 " + pending + " 单正在履约，建议先保证出品节奏，再考虑增长动作。");
+            action.put("reason", pending > 3 ? "待处理订单超过保护阈值 3 单。" : "店长问题聚焦履约，先查看队列而不是发起营销。");
+            action.put("proposal", Map.of("message", "门店正在加紧制作，感谢你的耐心等待。", "targetDays", 1));
+        } else if (intent.has(MerchantGrowthIntentParser.Focus.INVENTORY) && stock > 0) {
+            action.put("actionType", "NOTIFY_MEMBERS");
+            action.put("title", "提醒顾客 · 限时秒杀库存充足");
+            action.put("summary", "当前仍有 " + stock + " 份可抢资格，建议只触达近期到店顾客。");
+            action.put("reason", "库存工具返回存在可抢名额。");
+            action.put("proposal", Map.of("message", "你关注的 FIKA 限时尝鲜仍有名额，先到先得，来选一杯喜欢的吧。", "targetDays", 30));
+        } else if (intent.has(MerchantGrowthIntentParser.Focus.PROMOTION)
+                || intent.has(MerchantGrowthIntentParser.Focus.RETENTION)
+                || intent.has(MerchantGrowthIntentParser.Focus.REVENUE)
+                || intent.has(MerchantGrowthIntentParser.Focus.ORDERS)
+                || orders == 0) {
+            action.put("actionType", "CREATE_VOUCHERS");
+            action.put("title", "老客唤醒 · 满48减8限时券");
+            action.put("summary", "建议向近 30 天到店顾客发放满 ¥48 减 ¥8 券，优先提高复购。");
+            action.put("reason", orders == 0 ? "今天尚未形成有效订单，需要轻量唤醒。" : "问题聚焦增长且履约压力可控，适合小范围复购触达。");
+            action.put("proposal", Map.of("discount", 8, "minimum", 48, "targetDays", 30, "expiresDays", 3,
+                    "message", "FIKA 为你留了一张满 ¥48 减 ¥8 的限时心意券，3 天内可用。"));
+        } else {
+            action.put("actionType", "NOTIFY_MEMBERS");
+            action.put("title", "感谢到店 · 轻量回访");
+            action.put("summary", "今日经营稳定，建议做一次不带优惠的服务回访。");
+            action.put("reason", "订单和履约数据均处于正常区间。");
+            action.put("proposal", Map.of("message", "感谢你今天来到 FIKA。对这杯咖啡有任何建议，都欢迎告诉我们。", "targetDays", 7));
+        }
+        return action;
+    }
+
+    /** Reads store-scoped, deterministic metrics and records each read-only tool call. */
+    private Map<String, Object> snapshot(Long storeId, List<Map<String, Object>> toolCalls) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+
+        long started = System.nanoTime();
+        snapshot.put("todayOrders", count(
+                "SELECT COUNT(*) FROM user_order WHERE store_id=? AND DATE(created_at)=CURDATE() AND status<>'UNPAID'",
+                storeId));
+        snapshot.put("todayRevenue", amount(
+                "SELECT COALESCE(SUM(final_price),0) FROM user_order WHERE store_id=? AND DATE(created_at)=CURDATE() AND status IN ('COMPLETED','DELIVERED')",
+                storeId));
+        snapshot.put("weekRevenue", amount(
+                "SELECT COALESCE(SUM(final_price),0) FROM user_order WHERE store_id=? AND created_at>=DATE_SUB(NOW(),INTERVAL 7 DAY) AND status IN ('COMPLETED','DELIVERED')",
+                storeId));
+        recordTool(toolCalls, "order_metrics", "读取今日订单、今日营业额和近七日营业额", elapsedMs(started), 3);
+
+        started = System.nanoTime();
+        snapshot.put("pendingOrders", count(
+                "SELECT COUNT(*) FROM user_order WHERE store_id=? AND status IN ('PENDING','ACCEPTED','PREPARING')",
+                storeId));
+        recordTool(toolCalls, "fulfillment_metrics", "读取当前门店待处理与制作中的订单", elapsedMs(started), 1);
+
+        started = System.nanoTime();
+        snapshot.put("flashSaleStock", count(
+                "SELECT COALESCE(SUM(available_stock),0) FROM flash_sale_activity WHERE store_id=? AND enabled=1 AND NOW() BETWEEN start_at AND end_at",
+                storeId));
+        recordTool(toolCalls, "inventory_metrics", "读取当前门店秒杀可用库存", elapsedMs(started), 1);
+        return snapshot;
+    }
+
+    private void recordTool(List<Map<String, Object>> calls, String name, String note, long latencyMs, int resultCount) {
+        Map<String, Object> call = new LinkedHashMap<>();
+        call.put("name", name);
+        call.put("readOnly", true);
+        call.put("status", "SUCCEEDED");
+        call.put("latencyMs", latencyMs);
+        call.put("resultCount", resultCount);
+        call.put("note", note);
+        calls.add(call);
+    }
+
     private Map<String, Object> storeMeta(Long storeId) {
         return jdbc.queryForMap("SELECT code,name FROM store WHERE id=?", storeId);
     }
