@@ -20,10 +20,11 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
+import java.util.function.Supplier;
 
 /**
- * 短时、一次性方案仓库。确认时只接受令牌，商品行始终从服务端 JSON 快照读取。
- * 集群部署时应替换为 Redis 实现，并沿用相同的身份绑定和原子消费语义。
+ * 短时、一次性方案仓库。Redis 开启时使用共享快照；仅在明确关闭 Redis 的本地/测试配置中使用 JVM 内存。
+ * 确认时只接受令牌，商品行始终从服务端 JSON 快照读取。
  */
 @Component
 public class CustomerAgentPlanRegistry {
@@ -50,7 +51,10 @@ public class CustomerAgentPlanRegistry {
                                      @Value("${coffee.ai.plan-registry.redis-enabled:false}") boolean redisEnabled) {
         this.jsonMapper = jsonMapper;
         this.redis = redisProvider == null ? null : redisProvider.getIfAvailable();
-        this.redisEnabled = redisEnabled && this.redis != null;
+        if (redisEnabled && this.redis == null) {
+            throw new IllegalStateException("Agent 方案注册表已启用 Redis，但未配置 StringRedisTemplate");
+        }
+        this.redisEnabled = redisEnabled;
     }
 
     public String issue(AgentOrderPlan plan) {
@@ -66,7 +70,10 @@ public class CustomerAgentPlanRegistry {
         Instant expiresAt = Instant.now().plus(TTL);
         Entry entry = new Entry(planJson, expiresAt, new AtomicReference<>());
         if (redisEnabled) {
-            redis.opsForValue().set(REDIS_PLAN_PREFIX + token, planJson, TTL);
+            redisOperation(() -> {
+                redis.opsForValue().set(REDIS_PLAN_PREFIX + token, planJson, TTL);
+                return null;
+            });
         } else {
             plans.put(token, entry);
         }
@@ -81,9 +88,9 @@ public class CustomerAgentPlanRegistry {
         String confirmationClaim = idempotencyKey + "|" + includeAddOn;
         if (redisEnabled) {
             String claimKey = REDIS_PLAN_PREFIX + token + REDIS_CLAIM_SUFFIX;
-            Boolean claimed = redis.opsForValue().setIfAbsent(claimKey, confirmationClaim, TTL);
+            Boolean claimed = redisOperation(() -> redis.opsForValue().setIfAbsent(claimKey, confirmationClaim, TTL));
             if (!Boolean.TRUE.equals(claimed)) {
-                String existing = redis.opsForValue().get(claimKey);
+                String existing = redisOperation(() -> redis.opsForValue().get(claimKey));
                 if (!confirmationClaim.equals(existing)) {
                     throw new ServiceException(409, "Agent 方案已确认，请勿重复下单");
                 }
@@ -140,11 +147,20 @@ public class CustomerAgentPlanRegistry {
     }
 
     private Entry readRedisEntry(String token) {
-        String json = redis.opsForValue().get(REDIS_PLAN_PREFIX + token);
+        String key = REDIS_PLAN_PREFIX + token;
+        String json = redisOperation(() -> redis.opsForValue().get(key));
         if (json == null) return null;
-        Long ttlSeconds = redis.getExpire(REDIS_PLAN_PREFIX + token);
+        Long ttlSeconds = redisOperation(() -> redis.getExpire(key));
         Instant expiresAt = Instant.now().plusSeconds(ttlSeconds == null || ttlSeconds < 0 ? TTL.getSeconds() : ttlSeconds);
         return new Entry(json, expiresAt, new AtomicReference<>());
+    }
+
+    private <T> T redisOperation(Supplier<T> operation) {
+        try {
+            return operation.get();
+        } catch (RuntimeException ex) {
+            throw new ServiceException(503, "Agent 方案存储暂不可用，请稍后重试");
+        }
     }
 
     private boolean same(Object left, Object right) { return left == null ? right == null : left.equals(right); }
@@ -172,7 +188,9 @@ public class CustomerAgentPlanRegistry {
                     || item.productCode().length() > 80 || item.quantity() < 1 || item.quantity() > 9
                     || item.productId() == null || item.productId() <= 0
                     || item.productName() == null || item.productName().isBlank() || item.productName().length() > 200
-                    || item.size() == null || !ALLOWED_SIZES.contains(item.size().toUpperCase(Locale.ROOT))) {
+                    || item.size() == null || !ALLOWED_SIZES.contains(item.size().toUpperCase(Locale.ROOT))
+                    || (item.quotedUnitPrice() != null
+                    && (!Double.isFinite(item.quotedUnitPrice()) || item.quotedUnitPrice() < 0))) {
                 throw new ServiceException(400, "Agent 方案商品校验失败");
             }
         }

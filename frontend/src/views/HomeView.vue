@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 import { customerAgentApi, orderApi, memberApi, membershipApi, deliveryApi } from '@/api'
 import type { Product, Coupon, CustomerAgentItem, DeliveryAddress, OrderRecord } from '@/api/types'
@@ -258,6 +258,39 @@ async function submitAgentOrder(planToken: string, includeAddOn = false, runId?:
     payPaymentNo.value = data.paymentNo || null
     payVisible.value = true
   } catch (e: any) {
+    const priceChange = e?.status === 409 && e?.data?.type === 'AGENT_PLAN_PRICE_CHANGED'
+      ? e.data
+      : null
+    if (priceChange?.planToken) {
+      const changedLines = (priceChange.changedItems || []).map((item: any) => {
+        const previous = item.previousUnitPrice == null ? '方案报价缺失' : `¥${Number(item.previousUnitPrice).toFixed(2)}`
+        const current = `¥${Number(item.currentUnitPrice).toFixed(2)}`
+        return `${item.productName}（${item.size} × ${item.quantity}）：${previous} → ${current}`
+      })
+      const previousTotal = priceChange.previousTotal == null
+        ? '无法还原旧方案总价'
+        : `¥${Number(priceChange.previousTotal).toFixed(2)}`
+      const currentTotal = `¥${Number(priceChange.currentTotal).toFixed(2)}`
+      const message = [
+        '方案生成后菜单价格发生变化：',
+        ...changedLines,
+        `菜单商品小计：${previousTotal} → ${currentTotal}`,
+        '确认接受新菜单价后才会继续下单；优惠和最终应付金额仍由后端重新计算。'
+      ].join('\n')
+      try {
+        await ElMessageBox.confirm(message, '请确认更新后的价格', {
+          confirmButtonText: '接受新价格并继续',
+          cancelButtonText: '暂不下单',
+          type: 'warning'
+        })
+        await submitAgentOrder(priceChange.planToken, includeAddOn, runId)
+      } catch (confirmError: any) {
+        if (confirmError !== 'cancel' && confirmError !== 'close') {
+          ElMessage.error(`Agent 下单失败：${confirmError?.message || '请求失败'}`)
+        }
+      }
+      return
+    }
     ElMessage.error(`Agent 下单失败：${e.message}`)
   } finally {
     submitting.value = false

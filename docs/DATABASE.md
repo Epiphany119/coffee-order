@@ -137,6 +137,8 @@
 
 `id / scope / idempotency_key / request_hash / status / response_body / created_at / updated_at`。`(scope, idempotency_key)` 唯一：scope 由下单身份组成（用户或游客），避免不同身份互相占用 key。首次请求插入 `PROCESSING`；成功后保存 `SUCCESS` 与完整订单响应；同 key 重试直接返回该响应。相同 key 对应不同请求指纹、或仍在处理时，接口返回 `409`，防止重复创建订单。
 
+`request_idempotency` 的建表及唯一键迁移位于 `sql/migrations/V20261002_28_request_idempotency.sql`。首次应用到已有数据库前，先检查迁移输出的重复 `(scope, idempotency_key)`；脚本不会删除或合并记录，若有重复，新增唯一键会失败并保留原数据，需人工核对后再执行。
+
 ### 2.10 event_outbox — 可靠事件表（2026-08-09 新增）
 
 `id / event_id / aggregate_type / aggregate_id / event_type / payload / status / attempts / last_error / published_at / created_at / updated_at`。订单创建和状态变更事件与订单数据在同一事务内写入；调度器通过 `PENDING → PUBLISHING` 条件更新抢占事件，只有抢占成功的实例可以投递，成功后置为 `PUBLISHED`，失败恢复为 `PENDING` 并累计 `attempts`。`PUBLISHING` 超过 5 分钟自动恢复，避免实例崩溃后永久卡死。当前 publisher 为本地日志实现，后续替换 RocketMQ producer 时不改变订单事务和补偿模型。

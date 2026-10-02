@@ -160,26 +160,30 @@ public class CustomerOrderAgentController {
                     throw new ServiceException(400, "外卖配送请选择收货地址");
                 }
             }
-            AgentOrderPlan plan = customerOrderAgentService.confirm(request.planToken, idempotencyKey,
-                    request.storeId, identity.userId(), identity.guestId(), request.includeAddOn);
-            CreateOrderCommand command = new CreateOrderCommand();
-            command.setStoreId(plan.storeId());
-            command.setUserId(plan.userId());
-            command.setGuestId(plan.guestId());
-            command.setFulfillmentType(fulfillmentType);
-            command.setDeliveryAddressId("DELIVERY".equals(fulfillmentType) ? request.deliveryAddressId : null);
-            command.setNote(plan.note());
-            command.setItems(plan.items().stream().map(line -> {
-                CartItemCommand item = new CartItemCommand();
-                item.setProductCode(line.productCode());
-                item.setSize(line.size());
-                item.setQuantity(line.quantity());
-                item.setCondiments(List.of());
-                return item;
-            }).toList());
-            if (plan.userId() != null && plan.userId() > 0) command.setCouponCode("AGENT_FIKA8");
-            OrderResponse response = idempotencyService.execute(
-                    idempotencyKey, plan.userId(), plan.guestId(), command, () -> {
+            AgentConfirmFingerprint fingerprint = new AgentConfirmFingerprint(
+                    request.planToken, request.storeId, fulfillmentType,
+                    "DELIVERY".equals(fulfillmentType) ? request.deliveryAddressId : null,
+                    request.includeAddOn);
+            OrderResponse response = idempotencyService.executeWithRequest(
+                    idempotencyKey, identity.userId(), identity.guestId(), fingerprint, () -> {
+                        AgentOrderPlan plan = customerOrderAgentService.confirm(request.planToken, idempotencyKey,
+                                request.storeId, identity.userId(), identity.guestId(), request.includeAddOn);
+                        CreateOrderCommand command = new CreateOrderCommand();
+                        command.setStoreId(plan.storeId());
+                        command.setUserId(plan.userId());
+                        command.setGuestId(plan.guestId());
+                        command.setFulfillmentType(fulfillmentType);
+                        command.setDeliveryAddressId("DELIVERY".equals(fulfillmentType) ? request.deliveryAddressId : null);
+                        command.setNote(plan.note());
+                        command.setItems(plan.items().stream().map(line -> {
+                            CartItemCommand item = new CartItemCommand();
+                            item.setProductCode(line.productCode());
+                            item.setSize(line.size());
+                            item.setQuantity(line.quantity());
+                            item.setCondiments(List.of());
+                            return item;
+                        }).toList());
+                        if (plan.userId() != null && plan.userId() > 0) command.setCouponCode("AGENT_FIKA8");
                         OrderResponse created = orderService.createOrder(command);
                         if ("DELIVERY".equals(command.getFulfillmentType())) {
                             StoreResponse store = storeService.getStore(command.getStoreId());
@@ -297,6 +301,8 @@ public class CustomerOrderAgentController {
     }
 
     private record Identity(Long userId, String guestId) { }
+    private record AgentConfirmFingerprint(String planToken, Long storeId, String fulfillmentType,
+                                           Long deliveryAddressId, boolean includeAddOn) { }
     public static class CustomerAgentRequest { public Long storeId; public Long userId; public String guestId; public String message; }
     public static class ConfirmPlanRequest { public String planToken; public String runId; public Long storeId; public Long userId; public String guestId; public String fulfillmentType; public Long deliveryAddressId; public boolean includeAddOn; }
 }

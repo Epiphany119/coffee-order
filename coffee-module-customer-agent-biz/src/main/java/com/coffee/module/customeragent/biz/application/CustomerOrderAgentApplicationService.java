@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -563,10 +564,64 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     public AgentOrderPlan confirm(String planToken, String idempotencyKey,
                                    Long storeId, Long userId, String guestId,
                                    boolean includeAddOn) {
-        // 用户选中方案后，先读取服务端快照并重新核验商品身份与库存；通过后才抢占令牌，随后由订单服务创建待支付订单。
+        // 这里只会在持久化幂等层未命中原成功响应后执行；重新核验身份、报价和库存，再抢占方案令牌。
         AgentOrderPlan selectedPlan = planRegistry.resolve(planToken, storeId, userId, guestId, includeAddOn);
         validateSelectedPlan(selectedPlan);
+        List<AgentOrderLine> repricedLines = new ArrayList<>();
+        List<Map<String, Object>> changedItems = new ArrayList<>();
+        BigDecimal previousTotal = BigDecimal.ZERO;
+        BigDecimal currentTotal = BigDecimal.ZERO;
+        boolean hasCompletePreviousTotal = true;
+        for (AgentOrderLine line : selectedPlan.items()) {
+            BigDecimal currentPrice = menuPriceAmount(menuService.calculatePrice(
+                    selectedPlan.storeId(), line.productCode(), line.size(), null, List.of()));
+            BigDecimal previousPrice = line.quotedUnitPrice() == null
+                    ? null : menuPriceAmount(line.quotedUnitPrice());
+            BigDecimal currentSubtotal = currentPrice.multiply(BigDecimal.valueOf(line.quantity()))
+                    .setScale(2, RoundingMode.HALF_UP);
+            currentTotal = currentTotal.add(currentSubtotal);
+            if (previousPrice == null) {
+                hasCompletePreviousTotal = false;
+            } else {
+                previousTotal = previousTotal.add(previousPrice.multiply(BigDecimal.valueOf(line.quantity())));
+            }
+            if (previousPrice == null || previousPrice.compareTo(currentPrice) != 0) {
+                Map<String, Object> changedItem = new LinkedHashMap<>();
+                changedItem.put("productCode", line.productCode());
+                changedItem.put("productName", line.productName());
+                changedItem.put("size", line.size());
+                changedItem.put("quantity", line.quantity());
+                changedItem.put("previousUnitPrice", previousPrice == null ? null : previousPrice.doubleValue());
+                changedItem.put("currentUnitPrice", currentPrice.doubleValue());
+                changedItem.put("previousSubtotal", previousPrice == null ? null
+                        : previousPrice.multiply(BigDecimal.valueOf(line.quantity())).doubleValue());
+                changedItem.put("currentSubtotal", currentSubtotal.doubleValue());
+                changedItems.add(changedItem);
+            }
+            repricedLines.add(new AgentOrderLine(line.productCode(), line.size(), line.quantity(),
+                    line.productId(), line.productName(), currentPrice.doubleValue()));
+        }
+        if (!changedItems.isEmpty()) {
+            AgentOrderPlan repricedPlan = new AgentOrderPlan(selectedPlan.storeId(), selectedPlan.userId(),
+                    selectedPlan.guestId(), repricedLines, List.of(), selectedPlan.note());
+            String repricedToken = planRegistry.issue(repricedPlan);
+            Map<String, Object> priceChange = new LinkedHashMap<>();
+            priceChange.put("type", "AGENT_PLAN_PRICE_CHANGED");
+            priceChange.put("planToken", repricedToken);
+            priceChange.put("previousTotal", hasCompletePreviousTotal
+                    ? previousTotal.setScale(2, RoundingMode.HALF_UP).doubleValue() : null);
+            priceChange.put("currentTotal", currentTotal.setScale(2, RoundingMode.HALF_UP).doubleValue());
+            priceChange.put("changedItems", changedItems);
+            throw new ServiceException(409, "方案中的菜单价格已变化，请确认新价格后继续", priceChange);
+        }
         return planRegistry.consume(planToken, idempotencyKey, storeId, userId, guestId, includeAddOn);
+    }
+
+    private BigDecimal menuPriceAmount(double amount) {
+        if (!Double.isFinite(amount) || amount < 0) {
+            throw new ServiceException(409, "当前菜单价格无效，请重新生成点单方案");
+        }
+        return BigDecimal.valueOf(amount).setScale(2, RoundingMode.HALF_UP);
     }
 
     /** 生成 planToken 前的第一道校验，以及用户选择后的第二道校验，共用同一套商品/库存规则。 */
@@ -901,7 +956,10 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                 || !(item.get("name") instanceof String productName)) {
             return null;
         }
-        return new AgentOrderLine(productCode, size, quantity.intValue(), productId.longValue(), productName);
+        Double quotedUnitPrice = item.get("estimatedPrice") instanceof Number price
+                ? price.doubleValue() : null;
+        return new AgentOrderLine(productCode, size, quantity.intValue(), productId.longValue(),
+                productName, quotedUnitPrice);
     }
 
     private List<AgentOrderLine> addOnLines(Map<String, Object> promotion) {

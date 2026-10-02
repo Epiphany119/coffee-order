@@ -21,8 +21,8 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(ServiceException.class)
-    public Result<Void> handleServiceException(ServiceException e) {
-        return Result.error(e.getCode(), e.getMessage());
+    public Result<Object> handleServiceException(ServiceException e) {
+        return Result.error(e.getCode(), e.getMessage(), e.getData());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

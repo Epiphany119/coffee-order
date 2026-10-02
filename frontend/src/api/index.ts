@@ -208,7 +208,7 @@ const apiHostReady = isInMiniProgramWebView
  */
 type AuthDomain = 'user' | 'merchant' | 'rider' | 'guest'
 type AccessCredential = { token: string; domain: AuthDomain }
-type FikaRequestError = Error & { status?: number; authDomain?: AuthDomain }
+type FikaRequestError = Error & { status?: number; authDomain?: AuthDomain; data?: unknown }
 
 function readStoredAccessToken(key: string): string | null {
   try {
@@ -250,10 +250,11 @@ function isGuestApiRequest(path: string, config?: any): boolean {
   return !!body?.guestId && !body?.userId
 }
 
-function createRequestError(message: string, status?: number, authDomain?: AuthDomain): FikaRequestError {
+function createRequestError(message: string, status?: number, authDomain?: AuthDomain, data?: unknown): FikaRequestError {
   const error = new Error(message) as FikaRequestError
   error.status = status
   error.authDomain = authDomain
+  error.data = data
   return error
 }
 
@@ -317,7 +318,8 @@ request.interceptors.response.use(
     // 必须在这里转成 rejected Promise，否则页面会把错误当成空数据继续渲染。
     if (body && typeof body === 'object' && typeof body.code === 'number' && 'message' in body) {
       if (body.code !== 200) {
-        throw createRequestError(body.message || '请求失败', body.code, (res.config as any).__fikaAuthDomain)
+        throw createRequestError(body.message || '请求失败', body.code,
+          (res.config as any).__fikaAuthDomain, body.data)
       }
       return Object.prototype.hasOwnProperty.call(body, 'data') ? body.data : body
     }
@@ -361,7 +363,8 @@ request.interceptors.response.use(
     throw createRequestError(
       err.response?.data?.message || err.message || '请求失败',
       status,
-      authDomain
+      authDomain,
+      err.response?.data?.data
     )
   }
 )
@@ -597,7 +600,7 @@ export const customerAgentApi = {
   },
 
   /** 只提交一次性方案令牌；商品行由服务端从已审计的方案快照读取。 */
-  confirm: (data: { planToken: string; runId?: string | null; storeId: number; userId?: number | null; guestId?: string | null; fulfillmentType: string; deliveryAddressId?: number | null; includeAddOn?: boolean }, idempotencyKey = createIdempotencyKey()) =>
+  confirm: (data: { planToken: string; runId?: string | null; storeId: number; userId?: number | null; guestId?: string | null; fulfillmentType: string; deliveryAddressId?: number | null; includeAddOn?: boolean }, idempotencyKey = createAgentOrderIdempotencyKey(data.planToken)) =>
     request.post<any, OrderResponse>('/customer-agent/plans/confirm', data, { headers: { 'Idempotency-Key': idempotencyKey } })
 }
 
@@ -714,6 +717,11 @@ function createIdempotencyKey(): string {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   } catch {}
   return `fika-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`
+}
+
+/** 同一方案重试时复用同一个 key；服务端签发新方案令牌后自然得到新 key。 */
+function createAgentOrderIdempotencyKey(planToken: string): string {
+  return `agent-${planToken.toLowerCase()}`
 }
 
 export const afterSaleApi = {

@@ -43,11 +43,23 @@ public class OrderIdempotencyService {
     @Transactional
     public OrderResponse execute(String idempotencyKey, Long userId, String guestId,
                                  CreateOrderCommand command, Supplier<OrderResponse> creator) {
+        return executeInternal(idempotencyKey, userId, guestId, command, creator);
+    }
+
+    /** 供订单计划等请求在领域校验前完成幂等回放；requestFingerprint 只包含影响业务结果的规范化字段。 */
+    @Transactional
+    public OrderResponse executeWithRequest(String idempotencyKey, Long userId, String guestId,
+                                            Object requestFingerprint, Supplier<OrderResponse> creator) {
+        return executeInternal(idempotencyKey, userId, guestId, requestFingerprint, creator);
+    }
+
+    private OrderResponse executeInternal(String idempotencyKey, Long userId, String guestId,
+                                          Object requestFingerprint, Supplier<OrderResponse> creator) {
         if (!isValidKey(idempotencyKey)) {
             throw new ServiceException(400, "Idempotency-Key 格式无效");
         }
         String scope = SCOPE_PREFIX + (userId != null ? "USER:" + userId : "GUEST:" + guestId);
-        String requestHash = requestHash(command);
+        String requestHash = requestHash(requestFingerprint);
         ExistingRecord existing = claimOrFind(scope, idempotencyKey, requestHash);
         if (existing != null) {
             if (!requestHash.equals(existing.requestHash())) {
@@ -93,9 +105,9 @@ public class OrderIdempotencyService {
         }
     }
 
-    private String requestHash(CreateOrderCommand command) {
+    private String requestHash(Object requestFingerprint) {
         try {
-            return sha256(objectMapper.writeValueAsBytes(command));
+            return sha256(objectMapper.writeValueAsBytes(requestFingerprint));
         } catch (JsonProcessingException e) {
             throw new ServiceException(500, "无法计算订单请求指纹");
         }
