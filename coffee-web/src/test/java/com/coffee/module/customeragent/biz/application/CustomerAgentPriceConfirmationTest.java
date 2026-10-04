@@ -1,14 +1,9 @@
-package com.coffee.web.agent;
+package com.coffee.module.customeragent.biz.application;
 
 import com.coffee.common.ai.ZhipuChatClient;
 import com.coffee.common.core.exception.ServiceException;
 import com.coffee.module.customeragent.api.dto.AgentOrderLine;
 import com.coffee.module.customeragent.api.dto.AgentOrderPlan;
-import com.coffee.module.customeragent.biz.application.CandidateSetService;
-import com.coffee.module.customeragent.biz.application.CustomerAgentPlanRegistry;
-import com.coffee.module.customeragent.biz.application.CustomerOrderAgentApplicationService;
-import com.coffee.module.customeragent.biz.application.LlmToolOrchestrator;
-import com.coffee.module.customeragent.biz.application.MenuPriceSelectionTool;
 import com.coffee.module.inventory.api.InventoryService;
 import com.coffee.module.menu.api.FavoriteService;
 import com.coffee.module.menu.api.MenuService;
