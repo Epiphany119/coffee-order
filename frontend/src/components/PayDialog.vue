@@ -107,19 +107,48 @@ function retryLoad() {
 }
 
 async function doPay() {
-  if (!payment.value || payment.value.status !== 'PENDING') return
+  const attemptedPayment = payment.value
+  if (!attemptedPayment || attemptedPayment.status !== 'PENDING') return
+  const attemptedChannel = channel.value
   paying.value = true
   try {
     const result = requirePayment(
-      await payApi.pay(payment.value.paymentNo, channel.value),
-      payment.value.orderId
+      await payApi.pay(attemptedPayment.paymentNo, attemptedChannel),
+      attemptedPayment.orderId
     )
-    ElMessage.success(`支付成功 · ${PAY_CHANNEL_LABELS[channel.value] || channel.value} ¥${Number(result.amount || 0).toFixed(2)}`)
-    payment.value = result
+    const stillShowingAttempt = payment.value?.paymentNo === attemptedPayment.paymentNo
+    if (stillShowingAttempt) payment.value = result
+    ElMessage.success('支付成功 · ' + (PAY_CHANNEL_LABELS[attemptedChannel] || attemptedChannel)
+      + ' ¥' + Number(result.amount || 0).toFixed(2))
     emit('paid', result)
-    emit('update:modelValue', false)
+    if (stillShowingAttempt) emit('update:modelValue', false)
   } catch (e: any) {
-    ElMessage.error(`支付失败：${e.message}`)
+    try {
+      // 支付接口可能已在服务端成功提交但响应丢失；先查询支付单状态，避免把成功误报为失败。
+      const latest = requirePayment(
+        await payApi.getByPaymentNo(attemptedPayment.paymentNo),
+        attemptedPayment.orderId
+      )
+      const stillShowingAttempt = payment.value?.paymentNo === attemptedPayment.paymentNo
+      if (stillShowingAttempt) payment.value = latest
+      if (latest.status === 'PAID') {
+        ElMessage.success('支付成功 · ' + (PAY_CHANNEL_LABELS[attemptedChannel] || attemptedChannel)
+          + ' ¥' + Number(latest.amount || 0).toFixed(2))
+        emit('paid', latest)
+        if (stillShowingAttempt) emit('update:modelValue', false)
+      } else if (latest.status === 'PENDING') {
+        ElMessage.warning('支付单仍待支付，状态已刷新；确认未扣款后可以重试。')
+      } else {
+        ElMessage.warning('支付结果已刷新，当前状态：'
+          + (PAY_STATUS_LABELS[latest.status] || latest.status))
+      }
+    } catch {
+      if (payment.value?.paymentNo === attemptedPayment.paymentNo) {
+        payment.value = null
+        loadError.value = '支付结果暂时无法确认，请重新加载支付单状态后再决定是否重试。'
+      }
+      ElMessage.warning('支付结果暂时无法确认。请稍后重新加载支付单状态，再决定是否重试。')
+    }
   } finally {
     paying.value = false
   }

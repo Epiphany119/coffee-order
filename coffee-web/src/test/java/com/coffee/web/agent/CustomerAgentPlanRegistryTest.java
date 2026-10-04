@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -76,5 +78,14 @@ class CustomerAgentPlanRegistryTest {
         ServiceException error = assertThrows(ServiceException.class, () -> registry.issue(plan));
 
         assertEquals(503, error.getCode());
+    }
+
+    @Test
+    void refusesInMemoryPlanRegistryInProdProfile() {
+        Environment environment = mock(Environment.class);
+        when(environment.acceptsProfiles(Profiles.of("prod"))).thenReturn(true);
+
+        assertThrows(IllegalStateException.class,
+                () -> new CustomerAgentPlanRegistry(new ObjectMapper(), null, false, environment));
     }
 }

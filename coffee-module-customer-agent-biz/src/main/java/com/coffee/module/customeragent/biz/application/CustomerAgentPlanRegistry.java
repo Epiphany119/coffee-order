@@ -8,6 +8,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -42,15 +44,27 @@ public class CustomerAgentPlanRegistry {
 
     /** Kept for unit tests and local profiles where Redis is intentionally disabled. */
     public CustomerAgentPlanRegistry(ObjectMapper jsonMapper) {
-        this(jsonMapper, null, false);
+        this(jsonMapper, null, false, null);
+    }
+
+    /** Test-friendly constructor; Spring uses the environment-aware constructor below. */
+    public CustomerAgentPlanRegistry(ObjectMapper jsonMapper,
+                                     ObjectProvider<StringRedisTemplate> redisProvider,
+                                     boolean redisEnabled) {
+        this(jsonMapper, redisProvider, redisEnabled, null);
     }
 
     @Autowired
     public CustomerAgentPlanRegistry(ObjectMapper jsonMapper,
                                      ObjectProvider<StringRedisTemplate> redisProvider,
-                                     @Value("${coffee.ai.plan-registry.redis-enabled:false}") boolean redisEnabled) {
+                                     @Value("${coffee.ai.plan-registry.redis-enabled:false}") boolean redisEnabled,
+                                     Environment environment) {
         this.jsonMapper = jsonMapper;
         this.redis = redisProvider == null ? null : redisProvider.getIfAvailable();
+        boolean productionProfile = environment != null && environment.acceptsProfiles(Profiles.of("prod"));
+        if (productionProfile && !redisEnabled) {
+            throw new IllegalStateException("生产 profile 必须启用 Agent 方案 Redis 注册表，禁止退回 JVM 内存");
+        }
         if (redisEnabled && this.redis == null) {
             throw new IllegalStateException("Agent 方案注册表已启用 Redis，但未配置 StringRedisTemplate");
         }

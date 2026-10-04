@@ -712,7 +712,7 @@ export const notificationApi = {
   getUserNotifications: (userId: number) => request.get<any, UserNotification[]>(`/notifications/user/${userId}`)
 }
 
-function createIdempotencyKey(): string {
+export function createIdempotencyKey(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   } catch {}

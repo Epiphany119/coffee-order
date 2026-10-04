@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 import { customerAgentApi, orderApi, memberApi, membershipApi, deliveryApi } from '@/api'
 import type { Product, Coupon, CustomerAgentItem, DeliveryAddress, OrderRecord } from '@/api/types'
+import { clearPendingOrderIdempotencyKey, getPendingOrderIdempotencyKey } from '@/utils/order-idempotency'
 
 import SiteHeader from '@/components/SiteHeader.vue'
 import HeroSection from '@/components/HeroSection.vue'
@@ -201,7 +202,9 @@ async function submitOrder() {
       deliveryAddressId: fulfillmentType.value === 'DELIVERY' ? selectedDeliveryAddress.value?.id ?? null : null,
       note: store.orderNote.trim() || undefined
     }
-    const data = await orderApi.createOrder(payload)
+    const idempotencyKey = await getPendingOrderIdempotencyKey(payload)
+    const data = await orderApi.createOrder(payload, idempotencyKey)
+    clearPendingOrderIdempotencyKey(idempotencyKey)
     ElMessage.success(
       `下单成功 · ${data.totalCups} 件，共 ¥${data.finalPrice}${data.earnedPoints ? ` · 获得 ${data.earnedPoints} 积分` : ''}`
     )
