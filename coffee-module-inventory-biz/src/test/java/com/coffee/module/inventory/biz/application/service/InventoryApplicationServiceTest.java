@@ -1,6 +1,7 @@
 package com.coffee.module.inventory.biz.application.service;
 
 import com.coffee.common.core.exception.ServiceException;
+import org.springframework.jdbc.core.RowMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -39,5 +40,25 @@ class InventoryApplicationServiceTest {
                 () -> service.reserve(1L, 2L, 0));
         assertEquals(400, error.getCode());
         verifyNoInteractions(jdbc);
+    }
+
+    @Test
+    void availableQuantityUsesInitialStockWhenInventoryRowDoesNotExist() {
+        when(jdbc.<Integer>query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Integer>>any(),
+                eq(1L), eq(2L))).thenReturn(java.util.List.of());
+
+        assertEquals(100, service.availableQuantity(1L, 2L));
+        assertTrue(service.hasAvailable(1L, 2L, 100));
+        assertFalse(service.hasAvailable(1L, 2L, 101));
+    }
+
+    @Test
+    void availableQuantityReflectsPersistedStock() {
+        when(jdbc.<Integer>query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Integer>>any(),
+                eq(1L), eq(2L))).thenReturn(java.util.List.of(4));
+
+        assertEquals(4, service.availableQuantity(1L, 2L));
+        assertTrue(service.hasAvailable(1L, 2L, 4));
+        assertFalse(service.hasAvailable(1L, 2L, 5));
     }
 }

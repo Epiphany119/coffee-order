@@ -39,11 +39,11 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     private final MenuPriceSelectionTool priceSelectionTool;
     private final String templateStoreCode;
     private final CustomerOrderLlmIntentParser llmIntentParser;
-    private final CustomerOrderComboGenerator comboGenerator;
     private final IntentValidator intentValidator;
     private final CandidateSetService candidateSetService;
     private final LlmToolOrchestrator toolOrchestrator;
     private final CustomerOrderRecommendationPolicy recommendationPolicy;
+    private final CustomerOrderBundleRanker bundleRanker;
 
     public CustomerOrderAgentApplicationService(MenuService menuService,
                                                 FavoriteService favoriteService,
@@ -67,11 +67,11 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         this.priceSelectionTool = priceSelectionTool;
         this.templateStoreCode = templateStoreCode;
         this.llmIntentParser = new CustomerOrderLlmIntentParser(chatClient, objectMapper);
-        this.comboGenerator = new CustomerOrderComboGenerator(chatClient, objectMapper);
         this.intentValidator = new IntentValidator();
         this.candidateSetService = candidateSetService;
         this.toolOrchestrator = toolOrchestrator;
         this.recommendationPolicy = new CustomerOrderRecommendationPolicy();
+        this.bundleRanker = new CustomerOrderBundleRanker();
     }
 
     @Override
@@ -93,6 +93,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         CustomerOrderIntentParser.Intent intent = llmIntentParser.parse(text);
         int targetItemCount = intent.itemCount() > 0
                 ? intent.itemCount() : CustomerOrderRecommendationPolicy.DEFAULT_ITEM_COUNT;
+        boolean deterministicBundleRequest = targetItemCount > 1 || intent.requiredCategories().size() > 1;
         log.info("意图解析结果: requiredCategories={}, itemCount={}, budget={}, pairing={}, temperature={}",
                 intent.requiredCategories(), intent.itemCount(), intent.budget(),
                 intent.pairing(), intent.temperature());
@@ -159,8 +160,32 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         CandidateSetService.CandidateResult safeCandidateResult = candidateResult.restrictTo(candidates);
         Map<String, Double> semanticScores = safeCandidateResult.semanticScores();
 
+        List<Scored> initialRanked = deterministicBundleRequest
+                ? rankedCandidates(candidates, text, favCodes, favCats, hotNames,
+                ratings, semanticScores, intent, storeId)
+                : List.of();
+        if (deterministicBundleRequest) {
+            // Scan every combination found by the bounded search until live size, price,
+            // inventory and token checks accept one; the MMR top three are for alternatives.
+            List<CustomerOrderBundleRanker.RankedBundle> bundles = rankAllBundles(initialRanked, intent);
+            selectedProducts = bundles.stream().map(CustomerOrderBundleRanker.RankedBundle::products)
+                    .filter(bundle -> isValidRecommendationSelection(storeId, bundle, intent))
+                    .filter(bundle -> isDisplayedBudgetValid(storeId, bundle, text,
+                            favCodes, hotNames, ratings, intent))
+                    .findFirst().orElse(null);
+            if (selectedProducts != null) {
+                engine = "FIKA Customer Agent · constrained-ranker";
+                options = buildFallbackOptions(selectedProducts, initialRanked, initialRanked, candidates,
+                        products, text, favCodes, hotNames, ratings, intent, storeId, userId, guestId, message);
+                log.info("确定性组合排序选中: {}，可用方案数={}", selectedProducts.stream()
+                        .map(MenuItemDTO::getName).collect(Collectors.joining(" + ")), options.size());
+            } else {
+                log.info("确定性组合排序未找到满足品类/点名/数量/预算/库存的方案");
+            }
+        }
+
         // 2b: 使用 LLM 选择器从候选集中选择组合
-        if (!candidates.isEmpty()) {
+        if (!deterministicBundleRequest && !candidates.isEmpty()) {
             boolean rankedSingleSelection = false;
             LlmToolOrchestrator.ToolResult toolResult = toolOrchestrator.selectFromCandidates(
                     storeId, message.trim(), intent, safeCandidateResult);
@@ -253,7 +278,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         }
 
         // 第三层：强制精确匹配（用户明确点名商品时，直接用精确匹配结果）
-        if (selectedProducts == null && !intent.explicitProductNames().isEmpty()) {
+        if (selectedProducts == null && !deterministicBundleRequest && !intent.explicitProductNames().isEmpty()) {
             log.info("Tool 路径未命中，尝试强制精确匹配: {}", intent.explicitProductNames());
             selectedProducts = forceExactMatch(candidates, intent.explicitProductNames(), targetItemCount);
             if (selectedProducts != null && isValidRecommendationSelection(storeId, selectedProducts, intent)) {
@@ -262,59 +287,6 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
             } else {
                 selectedProducts = null;
                 log.info("强制精确匹配因库存不足被拦截");
-            }
-        }
-
-        // 第四层：降级到 LLM Combo Generator（旧路径，保留兼容性）
-        if (selectedProducts == null && (intent.requiredCategories().size() >= 2 || targetItemCount >= 2)) {
-            log.info("Tool 路径未命中，降级到 LLM Combo Generator");
-            List<CustomerOrderComboGenerator.ComboPlan> llmCombos = comboGenerator.generateCombos(candidates, intent,
-                    intent.budget() != null ? intent.budget() : Double.MAX_VALUE);
-
-            List<CustomerOrderComboGenerator.ComboPlan> validCombos = new ArrayList<>();
-            for (CustomerOrderComboGenerator.ComboPlan combo : llmCombos) {
-                if (isValidRecommendationSelection(storeId, combo.products(), intent)) {
-                    validCombos.add(combo);
-                } else {
-                    log.info("LLM 组合被统一校验层拦截: {}", combo.productCodes());
-                }
-            }
-
-            if (!validCombos.isEmpty()) {
-                selectedProducts = validCombos.get(0).products();
-                engine = "FIKA Customer Agent · LLM-combo";
-                log.info("使用 LLM Combo 方案: {}", selectedProducts.stream().map(MenuItemDTO::getName).collect(Collectors.joining(" + ")));
-
-                Set<String> optionSignatures = new HashSet<>();
-                for (CustomerOrderComboGenerator.ComboPlan combo : validCombos) {
-                    List<Map<String, Object>> optionItems = planItems(storeId, combo.products(), text,
-                            favCodes, hotNames, ratings, intent);
-                    double optionTotal = optionItems.stream()
-                            .mapToDouble(i -> ((Number) i.get("estimatedPrice")).doubleValue() *
-                                    ((Number) i.get("quantity")).intValue()).sum();
-                    if (intent.budget() != null && optionTotal > intent.budget() + 0.0001) continue;
-
-                    String signature = optionItems.stream()
-                            .map(i -> String.valueOf(i.get("productCode"))).sorted().collect(Collectors.joining("|"));
-                    if (!optionSignatures.add(signature)) continue;
-
-                    Map<String, Object> optionPromotion = new LinkedHashMap<>(
-                            promotionHint(storeId, optionItems, products, intent));
-                    List<AgentOrderLine> optionLines = optionItems.stream()
-                            .map(this::toAgentOrderLine).toList();
-                    List<AgentOrderLine> addOnLines = addOnLines(optionPromotion);
-                    optionPromotion.put("canAddOn", !addOnLines.isEmpty());
-
-                    String optionToken = issuePlanToken(new AgentOrderPlan(storeId, userId, guestId,
-                            optionLines, addOnLines,
-                            "Agent 点单：" + message.trim().substring(0, Math.min(100, message.trim().length()))));
-                    if (optionToken == null) continue;
-                    String title = "方案 " + (options.size() + 1) + " · " +
-                            combo.products().stream().map(MenuItemDTO::getName).collect(Collectors.joining(" + "));
-                    options.add(Map.of("title", title, "items", optionItems,
-                            "planToken", optionToken, "promotion", optionPromotion));
-                    if (options.size() == MAX_RECOMMENDATION_OPTIONS) break;
-                }
             }
         }
 
@@ -329,21 +301,19 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                     options.add(singleOption);
                 }
             }
-            Map<String, Integer> priceRank = priceRank(storeId, candidates, intent);
-            List<MenuItemDTO> rankedProducts = recommendationPolicy.rank(candidates, text, favCodes, favCats,
-                    hotNames, ratings, semanticScores, intent, priceRank);
-            List<Scored> ranked = rankedProducts.stream()
-                    .map(p -> new Scored(p, score(p, text, favCodes, favCats, hotNames, ratings, semanticScores, intent)))
-                    .toList();
+            List<Scored> ranked = rankedCandidates(candidates, text, favCodes, favCats, hotNames,
+                    ratings, semanticScores, intent, storeId);
 
             // 搭配候选也必须来自同一份硬约束集合，不能从全量 products 绕过品类、温度和排除项。
             List<Scored> pairingRanked = ranked;
 
-            if (intent.requiredCategories().size() >= 2) {
-                selectedProducts = buildMultiCategoryBundle(ranked, intent.requiredCategories(),
-                        storeId, intent.budget(), targetItemCount);
-            } else if (targetItemCount >= 2) {
-                selectedProducts = bestBundle(ranked, targetItemCount, storeId, intent.budget());
+            if (deterministicBundleRequest) {
+                selectedProducts = rankAllBundles(ranked, intent).stream()
+                        .map(CustomerOrderBundleRanker.RankedBundle::products)
+                        .filter(bundle -> isValidRecommendationSelection(storeId, bundle, intent))
+                        .filter(bundle -> isDisplayedBudgetValid(storeId, bundle, text,
+                                favCodes, hotNames, ratings, intent))
+                        .findFirst().orElse(null);
             } else {
                 // 按统一排序寻找第一个同时满足预算、身份和库存的单品；
                 // 不能因为第一名超预算就直接失败，也不能自动追加第二件。
@@ -693,6 +663,19 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         return true;
     }
 
+    private boolean isDisplayedBudgetValid(Long storeId, List<MenuItemDTO> products, String text,
+                                           Set<String> favoriteCodes, Set<String> hotNames,
+                                           Map<Long, Double> ratings,
+                                           CustomerOrderIntentParser.Intent intent) {
+        if (intent == null || intent.budget() == null) return true;
+        double displayedTotal = planItems(storeId, products, text, favoriteCodes, hotNames, ratings, intent)
+                .stream()
+                .mapToDouble(item -> ((Number) item.get("estimatedPrice")).doubleValue()
+                        * ((Number) item.get("quantity")).intValue())
+                .sum();
+        return displayedTotal <= intent.budget() + 0.0001;
+    }
+
     private boolean validMenuSnapshot(MenuItemDTO product) {
         return product != null && product.getId() != null && product.getId() > 0
                 && product.getCode() != null && !product.getCode().isBlank()
@@ -746,7 +729,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         }
 
         if (intent.requiredCategories().size() >= 2 || intent.itemCount() >= 2) {
-            List<List<MenuItemDTO>> optionBundles = generateOptionBundles(ranked, intent, storeId);
+            List<List<MenuItemDTO>> optionBundles = generateOptionBundles(ranked, intent);
             for (List<MenuItemDTO> optionProducts : optionBundles) {
                 if (!isValidRecommendationSelection(storeId, optionProducts, intent)) continue;
                 List<Map<String, Object>> optionItems = planItems(storeId, optionProducts, text,
@@ -818,6 +801,49 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                       Set<String> hot, Map<Long, Double> ratings,
                       Map<String, Double> semanticScores, CustomerOrderIntentParser.Intent intent) {
         return recommendationPolicy.score(p, t, codes, cats, hot, ratings, semanticScores, intent);
+    }
+
+    private List<Scored> rankedCandidates(List<MenuItemDTO> candidates, String text,
+                                          Set<String> favoriteCodes, Set<String> favoriteCategories,
+                                          Set<String> hotNames, Map<Long, Double> ratings,
+                                          Map<String, Double> semanticScores,
+                                          CustomerOrderIntentParser.Intent intent, Long storeId) {
+        List<Scored> ranked = new ArrayList<>();
+        if (candidates == null) return List.of();
+        String requestedSize = requestedSize(text);
+        for (MenuItemDTO product : candidates) {
+            if (product == null) continue;
+            double selectionPrice = requestedSize == null
+                    ? minimumPrice(storeId, product)
+                    : menuService.calculatePrice(storeId, product.getCode(), requestedSize, null, List.of());
+            int maxQuantity = intent.itemCount() <= 1 ? 1
+                    : Math.min(intent.itemCount(), inventoryService.availableQuantity(storeId, product.getId()));
+            ranked.add(new Scored(product,
+                    score(product, text, favoriteCodes, favoriteCategories, hotNames,
+                            ratings, semanticScores, intent),
+                    ranked.size(), selectionPrice, maxQuantity));
+        }
+        return List.copyOf(ranked);
+    }
+
+    private List<CustomerOrderBundleRanker.RankedBundle> rankBundles(List<Scored> ranked,
+                                                                      CustomerOrderIntentParser.Intent intent,
+                                                                      int limit) {
+        return bundleRanker.rank(toBundleCandidates(ranked), intent, limit);
+    }
+
+    private List<CustomerOrderBundleRanker.RankedBundle> rankAllBundles(List<Scored> ranked,
+                                                                         CustomerOrderIntentParser.Intent intent) {
+        return bundleRanker.rankAll(toBundleCandidates(ranked), intent);
+    }
+
+    private List<CustomerOrderBundleRanker.Candidate> toBundleCandidates(List<Scored> ranked) {
+        List<CustomerOrderBundleRanker.Candidate> candidates = new ArrayList<>();
+        for (Scored item : ranked) {
+            candidates.add(new CustomerOrderBundleRanker.Candidate(
+                    item.product(), item.score(), item.rankPosition(), item.selectionPrice(), item.maxQuantity()));
+        }
+        return candidates;
     }
 
     private boolean complement(String a, String b) {
@@ -1065,8 +1091,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                                                 String text, Set<String> codes, Set<String> hot,
                                                 Map<Long, Double> ratings,
                                                 CustomerOrderIntentParser.Intent intent) {
-        String requestedSize = has(text, "大杯", "大份", "加大") ? "LARGE"
-                : has(text, "小杯", "小份") ? "SMALL" : null;
+        String requestedSize = requestedSize(text);
         String size = requestedSize == null ? "MEDIUM" : requestedSize;
         final String initialSize = size;
         double total = products.stream()
@@ -1086,6 +1111,11 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                 .map(entry -> item(storeId, entry.getValue(), resolvedSize, codes, hot, ratings,
                         quantities.getOrDefault(entry.getKey(), 1)))
                 .toList();
+    }
+
+    private String requestedSize(String text) {
+        return has(text, "大杯", "大份", "加大") ? "LARGE"
+                : has(text, "小杯", "小份") ? "SMALL" : null;
     }
 
     private Map<String, Object> item(Long storeId, MenuItemDTO p, String size,
@@ -1121,210 +1151,11 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         return recommendationPolicy.matchesCategory(product, category);
     }
 
-    private boolean isFillerOnly(MenuItemDTO product) {
-        return recommendationPolicy.isFillerOnly(product);
-    }
-
-    private List<MenuItemDTO> buildMultiCategoryBundle(List<Scored> ranked,
-                                                       List<String> requiredCategories,
-                                                       Long storeId, Integer budget, int itemCount) {
-        List<MenuItemDTO> bundle = new ArrayList<>();
-        Set<String> usedCodes = new HashSet<>();
-        for (String category : requiredCategories) {
-            for (Scored item : ranked) {
-                if (usedCodes.contains(item.product().getCode())) continue;
-                if (matchesCategory(item.product(), category)) {
-                    bundle.add(item.product());
-                    usedCodes.add(item.product().getCode());
-                    break;
-                }
-            }
-        }
-        int extraNeeded = Math.max(0, itemCount - bundle.size());
-        if (extraNeeded > 0) {
-            for (Scored item : ranked) {
-                if (usedCodes.contains(item.product().getCode())) continue;
-                bundle.add(item.product());
-                usedCodes.add(item.product().getCode());
-                if (bundle.size() >= itemCount) break;
-            }
-        }
-        if (budget != null) {
-            double total = bundle.stream().mapToDouble(p -> minimumPrice(storeId, p)).sum();
-            if (total > budget + 0.0001) {
-                List<MenuItemDTO> cheaperBundle = findCheaperBundle(ranked, requiredCategories, storeId, budget, itemCount, usedCodes);
-                if (cheaperBundle != null && !cheaperBundle.isEmpty()) {
-                    return cheaperBundle;
-                }
-            }
-        }
-        return bundle;
-    }
-
-    private List<MenuItemDTO> findCheaperBundle(List<Scored> ranked,
-                                                 List<String> requiredCategories,
-                                                 Long storeId, Integer budget, int itemCount,
-                                                 Set<String> originalUsedCodes) {
-        List<Scored> sortedByPrice = ranked.stream()
-                .filter(item -> !isFillerOnly(item.product()))
-                .sorted(Comparator.comparingDouble(item -> minimumPrice(storeId, item.product())))
-                .toList();
-        List<MenuItemDTO> bundle = new ArrayList<>();
-        Set<String> usedCodes = new HashSet<>();
-        for (String category : requiredCategories) {
-            for (Scored item : sortedByPrice) {
-                if (usedCodes.contains(item.product().getCode())) continue;
-                if (matchesCategory(item.product(), category)) {
-                    bundle.add(item.product());
-                    usedCodes.add(item.product().getCode());
-                    break;
-                }
-            }
-        }
-        int extra = Math.max(0, itemCount - bundle.size());
-        for (Scored item : sortedByPrice) {
-            if (extra <= 0) break;
-            if (usedCodes.contains(item.product().getCode())) continue;
-            bundle.add(item.product());
-            usedCodes.add(item.product().getCode());
-            extra--;
-        }
-        double total = bundle.stream().mapToDouble(p -> minimumPrice(storeId, p)).sum();
-        return total <= budget + 0.0001 ? bundle : null;
-    }
-
     private List<List<MenuItemDTO>> generateOptionBundles(List<Scored> ranked,
-                                                          CustomerOrderIntentParser.Intent intent,
-                                                          Long storeId) {
-        List<List<MenuItemDTO>> bundles = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        List<String> categories = intent.requiredCategories();
-        int minSize = categories.size();
-        int targetSize = Math.max(intent.itemCount(), minSize);
-        List<Scored> candidates = ranked.stream()
-                .filter(item -> !isFillerOnly(item.product())).limit(20).toList();
-        for (int attempt = 0; attempt < candidates.size()
-                && bundles.size() < MAX_RECOMMENDATION_OPTIONS; attempt++) {
-            List<MenuItemDTO> bundle = new ArrayList<>();
-            Set<String> usedCodes = new HashSet<>();
-            List<String> shuffledCats = new ArrayList<>(categories);
-            java.util.Collections.rotate(shuffledCats, attempt);
-            for (String category : shuffledCats) {
-                Scored bestForCat = null;
-                int startIdx = (categories.indexOf(category) + attempt) % candidates.size();
-                for (int i = 0; i < candidates.size(); i++) {
-                    int idx = (startIdx + i) % candidates.size();
-                    Scored item = candidates.get(idx);
-                    if (usedCodes.contains(item.product().getCode())) continue;
-                    if (matchesCategory(item.product(), category)) {
-                        if (bestForCat == null || item.score() > bestForCat.score())
-                            bestForCat = item;
-                    }
-                }
-                if (bestForCat != null) {
-                    bundle.add(bestForCat.product());
-                    usedCodes.add(bestForCat.product().getCode());
-                }
-            }
-            int extra = Math.max(0, targetSize - bundle.size());
-            for (int i = 0; i < candidates.size() && extra > 0; i++) {
-                Scored item = candidates.get((attempt + i) % candidates.size());
-                if (usedCodes.contains(item.product().getCode())) continue;
-                bundle.add(item.product());
-                usedCodes.add(item.product().getCode());
-                extra--;
-            }
-            if (bundle.size() < targetSize) continue;
-            if (intent.budget() != null) {
-                double total = bundle.stream().mapToDouble(p -> minimumPrice(storeId, p)).sum();
-                if (total > intent.budget() + 0.0001) {
-                    List<MenuItemDTO> cheaper = findCheaperBundle(ranked, categories, storeId, intent.budget(), targetSize, usedCodes);
-                    if (cheaper != null && !cheaper.isEmpty() && cheaper.size() >= targetSize) {
-                        bundle = cheaper;
-                    } else {
-                        continue;
-                    }
-                }
-            }
-            String sig = bundle.stream().map(MenuItemDTO::getCode).sorted().collect(Collectors.joining(","));
-            if (seen.add(sig)) bundles.add(bundle);
-        }
-        if (bundles.isEmpty() && !ranked.isEmpty()) {
-            List<MenuItemDTO> fallback = new ArrayList<>();
-            for (String category : categories) {
-                for (Scored item : ranked) {
-                    if (matchesCategory(item.product(), category)) {
-                        fallback.add(item.product());
-                        break;
-                    }
-                }
-            }
-            int extra = Math.max(0, targetSize - fallback.size());
-            for (Scored item : ranked) {
-                if (extra <= 0) break;
-                if (!fallback.contains(item.product())) {
-                    fallback.add(item.product());
-                    extra--;
-                }
-            }
-            if (!fallback.isEmpty()) bundles.add(fallback);
-        }
-        return bundles;
-    }
-
-    private List<MenuItemDTO> bestBundle(List<Scored> ranked, int count,
-                                          Long storeId, Integer budget) {
-        List<Scored> candidates = ranked.stream()
-                .filter(item -> !isFillerOnly(item.product())).limit(24).toList();
-        if (candidates.size() < count) count = candidates.size();
-        if (count <= 0) return List.of();
-
-        List<MenuItemDTO> best = null;
-        int bestScore = Integer.MIN_VALUE;
-        double bestTotal = -1;
-
-        if (count <= 6) {
-            List<List<Scored>> combos = combinations(candidates, count);
-            for (List<Scored> combo : combos) {
-                List<MenuItemDTO> bundle = combo.stream().map(Scored::product).toList();
-                double total = bundle.stream()
-                        .mapToDouble(product -> minimumPrice(storeId, product)).sum();
-                if (budget != null && total > budget + 0.0001) continue;
-                int score = combo.stream().mapToInt(Scored::score).sum();
-                if (score > bestScore || (score == bestScore && total > bestTotal)) {
-                    best = bundle;
-                    bestScore = score;
-                    bestTotal = total;
-                }
-            }
-        } else {
-            List<Scored> sorted = candidates.stream()
-                    .sorted(Comparator.comparingInt(Scored::score).reversed()).toList();
-            best = new ArrayList<>();
-            for (int i = 0; i < count && i < sorted.size(); i++) {
-                best.add(sorted.get(i).product());
-            }
-        }
-        return best != null ? best : List.of();
-    }
-
-    private <T> List<List<T>> combinations(List<T> list, int k) {
-        List<List<T>> result = new ArrayList<>();
-        if (k > list.size() || k <= 0) return result;
-        combine(list, k, 0, new ArrayList<>(), result);
-        return result;
-    }
-
-    private <T> void combine(List<T> list, int k, int start, List<T> current, List<List<T>> result) {
-        if (current.size() == k) {
-            result.add(new ArrayList<>(current));
-            return;
-        }
-        for (int i = start; i < list.size(); i++) {
-            current.add(list.get(i));
-            combine(list, k, i + 1, current, result);
-            current.remove(current.size() - 1);
-        }
+                                                          CustomerOrderIntentParser.Intent intent) {
+        return rankBundles(ranked, intent, MAX_RECOMMENDATION_OPTIONS).stream()
+                .map(CustomerOrderBundleRanker.RankedBundle::products)
+                .toList();
     }
 
     /** 基于主方案生成变体：保留品类结构，替换为候选集中的同分品类商品 */
@@ -1383,6 +1214,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         return s == null ? "" : s;
     }
 
-    private record Scored(MenuItemDTO product, int score) {
+    private record Scored(MenuItemDTO product, int score, int rankPosition,
+                          double selectionPrice, int maxQuantity) {
     }
 }

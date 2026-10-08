@@ -28,11 +28,17 @@ public class InventoryApplicationService implements InventoryService {
     @Override
     public boolean hasAvailable(Long storeId, Long productId, int quantity) {
         if (storeId == null || productId == null || quantity <= 0) return false;
+        return availableQuantity(storeId, productId) >= quantity;
+    }
+
+    @Override
+    public int availableQuantity(Long storeId, Long productId) {
+        if (storeId == null || productId == null) return 0;
         List<Integer> stocks = jdbcTemplate.query(
                 "SELECT available_stock FROM inventory_stock WHERE store_id = ? AND product_id = ?",
                 (rs, rowNum) -> rs.getInt(1), storeId, productId);
         // 与 reserve 的首次售卖规则保持一致：尚未落库存记录时按初始库存判断，但不在查询阶段写库。
-        return stocks.isEmpty() ? INITIAL_STOCK >= quantity : stocks.get(0) >= quantity;
+        return stocks.isEmpty() ? INITIAL_STOCK : Math.max(0, stocks.get(0));
     }
 
     @Override
