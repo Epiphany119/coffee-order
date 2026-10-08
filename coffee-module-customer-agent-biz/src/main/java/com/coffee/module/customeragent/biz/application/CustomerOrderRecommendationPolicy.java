@@ -20,15 +20,23 @@ final class CustomerOrderRecommendationPolicy {
                                             int targetItemCount) {
         if (products == null || products.isEmpty()) return List.of();
         CustomerOrderIntentParser.Intent safeIntent = intent == null ? emptyIntent() : intent;
+        // 精确商品类型只锁定它对应的品类。其他被用户同时要求的品类仍需
+        // 留在候选集中，例如“蛋糕加咖啡”必须保留蛋糕和咖啡，不能只剩蛋糕。
+        Set<String> explicitlyAnchoredCategories = Set.copyOf(CustomerOrderIntentCatalog.categoriesFromText(
+                String.join(" ", safeIntent.explicitProductNames())));
         return products.stream()
                 .filter(Objects::nonNull)
                 .filter(p -> !matchesExcludedProductOrCategory(p,
                         safeIntent.excludedProducts(), safeIntent.excludedCategories()))
                 // A specific user-stated menu type (for example, cake) is a hard constraint.
-                // Similar items in the same broad category (for example, croissants) cannot replace it.
+                // Similar items in the same broad category (for example, croissants) cannot replace it;
+                // required categories not anchored by an exact type (for example, coffee) remain eligible.
                 .filter(p -> safeIntent.explicitProductNames().isEmpty()
                         || safeIntent.explicitProductNames().stream()
-                        .anyMatch(term -> CustomerOrderIntentCatalog.matchesExplicitProduct(p, term)))
+                        .anyMatch(term -> CustomerOrderIntentCatalog.matchesExplicitProduct(p, term))
+                        || safeIntent.requiredCategories().stream()
+                        .filter(category -> !explicitlyAnchoredCategories.contains(category))
+                        .anyMatch(category -> matchesCategory(p, category)))
                 .filter(p -> !isFillerOnly(p) || explicitlyRequested(p, safeIntent))
                 .filter(p -> safeIntent.requiredCategories().isEmpty()
                         || safeIntent.requiredCategories().stream().anyMatch(category -> matchesCategory(p, category)))

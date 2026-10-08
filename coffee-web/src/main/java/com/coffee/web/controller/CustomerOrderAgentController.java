@@ -109,7 +109,7 @@ public class CustomerOrderAgentController {
                 // Send the only truthful in-flight status.
                 emitter.send(SseEmitter.event().name("stage").data(Map.of(
                         "step", "processing",
-                        "message", "正在为你生成点单方案")));
+                        "message", "正在为你生成点单方案"), MediaType.APPLICATION_JSON));
                 Map<String, Object> raw = customerOrderAgentService.plan(
                         request.storeId, identity.userId(), identity.guestId(), request.message);
                 recordPlan(runId, request.storeId, raw, elapsedMs(started));
@@ -120,8 +120,8 @@ public class CustomerOrderAgentController {
                 emitter.send(SseEmitter.event().name("stage").data(Map.of(
                         "step", "done",
                         "progress", 100,
-                        "message", "点单方案已生成")));
-                emitter.send(SseEmitter.event().name("result").data(result));
+                        "message", "点单方案已生成"), MediaType.APPLICATION_JSON));
+                emitter.send(SseEmitter.event().name("result").data(result, MediaType.APPLICATION_JSON));
                 agentAudit.markPlanReady(runId);
                 emitter.complete();
             } catch (Exception e) {
@@ -129,12 +129,15 @@ public class CustomerOrderAgentController {
                         Map.of("storeId", request.storeId), safeError(e));
                 agentAudit.finish(requestIdentity, runId, "FAILED", null, safeError(e), 1);
                 try {
-                emitter.send(SseEmitter.event().name("error").data(Map.of(
+                    emitter.send(SseEmitter.event().name("error").data(Map.of(
                             "message", e instanceof ServiceException && e.getMessage() != null
                                     ? e.getMessage() : "Agent 服务暂时不可用，请稍后重试",
-                            "step", "failed")));
+                            "step", "failed"), MediaType.APPLICATION_JSON));
                 } catch (IOException ignored) { }
-                emitter.completeWithError(e);
+                // The named SSE error event above is the client-facing failure contract.
+                // Dispatching the exception again would invoke the JSON @ExceptionHandler
+                // while the response is already text/event-stream and produce a converter error.
+                emitter.complete();
             } finally {
                 agentAudit.recordModelUsage(runId, chatClient.endUsageTracking());
             }

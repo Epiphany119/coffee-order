@@ -12,6 +12,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CustomerOrderLlmIntentParserTest {
@@ -89,6 +90,37 @@ class CustomerOrderLlmIntentParserTest {
         assertEquals(List.of("芝士蛋糕"), candidates.stream().map(MenuItemDTO::getName).toList());
         assertFalse(validator.validateCombo(List.of(croissant), intent, 10).valid());
         assertTrue(validator.validateCombo(List.of(cake), intent, 10).valid());
+    }
+
+    @Test
+    void cakeAndCoffeeRequestKeepsBothRequiredCategoriesInTheCandidateSetWithoutBudget() {
+        MenuItemDTO cake = product(1L, "cake", "芝士蛋糕", "dessert");
+        MenuItemDTO croissant = product(2L, "croissant", "法式可颂", "dessert");
+        MenuItemDTO coffee = product(3L, "coffee", "美式咖啡", "coffee");
+        CustomerOrderIntentParser.Intent intent = new CustomerOrderIntentParser()
+                .parse("蛋糕加咖啡");
+
+        assertEquals(Set.of("dessert", "coffee"), Set.copyOf(intent.requiredCategories()));
+        assertEquals(List.of("蛋糕"), intent.explicitProductNames());
+        assertNull(intent.budget());
+
+        List<MenuItemDTO> eligible = new CustomerOrderRecommendationPolicy()
+                .filterHardConstraints(List.of(cake, croissant, coffee), intent, intent.itemCount());
+        CustomerSemanticMenuRetriever semanticRetriever = new CustomerSemanticMenuRetriever(null, null, null) {
+            @Override
+            Map<String, Double> retrieve(Long storeId, String query, List<MenuItemDTO> products) {
+                return Map.of();
+            }
+        };
+        CandidateSetService candidateSetService = new CandidateSetService(null, semanticRetriever);
+        CandidateSetService.CandidateResult candidates = candidateSetService.getCandidates(
+                1L, "蛋糕加咖啡", intent.requiredCategories(), eligible, intent.itemCount(),
+                intent.explicitProductNames());
+
+        assertEquals(Set.of("cake", "coffee"), candidates.candidates().stream()
+                .map(MenuItemDTO::getCode).collect(java.util.stream.Collectors.toSet()));
+        assertTrue(new IntentValidator().validateCombo(List.of(cake, coffee), intent, 47D).valid());
+        assertFalse(new IntentValidator().validateCombo(List.of(cake, croissant), intent, 47D).valid());
     }
 
     @Test
