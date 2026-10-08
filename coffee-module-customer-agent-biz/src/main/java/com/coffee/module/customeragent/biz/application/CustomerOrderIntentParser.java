@@ -40,10 +40,12 @@ final class CustomerOrderIntentParser {
 
         boolean pairing = multiCategory || explicitPairing;
         List<String> preferenceTags = CustomerOrderIntentCatalog.canonicalPreferenceTags(text, List.of());
+        List<String> explicitProductNames = CustomerOrderIntentCatalog.explicitProductTermsFromText(text);
 
         return new Intent(required, excluded, excludedProducts, temperature, budget, pairing, inferredItemCount,
                 pricePreference, summary(required, excluded, excludedProducts, temperature, budget,
-                inferredItemCount, pricePreference, preferenceTags), List.of(), preferenceTags);
+                inferredItemCount, pricePreference, explicitProductNames, preferenceTags),
+                explicitProductNames, preferenceTags);
     }
 
     private Temperature detectTemperature(String text) {
@@ -125,9 +127,12 @@ final class CustomerOrderIntentParser {
 
     private String summary(List<String> required, Set<String> excluded, Set<String> excludedProducts,
                            Temperature temperature, Integer budget, int itemCount,
-                           PricePreference pricePreference, List<String> preferenceTags) {
+                           PricePreference pricePreference, List<String> explicitProductNames,
+                           List<String> preferenceTags) {
         List<String> parts = new ArrayList<>();
         if (!required.isEmpty()) parts.add("指定" + required.stream().map(CustomerOrderIntentCatalog::categoryName).reduce((a, b) -> a + "、" + b).orElse(""));
+        if (explicitProductNames != null && !explicitProductNames.isEmpty())
+            parts.add("指定商品" + String.join("、", explicitProductNames));
         if (!excluded.isEmpty()) parts.add("排除" + excluded.stream().map(CustomerOrderIntentCatalog::categoryName).reduce((a, b) -> a + "、" + b).orElse(""));
         if (!excludedProducts.isEmpty()) parts.add("不要" + String.join("、", excludedProducts));
         if (temperature != Temperature.ANY) parts.add(temperature == Temperature.COLD ? "偏好冰饮" : "偏好热饮");

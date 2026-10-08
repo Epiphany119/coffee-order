@@ -441,7 +441,7 @@ flowchart TB
 | 可观测性 | 请求有 Request-Id；Agent 有 runId、callId、状态、耗时、返回条数和失败原因 |
 | 性能 | 当前未填入未经压测的固定数字；上线前应按菜单查询、下单、支付回调、Agent 计划分别进行并发和 P95 压测 |
 | 体验 | 表单校验即时反馈；密码可显示/隐藏；邮箱占用、验证码冷却、地址缺失和订单状态给出明确提示 |
-| 数据迁移 | DDL 不由应用启动自动创建；所有结构变更通过可重复执行的版本 SQL 完成，并在测试库验证后再更新备份 |
+| 数据迁移 | DDL 不由应用启动自动创建；结构变更按依赖顺序通过版本 SQL 管理，每个脚本的重复执行规则以脚本说明为准；应用前备份并在测试库验证 |
 | 隐私 | 地址和联系方式使用业务快照与最小字段返回；日志不记录密码、验证码明文或第三方授权码 |
 
 ---
@@ -582,19 +582,15 @@ npm run dev
 
 ### 12.3 迁移顺序
 
-当前项目不在应用启动时自动建表，必须先选择 coffee_order_pro 数据库，再按版本执行 sql/migrations 中的脚本。与当前功能直接相关的脚本包括：
+当前项目不在应用启动时自动建表。先选择目标数据库，再按依赖顺序执行 `sql/migrations/` 中的版本脚本。当前仓库包含：
 
-1. V20260831_12_runtime_consistency.sql：幂等、Outbox、库存等运行时表。
-2. V20260831_13_delivery_module.sql：地址、配送单和配送员基础表。
-3. V20260901_15_delivery_rider_performance_contact.sql：骑手业绩和联系框架。
-4. V20260901_16_profile_center.sql：三端个人资料字段。
-5. V20260906_17_agent_observability.sql：Agent 运行轨迹和工具调用审计。
-6. V20260906_18_email_auth.sql：邮箱验证码和限流表。
-7. V20260907_19_multi_email_binding.sql：多邮箱绑定关系。
-8. V20260907_20_user_account_no.sql：账号号码和历史用户修复。
-9. V20260908_21_order_item_image.sql：订单明细商品图片快照和历史图片回填。
+1. `V20260926_25_ai_p1_completion.sql`：商家 Agent 操作审计、Outbox/Delivery、知识嵌入状态和支付流水唯一约束。
+2. `V20260927_26_ai_p2_observability.sql`：Agent 运行和评测版本字段、查询索引。
+3. `V20261001_27_ai_agent_consolidation.sql`：知识可见性和商家动作确认/过期字段。
+4. `V20261002_28_request_idempotency.sql`：下单请求幂等表及唯一键。
+5. `V20261008_29_database_consistency.sql`：幂等表字段/索引对齐，并在存在等价旧索引时清理 Agent 冗余索引。
 
-迁移脚本执行后应重新导出数据库结构备份，并在测试环境完成邮箱、下单、外卖、Agent 和订单图片验收。
+V25–V28 依赖此前建立的业务基线表。V25–V27 含非幂等 `ALTER TABLE`，已经应用的数据库不要重复执行；V29 是可重复执行的前向对齐脚本。应用前先备份目标库并核对 `SELECT DATABASE(), VERSION()`，应用后保存完整结构导出，在测试环境完成下单幂等、支付流水防重、Agent 评测和商家动作投递验收。
 
 ---
 
@@ -641,3 +637,9 @@ PENDING 待支付、PROCESSING 处理中、PAID 已支付、FAILED 支付失败�
 # AI 平台优化目标
 
 本项目的 AI 平台优化目标、模拟支付边界、业务闭环和内部服务鉴权标准见：[`AI_PLATFORM_OPTIMIZATION_PRD.md`](AI_PLATFORM_OPTIMIZATION_PRD.md)。
+
+## 红色：数据库交付遗留项
+
+<span style="color:red">当前仓库不含 V1–V24 的完整基线迁移文件，也没有 `sql_backup/` 完整结构备份，因此不能仅凭本仓库从空数据库重建全部业务表。恢复历史迁移或提交经脱敏的完整基线 DDL 后，才能完成干净环境建库验收。</span>
+
+<span style="color:red">`request_idempotency` 目前没有自动过期清理任务。表数据会持续增长；清理保留期需要先由业务明确，避免删除仍在客户端重试窗口内的幂等记录。</span>

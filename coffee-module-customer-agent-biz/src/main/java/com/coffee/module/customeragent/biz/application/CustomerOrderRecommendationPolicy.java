@@ -24,6 +24,11 @@ final class CustomerOrderRecommendationPolicy {
                 .filter(Objects::nonNull)
                 .filter(p -> !matchesExcludedProductOrCategory(p,
                         safeIntent.excludedProducts(), safeIntent.excludedCategories()))
+                // A specific user-stated menu type (for example, cake) is a hard constraint.
+                // Similar items in the same broad category (for example, croissants) cannot replace it.
+                .filter(p -> safeIntent.explicitProductNames().isEmpty()
+                        || safeIntent.explicitProductNames().stream()
+                        .anyMatch(term -> CustomerOrderIntentCatalog.matchesExplicitProduct(p, term)))
                 .filter(p -> !isFillerOnly(p) || explicitlyRequested(p, safeIntent))
                 .filter(p -> safeIntent.requiredCategories().isEmpty()
                         || safeIntent.requiredCategories().stream().anyMatch(category -> matchesCategory(p, category)))
@@ -109,15 +114,9 @@ final class CustomerOrderRecommendationPolicy {
 
     private boolean explicitlyRequested(MenuItemDTO product, CustomerOrderIntentParser.Intent intent) {
         if (product == null || intent == null || intent.explicitProductNames() == null) return false;
-        String name = CustomerOrderIntentCatalog.normalize(product.getName());
-        String code = CustomerOrderIntentCatalog.normalize(product.getCode());
-        if (name.isBlank() && code.isBlank()) return false;
         return intent.explicitProductNames().stream()
                 .filter(Objects::nonNull)
-                .map(CustomerOrderIntentCatalog::normalize)
-                .filter(term -> !term.isBlank())
-                .anyMatch(term -> (!name.isBlank() && (name.contains(term) || term.contains(name)))
-                        || (!code.isBlank() && code.equals(term)));
+                .anyMatch(term -> CustomerOrderIntentCatalog.matchesExplicitProduct(product, term));
     }
 
     private int compare(MenuItemDTO left, MenuItemDTO right,

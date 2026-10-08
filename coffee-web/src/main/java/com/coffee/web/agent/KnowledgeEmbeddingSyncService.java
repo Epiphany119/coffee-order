@@ -3,6 +3,7 @@ package com.coffee.web.agent;
 import com.coffee.common.ai.ZhipuEmbeddingClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -32,6 +33,7 @@ public class KnowledgeEmbeddingSyncService {
     private final Clock clock;
     private volatile long lastQueueWarningMs;
 
+    @Autowired
     public KnowledgeEmbeddingSyncService(
             JdbcTemplate jdbc,
             ZhipuEmbeddingClient embeddingClient,

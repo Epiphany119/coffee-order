@@ -33,6 +33,7 @@ final class CustomerOrderIntentCatalog {
             "tea", List.of("茶饮", "茶"),
             "ice", List.of("冰饮", "冷饮")
     );
+    private static final Set<String> GENERIC_ITEM_TERMS = Set.of("小吃");
 
     private static final List<String> NEGATION_MARKERS = List.of(
             "不需要", "不想要", "不想", "不要", "不喝", "不吃", "不选", "不含",
@@ -72,6 +73,67 @@ final class CustomerOrderIntentCatalog {
                 .sorted(Comparator.comparingInt(Map.Entry::getValue))
                 .map(Map.Entry::getKey)
                 .toList();
+    }
+
+    /**
+     * Extract specific menu types stated by the user. A broad category such as "甜点"
+     * remains a category preference, while "蛋糕" is a hard product-type constraint.
+     */
+    static List<String> explicitProductTermsFromText(String raw) {
+        String text = lower(raw);
+        if (text.isBlank()) return List.of();
+
+        Set<String> broadTerms = new HashSet<>(GENERIC_ITEM_TERMS);
+        BROAD_CATEGORY_WORDS.values().forEach(broadTerms::addAll);
+        List<String> matches = CATEGORY_WORDS.values().stream()
+                .flatMap(Collection::stream)
+                .distinct()
+                .filter(term -> !broadTerms.contains(term))
+                .filter(term -> firstPositiveIndex(text, List.of(term)) < Integer.MAX_VALUE)
+                .sorted(Comparator.comparingInt(String::length).reversed()
+                        .thenComparingInt(term -> firstPositiveIndex(text, List.of(term))))
+                .toList();
+
+        List<String> specific = new ArrayList<>();
+        for (String term : matches) {
+            if (specific.stream().anyMatch(existing -> existing.contains(term))) continue;
+            specific.removeIf(term::contains);
+            specific.add(term);
+        }
+        return specific.stream()
+                .sorted(Comparator.comparingInt(term -> firstPositiveIndex(text, List.of(term))))
+                .toList();
+    }
+
+    /** Merge rule-extracted types and LLM-grounded names, preferring the more specific phrase. */
+    static List<String> mergeExplicitProductTerms(Collection<String> terms) {
+        if (terms == null || terms.isEmpty()) return List.of();
+        Set<String> broadTerms = new HashSet<>(GENERIC_ITEM_TERMS);
+        BROAD_CATEGORY_WORDS.values().forEach(broadTerms::addAll);
+        List<String> sorted = terms.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(term -> !term.isBlank() && !broadTerms.contains(lower(term)))
+                .distinct()
+                .sorted(Comparator.comparingInt((String term) -> normalize(term).length()).reversed())
+                .toList();
+        List<String> merged = new ArrayList<>();
+        for (String term : sorted) {
+            String normalized = normalize(term);
+            if (normalized.isBlank() || merged.stream()
+                    .map(CustomerOrderIntentCatalog::normalize)
+                    .anyMatch(existing -> existing.contains(normalized))) continue;
+            merged.removeIf(existing -> normalized.contains(normalize(existing)));
+            merged.add(term);
+        }
+        return List.copyOf(merged);
+    }
+
+    static boolean matchesExplicitProduct(MenuItemDTO product, String term) {
+        if (product == null || term == null || term.isBlank()) return false;
+        String normalizedTerm = normalize(term);
+        return (!normalizedTerm.isBlank() && normalize(product.getName()).contains(normalizedTerm))
+                || (!normalizedTerm.isBlank() && normalize(product.getCode()).equals(normalizedTerm));
     }
 
     static Set<String> excludedCategoriesFromText(String raw) {

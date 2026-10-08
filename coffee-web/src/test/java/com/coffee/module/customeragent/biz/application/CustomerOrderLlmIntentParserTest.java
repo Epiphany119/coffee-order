@@ -46,6 +46,61 @@ class CustomerOrderLlmIntentParserTest {
     }
 
     @Test
+    void repeatedCakeRequestIsCapturedAsOneSpecificProductConstraint() {
+        CustomerOrderIntentParser.Intent intent = new CustomerOrderIntentParser()
+                .parse("来个蛋糕，蛋糕！");
+
+        assertEquals(List.of("蛋糕"), intent.explicitProductNames());
+        assertTrue(intent.requiredCategories().contains("dessert"));
+        assertTrue(intent.summary().contains("指定商品蛋糕"));
+    }
+
+    @Test
+    void rawCakeConstraintSurvivesWhenLlmOmitsMustInclude() {
+        ZhipuChatClient chatClient = new ZhipuChatClient(new ObjectMapper(), "", "http://localhost", "test", 1) {
+            @Override
+            public Optional<String> callJson(String systemPrompt, String userPrompt, int maxTokens) {
+                return Optional.of("{\"target_count\":1,\"must_include\":[]}");
+            }
+
+            @Override
+            public String extractJson(String raw) {
+                return raw;
+            }
+        };
+
+        CustomerOrderIntentParser.Intent intent = new CustomerOrderLlmIntentParser(chatClient, new ObjectMapper())
+                .parse("来个蛋糕，蛋糕！");
+
+        assertEquals(List.of("蛋糕"), intent.explicitProductNames());
+    }
+
+    @Test
+    void specificCakeConstraintFiltersCroissantsAndIsValidatedAfterSelection() {
+        MenuItemDTO cake = product(1L, "cake", "芝士蛋糕", "dessert");
+        MenuItemDTO croissant = product(2L, "croissant", "法式可颂", "dessert");
+        CustomerOrderIntentParser.Intent intent = new CustomerOrderIntentParser()
+                .parse("来个蛋糕，蛋糕！");
+
+        List<MenuItemDTO> candidates = new CustomerOrderRecommendationPolicy()
+                .filterHardConstraints(List.of(croissant, cake), intent, 1);
+        IntentValidator validator = new IntentValidator();
+
+        assertEquals(List.of("芝士蛋糕"), candidates.stream().map(MenuItemDTO::getName).toList());
+        assertFalse(validator.validateCombo(List.of(croissant), intent, 10).valid());
+        assertTrue(validator.validateCombo(List.of(cake), intent, 10).valid());
+    }
+
+    @Test
+    void broadDessertRequestDoesNotBecomeAnExactProductName() {
+        CustomerOrderIntentParser.Intent intent = new CustomerOrderIntentParser()
+                .parse("推荐一个甜点");
+
+        assertTrue(intent.requiredCategories().contains("dessert"));
+        assertTrue(intent.explicitProductNames().isEmpty());
+    }
+
+    @Test
     void exactProductMentionDoesNotBypassCategoryConstraint() {
         MenuItemDTO coffee = new MenuItemDTO();
         coffee.setName("燕麦拿铁");

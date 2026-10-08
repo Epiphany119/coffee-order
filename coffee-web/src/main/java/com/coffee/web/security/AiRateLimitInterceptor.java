@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.lang.NonNull;
@@ -38,6 +39,7 @@ public class AiRateLimitInterceptor implements HandlerInterceptor {
     private final Clock clock;
     private final Map<String, LocalBucket> localBuckets = new ConcurrentHashMap<>();
 
+    @Autowired
     public AiRateLimitInterceptor(AiRateLimitProperties properties,
                                   StringRedisTemplate redis) {
         this(properties, redis, Clock.systemUTC());

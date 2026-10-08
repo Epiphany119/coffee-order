@@ -28,6 +28,7 @@ final class IntentValidator {
                 .map(p -> p.getName() + "(" + safe(p.getCategoryCode()) + ")")
                 .toList());
 
+        validateExplicitProducts(products, intent, failures);
         validateCategories(products, intent, failures);
         validateCount(products, intent, failures);
         validateBudget(totalPrice, intent, failures);
@@ -39,6 +40,19 @@ final class IntentValidator {
         } else {
             log.warn("组合校验失败: {}", String.join("; ", failures));
             return new ValidationResult(false, failures);
+        }
+    }
+
+    /** Every specific product type named by the user must appear in the selected combination. */
+    private void validateExplicitProducts(List<MenuItemDTO> products,
+                                          CustomerOrderIntentParser.Intent intent,
+                                          List<String> failures) {
+        if (intent == null || intent.explicitProductNames().isEmpty()) return;
+        Set<String> terms = new LinkedHashSet<>(intent.explicitProductNames());
+        for (String term : terms) {
+            boolean found = products.stream()
+                    .anyMatch(product -> CustomerOrderIntentCatalog.matchesExplicitProduct(product, term));
+            if (!found) failures.add("未包含用户指定商品: " + term);
         }
     }
 

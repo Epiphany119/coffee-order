@@ -1,8 +1,8 @@
 # FIKA 咖啡点单系统 — 数据库设计
 
-> 数据库：`coffee_order_pro`（MySQL 8.0，utf8mb4 / utf8mb4_unicode_ci）。本文档描述当前线上结构（2026-09-01），结构变更后请同步更新本文档并重新导出 `sql_backup/` 备份。
+> 数据库：`coffee_order_pro`（MySQL 8.0，utf8mb4）。基础业务表说明沿用 2026-09-01 结构基线；V25–V29 的运行时结构以 `sql/migrations/` 为准。最近一次目标库结构核验确认 MySQL 8.0.43。
 
-> 除下方基础业务表外，订单幂等、Outbox、库存、定位、秒杀、Agent、站内通知和外卖配送等运行时表由 `sql/migrations/` 中的版本迁移统一创建；不要依赖应用启动时临时建表。外卖模块新增表由 `V20260831_13_delivery_module.sql` 创建，骑手业绩查询索引由 `V20260901_15_delivery_rider_performance_contact.sql` 增加，三端个人资料字段由 `V20260901_16_profile_center.sql` 增加，配送商品图片快照由 `V20260908_22_delivery_order_item_snapshot.sql` 增加，通知关联订单由 `V20260908_23_notification_order_link.sql` 增加。
+> 除下方基础业务表外，订单幂等、Outbox、库存、定位、秒杀、Agent、站内通知和外卖配送等运行时表不由应用启动时创建。当前仓库保留的 V25–V29 脚本只覆盖近期变更，不包含完整基础业务 DDL；空库部署需要额外的基线结构导出或恢复历史迁移。
 
 ## 一、基础业务表总览（26 张）
 
@@ -135,9 +135,9 @@
 
 ### 2.9 request_idempotency — 下单请求幂等表（2026-08-09 新增）
 
-`id / scope / idempotency_key / request_hash / status / response_body / created_at / updated_at`。`(scope, idempotency_key)` 唯一：scope 由下单身份组成（用户或游客），避免不同身份互相占用 key。首次请求插入 `PROCESSING`；成功后保存 `SUCCESS` 与完整订单响应；同 key 重试直接返回该响应。相同 key 对应不同请求指纹、或仍在处理时，接口返回 `409`，防止重复创建订单。
+`id / scope(VARCHAR(160)) / idempotency_key(VARCHAR(128)) / request_hash(CHAR(64)) / status / response_body(MEDIUMTEXT) / created_at / updated_at`。`(scope, idempotency_key)` 唯一，`created_at` 有普通索引：scope 由下单身份组成（用户或游客），避免不同身份互相占用 key。首次请求插入 `PROCESSING`；成功后保存 `SUCCESS` 与完整订单响应；同 key 重试直接返回该响应。相同 key 对应不同请求指纹、或仍在处理时，接口返回 `409`，防止重复创建订单。幂等记录暂时没有自动清理，保留期需在启用清理任务前由业务确定。
 
-`request_idempotency` 的建表及唯一键迁移位于 `sql/migrations/V20261002_28_request_idempotency.sql`。首次应用到已有数据库前，先检查迁移输出的重复 `(scope, idempotency_key)`；脚本不会删除或合并记录，若有重复，新增唯一键会失败并保留原数据，需人工核对后再执行。
+`request_idempotency` 的建表及唯一键迁移位于 `sql/migrations/V20261002_28_request_idempotency.sql`；字段宽度和索引规范化由 `V20261008_29_database_consistency.sql` 完成。首次添加唯一键前，先检查重复 `(scope, idempotency_key)`；迁移不会删除或合并记录，若有重复，新增唯一键会失败并保留原数据，需人工核对后再执行。V29 将响应列扩为 MEDIUMTEXT，并将时间索引统一到 `created_at`。
 
 ### 2.10 event_outbox — 可靠事件表（2026-08-09 新增）
 
@@ -163,6 +163,8 @@
 
 - 备份产物：`sql_backup/`（mysqldump 结构备份，命名 `structure_backup_YYYYMMDD.sql`）。
 - **新环境部署** = 建库 + 导入最新结构备份 + 手工导入共享数据 + 启动后端。种子店铺（21 家）与店铺座位由启动器（`StoreDataInitializer`/`SeatDataInitializer`）自动补齐；但**共享商品/共享类目无自动初始化器**——`store_id = 0` 的 50 个商品（41 个常规 + 9 个凑单品）与 5 个类目为存量数据，需从现有开发库导出（`SELECT ... WHERE store_id = 0` 的 `menu_item`/`menu_category` 行）或自行初始化，否则商家端菜单为空。
-- 当前系统**无自动 DDL**（MyBatis-Plus 不做建表，Agent 服务也不在请求过程中建表），表结构变更需手工执行迁移并重新导出备份。请按版本顺序执行 `V20260831_12_runtime_consistency.sql`、`V20260831_13_delivery_module.sql`、`V20260901_15_delivery_rider_performance_contact.sql`、`V20260901_16_profile_center.sql`、`V20260906_18_email_auth.sql`、`V20260907_19_multi_email_binding.sql` 和 `V20260907_20_user_account_no.sql`；其中 V18 创建邮箱验证码临时表和发送限流状态表，V19 创建多邮箱绑定关系表并将历史 `coffee_user.email` 回填为首选邮箱，V20 为历史用户生成 `fika` + 10 位数字账号号码并建立唯一约束，新用户由应用生成随机账号号码。验证码哈希双写 Redis/MySQL，使用、过期或错误次数耗尽后删除 MySQL 临时记录，Redis key 同时删除并通过 TTL 自动兜底失效；Redis 丢失时不会影响 MySQL 校验兜底。V16 和 V20 使用 `information_schema` 动态 DDL，兼容 MySQL 5.7+/8.0+ 且可重复执行；V20 只增加账号字段和唯一索引，不修改内部自增 id 及其外键关系。
+- 当前系统**无自动 DDL**（MyBatis-Plus 不做建表，Agent 服务也不在请求过程中建表），表结构变更需手工执行版本迁移并重新导出备份。当前仓库保留 V25–V29；V25–V27 依赖更早的业务基线表且不是可重复执行脚本，已经应用的库不要重跑。V29 只扩宽幂等字段、规范索引并在等价索引仍保留时删除一个重复索引，不删除业务数据。
+- 当前仓库没有 V1–V24 的完整基线迁移，也没有 `sql_backup/` 结构导出。空库重建前必须先恢复历史迁移或提供完整基线 DDL；V25–V29 本身不能从空库建立全部业务结构。
+- 应用迁移前确认目标库和版本：`SELECT DATABASE(), VERSION();`。应用后执行 `SHOW CREATE TABLE` 或导出完整 schema，并在测试库完成邮箱、下单幂等、支付回调、外卖和 Agent 场景验收。
 - 迁移前建议预检：`SELECT order_id, COUNT(*) FROM payment GROUP BY order_id HAVING COUNT(*) > 1`；`SELECT user_id, order_id, COUNT(*) FROM after_sale GROUP BY user_id, order_id HAVING COUNT(*) > 1`；`SELECT user_id, product_code, COUNT(*) FROM user_favorite WHERE user_id IS NOT NULL GROUP BY user_id, product_code HAVING COUNT(*) > 1`；游客收藏将 `user_id` 换为 `guest_id`；菜单、店铺、商家编号也应分别检查 `(store_id, code)`、`merchant_id`、`merchant_no` 重复。
 - 历史重构记录：`product`/`product_category` → `menu_item`/`menu_category`（2026-08）；`guest_order` 并入 `user_order`；座位单表 → 三表（`seat_template`/`store`/`seat`）。

@@ -102,7 +102,11 @@ final class CustomerOrderLlmIntentParser {
         CustomerOrderIntentParser.Intent rawIntent = fallbackParser.parse(rawText);
         // 模型字段只能作为候选提示，必须先被原始用户文本验证，避免示例值或幻觉变成约束。
         List<String> groundedTags = groundedTerms(rawText, readStringArray(node, "tags"));
-        List<String> mustInclude = groundedPositiveTerms(rawText, readStringArray(node, "must_include"));
+        List<String> mustIncludeCandidates = new ArrayList<>(
+                CustomerOrderIntentCatalog.explicitProductTermsFromText(rawText));
+        mustIncludeCandidates.addAll(groundedPositiveTerms(rawText, readStringArray(node, "must_include")));
+        List<String> mustInclude = new ArrayList<>(
+                CustomerOrderIntentCatalog.mergeExplicitProductTerms(mustIncludeCandidates));
         List<String> avoid = groundedNegatedTerms(rawText, readStringArray(node, "avoid"));
         List<String> tags = CustomerOrderIntentCatalog.canonicalPreferenceTags(rawText, groundedTags);
 
@@ -145,7 +149,7 @@ final class CustomerOrderLlmIntentParser {
         excludedProducts.addAll(avoid);
 
         String summary = buildSummary(requiredCategories, excludedCategories, excludedProducts,
-                temperature, budgetMax, itemCount, tags);
+                temperature, budgetMax, itemCount, mustInclude, tags);
 
         return new CustomerOrderIntentParser.Intent(
                 List.copyOf(requiredCategories),
@@ -351,11 +355,15 @@ final class CustomerOrderLlmIntentParser {
     private String buildSummary(List<String> required, Set<String> excluded,
                                  Set<String> excludedProducts,
                                  CustomerOrderIntentParser.Temperature temperature,
-                                 Integer budget, int itemCount, List<String> tags) {
+                                 Integer budget, int itemCount, List<String> explicitProductNames,
+                                 List<String> tags) {
         List<String> parts = new ArrayList<>();
         if (!required.isEmpty()) {
             parts.add("指定" + required.stream().map(this::catName)
                     .reduce((a, b) -> a + "、" + b).orElse(""));
+        }
+        if (explicitProductNames != null && !explicitProductNames.isEmpty()) {
+            parts.add("指定商品" + String.join("、", explicitProductNames));
         }
         if (!excluded.isEmpty()) {
             parts.add("排除" + excluded.stream().map(this::catName)
