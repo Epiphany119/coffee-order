@@ -31,6 +31,8 @@ import java.util.regex.Pattern;
 public class CustomerSupervisorAgentOrchestrator {
     private static final String SCENE = "customer_supervisor";
     private static final Pattern ORDER_ID = Pattern.compile("(?:订单|单号|取餐号|#)\\s*#?\\s*(\\d+)");
+    /** 顾客在“选择尺寸”卡片里点选后的短回复，必须结合上一轮助手回答才能理解。 */
+    private static final Pattern SIZE_CHOICE = Pattern.compile("(?:小杯|中杯|大杯|小份|中份|大份)");
     private static final Set<String> INJECTION_MARKERS = Set.of(
             "忽略之前", "忽略上面的", "system prompt", "系统提示词", "开发者指令",
             "不要遵守", "越过权限", "执行sql", "drop table", "delete from", "读取所有用户",
@@ -83,7 +85,7 @@ public class CustomerSupervisorAgentOrchestrator {
         int toolCount = 0;
         try {
             CustomerPreferenceMemoryService.Memory remembered = memory.remember(owner, storeId, input);
-            Route route = route(input);
+            Route route = route(input, history);
             audit.recordPlanJson(runId, plan(route, remembered), "FIKA Supervisor Agent · " + route.subAgent(),
                     route == Route.UNSAFE ? "prompt_injection_rejected" : null);
 
@@ -102,7 +104,7 @@ public class CustomerSupervisorAgentOrchestrator {
                 result = feedback(identity, storeId, sessionId, runId, input, remembered);
                 toolCount = 1;
             } else if (route == Route.ORDER) {
-                result = order(identity, storeId, sessionId, runId, input, remembered);
+                result = order(identity, storeId, sessionId, runId, input, history, remembered);
                 toolCount = 1;
             } else {
                 result = consult(identity, storeId, sessionId, runId, input, history, remembered);
@@ -120,20 +122,26 @@ public class CustomerSupervisorAgentOrchestrator {
     }
 
     private AssistantAnswer order(RequestIdentity identity, Long storeId, String sessionId, String runId,
-                                  String input, CustomerPreferenceMemoryService.Memory remembered) {
+                                  String input, List<String> history,
+                                  CustomerPreferenceMemoryService.Memory remembered) {
         long started = System.nanoTime();
+        // “中杯”这类选择回复本身没有商品信息，必须把上一轮提到的商品补全后再交给点单子 Agent。
+        String orderInput = normalizeOrderInput(input, history, storeId);
         Map<String, Object> plan;
         try {
-            plan = orderAgent.plan(storeId, userId(identity), guestId(identity), input);
+            plan = orderAgent.plan(storeId, userId(identity), guestId(identity), orderInput);
             List<?> items = plan.get("items") instanceof List<?> list ? list : List.of();
             audit.recordStep(runId, 0, "order_sub_agent", true, "SUCCEEDED", elapsedMs(started), items.size(),
-                    Map.of("storeId", storeId), "生成真实菜单方案；未创建订单，等待用户确认");
+                    Map.of("storeId", storeId, "orderInput", orderInput), "生成真实菜单方案；未创建订单，等待用户确认");
         } catch (RuntimeException ex) {
             audit.recordStep(runId, 0, "order_sub_agent", true, "FAILED", elapsedMs(started), 0,
                     Map.of("storeId", storeId), safeError(ex));
             throw ex;
         }
         String answer = String.valueOf(plan.getOrDefault("reply", "我已经根据当前门店菜单生成了一套方案，请先确认再下单。"));
+        if (!orderInput.equals(input)) {
+            answer = "已按你选择的" + input + "：" + answer;
+        }
         return new AssistantAnswer(sessionId, runId, Route.ORDER.name(), answer,
                 "FIKA Supervisor → order-sub-agent", action("ORDER_PLAN", "确认这套搭配，去支付", plan), remembered.signals());
     }
@@ -186,8 +194,10 @@ public class CustomerSupervisorAgentOrchestrator {
             audit.recordPlanJson(runId, plan(Route.CONSULT, remembered),
                     "FIKA Supervisor → consult-sub-agent", "knowledge_retrieval_degraded");
         }
+        // 咨询回答里问“选哪个尺寸”时，附带真实菜单规格选项，由前端渲染成可点击卡片。
+        CustomerAction choice = choiceAction(answer, input, storeId);
         return new AssistantAnswer(sessionId, runId, Route.CONSULT.name(), answer,
-                "FIKA Supervisor → consult-sub-agent", action("NONE", "", Map.of()), remembered.signals(),
+                "FIKA Supervisor → consult-sub-agent", choice, remembered.signals(),
                 hits.stream().map(hit -> new AnswerSource(hit.id(), hit.title(), hit.source(), hit.updatedAt(), hit.documentVersion(), hit.embeddingStatus(), hit.score())).toList());
     }
 
@@ -289,7 +299,7 @@ public class CustomerSupervisorAgentOrchestrator {
         return row;
     }
 
-    private Route route(String input) {
+    private Route route(String input, List<String> history) {
         String text = input.toLowerCase(Locale.ROOT);
         if (contains(text, INJECTION_MARKERS.toArray(String[]::new))) return Route.UNSAFE;
         if (contains(text, "订单", "物流", "配送到哪", "配送进度", "订单状态", "我的单", "取餐号", "查单")) {
@@ -298,10 +308,103 @@ public class CustomerSupervisorAgentOrchestrator {
         if (contains(text, "反馈", "建议", "投诉", "差评", "退款", "售后", "重做", "换货", "漏做", "做错")) {
             return Route.FEEDBACK;
         }
-        if (contains(text, "下单", "来一杯", "点一杯", "点一份", "买一杯", "搭配", "推荐", "想喝", "想吃", "购物袋")) {
+        // “推荐/想喝”属于咨询：只回答菜单事实并给规格选择卡片，不直接生成支付方案。
+        // 只有明确的点单动作，或在选择卡片里点选规格后的短回复，才进入点单子 Agent。
+        if (isChoiceFollowUp(input, history)) return Route.ORDER;
+        if (contains(text, "下单", "来一杯", "点一杯", "点一份", "买一杯", "购物袋", "给我来")) {
             return Route.ORDER;
         }
         return Route.CONSULT;
+    }
+
+    /** 判断“中杯”这类短回复是否是在回答上一轮的规格提问。 */
+    private boolean isChoiceFollowUp(String input, List<String> history) {
+        String text = input == null ? "" : input.trim();
+        if (!SIZE_CHOICE.matcher(text).matches()) return false;
+        if (history == null) return false;
+        for (int i = history.size() - 1; i >= 0; i--) {
+            String entry = history.get(i);
+            if (entry == null || !entry.startsWith("assistant：")) continue;
+            String answer = entry.substring(entry.indexOf('：') + 1);
+            return answer.contains("尺寸") || answer.contains("小杯") || answer.contains("中杯") || answer.contains("大杯");
+        }
+        return false;
+    }
+
+    /** 把规格短回复补全为完整点单语句，避免点单子 Agent 只看到“中杯”而丢掉商品上下文。 */
+    private String normalizeOrderInput(String input, List<String> history, Long storeId) {
+        if (!isChoiceFollowUp(input, history)) return input;
+        String product = mentionedProduct(history, storeId);
+        return product == null ? "我要点一杯" + input : "我要点一杯" + product + input;
+    }
+
+    private String mentionedProduct(List<String> history, Long storeId) {
+        if (history == null || storeId == null) return null;
+        List<MenuItemDTO> products;
+        try {
+            products = menuService.getAllProducts(storeId);
+        } catch (RuntimeException ex) {
+            return null;
+        }
+        for (int i = history.size() - 1; i >= 0; i--) {
+            String entry = history.get(i);
+            if (entry == null) continue;
+            for (MenuItemDTO product : products) {
+                String name = product.getName();
+                if (name != null && !name.isBlank() && entry.contains(name)) return name;
+            }
+        }
+        return null;
+    }
+
+    /** 咨询回答询问尺寸时，挂载由当前门店真实菜单生成的规格选项。 */
+    private CustomerAction choiceAction(String answer, String input, Long storeId) {
+        if (answer == null || storeId == null) return action("NONE", "", Map.of());
+        boolean asksSize = answer.contains("哪个尺寸") || answer.contains("什么尺寸")
+                || answer.contains("选择尺寸") || (answer.contains("选哪个") && answer.contains("杯"));
+        if (!asksSize) return action("NONE", "", Map.of());
+
+        MenuItemDTO matched = null;
+        List<MenuItemDTO> products;
+        try {
+            products = menuService.getAllProducts(storeId);
+        } catch (RuntimeException ex) {
+            return action("NONE", "", Map.of());
+        }
+        for (MenuItemDTO product : products) {
+            String name = product.getName();
+            String code = product.getCode();
+            if (name != null && (answer.contains(name) || input.contains(name))
+                    || code != null && (answer.toLowerCase(Locale.ROOT).contains(code.toLowerCase(Locale.ROOT))
+                    || input.toLowerCase(Locale.ROOT).contains(code.toLowerCase(Locale.ROOT)))) {
+                matched = product;
+                break;
+            }
+        }
+        if (matched == null) return action("NONE", "", Map.of());
+
+        List<Map<String, Object>> choices = new ArrayList<>();
+        choices.add(choice("小杯", "SMALL", priceValue(matched.getPriceSmall(), matched.getBasePrice())));
+        choices.add(choice("中杯", "MEDIUM", priceValue(matched.getPriceMedium(), matched.getBasePrice())));
+        choices.add(choice("大杯", "LARGE", priceValue(matched.getPriceLarge(), matched.getBasePrice())));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("prompt", "选择" + matched.getName() + "的尺寸");
+        payload.put("productName", matched.getName());
+        payload.put("productCode", matched.getCode());
+        payload.put("choices", choices);
+        return action("ASK_CHOICE", "选择尺寸", payload);
+    }
+
+    private Map<String, Object> choice(String label, String value, double price) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("label", label);
+        row.put("value", value);
+        row.put("price", price);
+        return row;
+    }
+
+    private double priceValue(Double specific, Double base) {
+        return numberValue(specific == null ? base : specific);
     }
 
     private String orderSummary(List<Map<String, Object>> orders) {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { customerAssistantApi } from '@/api'
+import { customerAssistantApi, customerAgentApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import type { CustomerAgentPlan, CustomerAssistantResponse, OrderRecord } from '@/api/types'
 
@@ -28,15 +28,30 @@ const quickPrompts = [
   '有什么低糖甜点？'
 ]
 
+interface AssistantChoice {
+  label: string
+  value: string
+  price?: number
+}
+
 interface AssistantMessage {
   role: 'user' | 'assistant'
   content: string
   response?: CustomerAssistantResponse
+  /** 后端下发的规格选项；未重启后端时由回答内容兜底识别。 */
+  choices?: AssistantChoice[]
+  selectedChoice?: string
+  /** 后端未直接返回支付方案时，前端按所选规格向点单 Agent 请求的方案。 */
+  localPlan?: CustomerAgentPlan
+  planLoading?: boolean
 }
 
 type AssistantOrder = Partial<OrderRecord> & { id: number }
 
 const hasStore = computed(() => !!store.currentStore?.storeId)
+const displayName = computed(() => store.currentUser?.nickname || store.currentUser?.username || '游客')
+const userAvatar = computed(() => store.currentUser?.avatarUrl || '')
+const userInitial = computed(() => displayName.value.slice(0, 1).toUpperCase() || '游')
 
 watch(() => props.modelValue, (visible) => {
   if (visible && messages.value.length === 0) {
@@ -68,6 +83,68 @@ function orderList(response?: CustomerAssistantResponse): AssistantOrder[] {
   return Array.isArray(orders) ? orders.filter(item => item && Number.isFinite(Number(item.id))).map(item => item as AssistantOrder) : []
 }
 
+/** 后端下发的规格选择卡片数据。 */
+function choiceList(response?: CustomerAssistantResponse): AssistantChoice[] {
+  if (response?.action?.type !== 'ASK_CHOICE') return []
+  const choices = response.action.payload?.choices
+  if (!Array.isArray(choices)) return []
+  return choices
+    .filter(item => item && typeof item.label === 'string' && typeof item.value === 'string')
+    .map(item => ({ label: String(item.label), value: String(item.value), price: Number.isFinite(Number(item.price)) ? Number(item.price) : undefined }))
+}
+
+function mentionedProductName(content: string): string {
+  const product = store.products.find(item =>
+    (item.name && content.includes(item.name))
+    || (item.code && content.toLowerCase().includes(item.code.toLowerCase())))
+  return product?.name || ''
+}
+
+/** 兼容尚未重启的旧后端：回答明确询问尺寸且列出了杯型价格时，仍然渲染选择卡片。 */
+function fallbackChoices(content: string): AssistantChoice[] {
+  if (!/哪个尺寸|什么尺寸|选择尺寸|选哪个.{0,4}杯/.test(content)) return []
+  const productName = mentionedProductName(content)
+  if (!productName) return []
+  const regex = /(小杯|中杯|大杯)\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*元?/g
+  const result: AssistantChoice[] = []
+  let match: RegExpExecArray | null = regex.exec(content)
+  while (match) {
+    const label = match[1]
+    result.push({
+      label,
+      value: label === '小杯' ? 'SMALL' : label === '大杯' ? 'LARGE' : 'MEDIUM',
+      price: Number(match[2])
+    })
+    match = regex.exec(content)
+  }
+  return result.length >= 2 ? result : []
+}
+
+function choicesFor(message: AssistantMessage): AssistantChoice[] {
+  if (message.role !== 'assistant') return []
+  const fromBackend = choiceList(message.response)
+  return fromBackend.length ? fromBackend : fallbackChoices(message.content)
+}
+
+function findChoice(text: string): { message: AssistantMessage; choice: AssistantChoice } | null {
+  const normalized = text.trim()
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    const message = messages.value[index]
+    if (message.role !== 'assistant') continue
+    const choices = choicesFor(message)
+    if (choices.length) {
+      const choice = choices.find(item => normalized === item.label || normalized.includes(item.label))
+      if (choice) return { message, choice }
+      break
+    }
+  }
+  return null
+}
+
+function planFor(message: AssistantMessage): CustomerAgentPlan | null {
+  return message.localPlan || orderPlan(message.response)
+}
+
 function orderTotal(plan: CustomerAgentPlan): number {
   return (plan.items || []).reduce((sum, item) => sum + Number(item.estimatedPrice || 0) * Number(item.quantity || 1), 0)
 }
@@ -95,7 +172,7 @@ function actionLabel(response: CustomerAssistantResponse): string {
   return response.action?.label || (response.action?.type === 'OPEN_AFTER_SALE' ? '申请售后' : '提交反馈')
 }
 
-async function send(text = input.value) {
+async function send(text = input.value, selected?: { message: AssistantMessage; choice: AssistantChoice }) {
   const message = text.trim()
   if (loading.value || !message) return
   if (!hasStore.value) {
@@ -103,6 +180,8 @@ async function send(text = input.value) {
     return
   }
 
+  const matched = selected || findChoice(message)
+  if (matched) matched.message.selectedChoice = matched.choice.label
   input.value = ''
   messages.value.push({ role: 'user', content: message })
   loading.value = true
@@ -114,11 +193,17 @@ async function send(text = input.value) {
       message
     })
     sessionId.value = response.sessionId
-    messages.value.push({
+    const assistantMessage: AssistantMessage = {
       role: 'assistant',
       content: response.answer || '我暂时没有生成可用回答，请换一种方式描述。',
-      response
-    })
+      response,
+      choices: choiceList(response)
+    }
+    messages.value.push(assistantMessage)
+    // 后端已返回支付方案就直接用；未返回时按所选规格补一份，避免出现“选完了却没支付入口”。
+    if (matched && !orderPlan(response)) {
+      await attachChoicePlan(assistantMessage, matched.choice)
+    }
   } catch (error: any) {
     ElMessage.error(error?.message || '顾客助手暂时不可用，请稍后重试')
   } finally {
@@ -126,15 +211,46 @@ async function send(text = input.value) {
   }
 }
 
+/** 旧后端还没给“中杯”生成支付方案时，用点单 Agent 的真实方案令牌兜底。 */
+async function attachChoicePlan(message: AssistantMessage, choice: AssistantChoice) {
+  if (!hasStore.value) return
+  message.planLoading = true
+  try {
+    const identity = store.isLoggedIn && store.currentUser?.id
+      ? { userId: store.currentUser.id }
+      : { guestId: await store.ensureGuestId() }
+    const productName = message.response?.action?.payload?.productName
+      || mentionedProductName(message.content)
+    const description = productName ? `${productName}${choice.label}` : choice.label
+    const plan = await customerAgentApi.plan({
+      storeId: store.currentStore!.storeId,
+      ...identity,
+      message: `我要点一杯${description}`
+    })
+    if (plan?.planToken && Array.isArray(plan.items) && plan.items.length) {
+      message.localPlan = plan
+    } else {
+      ElMessage.warning('暂时没能生成支付方案，请重新选择规格或稍后再试')
+    }
+  } catch (error: any) {
+    ElMessage.warning(error?.message || '支付方案生成失败，可以再点一次规格')
+  } finally {
+    message.planLoading = false
+  }
+}
+
+function checkoutPlan(plan: CustomerAgentPlan, runId?: string) {
+  if (!plan?.planToken) return
+  emit('checkout', plan.planToken, false, runId || plan.runId)
+  emit('update:modelValue', false)
+}
+
 function runAction(response: CustomerAssistantResponse) {
   const type = response.action?.type
   const payload = response.action?.payload || {}
   if (type === 'ORDER_PLAN') {
     const plan = orderPlan(response)
-    if (plan?.planToken) {
-      emit('checkout', plan.planToken, false, response.runId)
-      emit('update:modelValue', false)
-    }
+    if (plan?.planToken) checkoutPlan(plan, response.runId)
   } else if (type === 'VIEW_ORDERS') {
     emit('go-orders')
     emit('update:modelValue', false)
@@ -184,22 +300,48 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 
       <section class="message-list">
         <article v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="message-row" :class="message.role">
-          <div class="avatar">{{ message.role === 'user' ? '我' : 'F' }}</div>
+          <div class="avatar">
+            <img v-if="message.role === 'user' && userAvatar" :src="userAvatar" :alt="displayName" />
+            <span v-else-if="message.role === 'user'">{{ userInitial }}</span>
+            <span v-else>F</span>
+          </div>
           <div class="message-body">
             <div class="message-meta">
-              <b>{{ message.role === 'user' ? '你' : 'FIKA Assistant' }}</b>
+              <b>{{ message.role === 'user' ? displayName : 'FIKA Assistant' }}</b>
               <span v-if="message.response">{{ routeLabel(message.response) }}</span>
             </div>
             <p class="message-content">{{ message.content }}</p>
+
+            <section v-if="choicesFor(message).length" class="choice-card">
+              <div class="choice-title">
+                <b>{{ message.response?.action?.payload?.prompt || '选择规格' }}</b>
+                <span>点选后继续下单</span>
+              </div>
+              <div class="choice-options">
+                <button
+                  v-for="choice in choicesFor(message)"
+                  :key="choice.value"
+                  type="button"
+                  :class="{ selected: message.selectedChoice === choice.label }"
+                  :disabled="loading || message.selectedChoice === choice.label"
+                  @click="send(choice.label, { message, choice })"
+                >
+                  <b>{{ choice.label }}</b>
+                  <span v-if="choice.price != null">¥{{ Number(choice.price).toFixed(2) }}</span>
+                </button>
+              </div>
+            </section>
 
             <template v-if="message.response">
               <div v-if="message.response.memorySignals?.length" class="memory-row">
                 <span v-for="signal in message.response.memorySignals" :key="signal">已记住 · {{ signal }}</span>
               </div>
 
-              <section v-if="orderPlan(message.response)" class="order-plan-card">
+              <div v-if="message.planLoading" class="plan-loading">正在生成支付方案…</div>
+
+              <section v-if="planFor(message)" class="order-plan-card">
                 <div class="card-title"><b>本次建议</b><span>待你确认</span></div>
-                <div v-for="item in orderPlan(message.response)!.items" :key="`${item.productCode}-${item.size}`" class="plan-item">
+                <div v-for="item in planFor(message)!.items" :key="`${item.productCode}-${item.size}`" class="plan-item">
                   <div class="plan-image">
                     <img v-if="item.imageUrl" :src="item.imageUrl" :alt="item.name" />
                     <span v-else>☕</span>
@@ -211,8 +353,8 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
                 </div>
                 <div class="plan-footer">
                   <span>预计合计</span>
-                  <strong>¥{{ orderTotal(orderPlan(message.response)!).toFixed(2) }}</strong>
-                  <button type="button" @click="runAction(message.response!)">确认方案，去支付 →</button>
+                  <strong>¥{{ orderTotal(planFor(message)!).toFixed(2) }}</strong>
+                  <button type="button" @click="checkoutPlan(planFor(message)!, message.response?.runId)">确认方案，去支付 →</button>
                 </div>
               </section>
 
@@ -267,7 +409,9 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 .message-list { display: grid; gap: 12px; max-height: min(54vh, 520px); overflow: auto; padding: 2px 3px 4px; }
 .message-row { display: flex; gap: 8px; align-items: flex-start; }
 .message-row.user { flex-direction: row-reverse; }
-.avatar { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 10px; color: #fff; background: var(--pine); font-size: 11px; font-weight: 700; }
+.avatar { display: grid; place-items: center; flex: none; width: 28px; height: 28px; overflow: hidden; border-radius: 10px; color: #fff; background: var(--pine); font-size: 11px; font-weight: 700; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
+.message-row.user .avatar { border-radius: 50%; color: var(--pine); background: #e3eee7; }
 .message-row.assistant .avatar { color: #bd602f; background: #fff0e7; }
 .message-body { min-width: 0; max-width: min(92%, 590px); }
 .message-row.user .message-body { text-align: right; }
@@ -278,6 +422,17 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 .message-row.user .message-content { border-radius: 14px 4px 14px 14px; color: #fff; background: var(--pine); text-align: left; }
 .memory-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .memory-row span { padding: 4px 7px; border-radius: 999px; color: #547a61; background: #edf6ef; font-size: 10px; }
+.choice-card { margin-top: 8px; padding: 10px; border: 1px solid #dceadd; border-radius: 14px; background: #f7fbf7; }
+.choice-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--ink); font-size: 11px; }
+.choice-title span { color: #7d8e82; font-size: 10px; }
+.choice-options { display: flex; flex-wrap: wrap; gap: 7px; }
+.choice-options button { display: flex; align-items: center; gap: 7px; border: 1px solid #cfe0d2; border-radius: 10px; padding: 7px 10px; color: #316449; background: #fff; font-size: 11px; cursor: pointer; transition: border-color .16s, background .16s; }
+.choice-options button:hover:not(:disabled) { border-color: var(--pine); background: #eef6ef; }
+.choice-options button.selected { border-color: var(--pine); color: #fff; background: var(--pine); }
+.choice-options button span { color: var(--orange); font-size: 10px; }
+.choice-options button.selected span { color: #ffd8bf; }
+.choice-options button:disabled { cursor: default; }
+.plan-loading { margin-top: 8px; color: #7d8e82; font-size: 10px; }
 .order-plan-card, .order-list-card { margin-top: 8px; padding: 11px; border: 1px solid #f0d8c9; border-radius: 14px; background: linear-gradient(120deg, #fffaf6, #fff); }
 .card-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--ink); font-size: 12px; }
 .card-title span { color: #c16a3f; font-size: 10px; }

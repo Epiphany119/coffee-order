@@ -369,6 +369,7 @@ export interface CustomerAgentPlan {
 
 export type CustomerAssistantActionType =
   | 'ORDER_PLAN'
+  | 'ASK_CHOICE'
   | 'VIEW_ORDERS'
   | 'OPEN_FEEDBACK'
   | 'OPEN_AFTER_SALE'
