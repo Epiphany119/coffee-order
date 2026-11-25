@@ -331,6 +331,9 @@ export interface CustomerAgentItem {
   quantity: number
   estimatedPrice: number
   reason: string
+  /** 顾客在推荐卡片里选择的配料（编码或名称），由服务端重新计价后写入方案。 */
+  condiments?: string[]
+  productId?: number
 }
 
 export interface CustomerAgentOption {
@@ -369,6 +372,7 @@ export interface CustomerAgentPlan {
 
 export type CustomerAssistantActionType =
   | 'ORDER_PLAN'
+  | 'CHECKOUT_PLAN'
   | 'ASK_CHOICE'
   | 'VIEW_ORDERS'
   | 'OPEN_FEEDBACK'

@@ -23,12 +23,14 @@ public class CustomerAssistantController {
     public Result<CustomerSupervisorAgentOrchestrator.AssistantAnswer> ask(@RequestBody AssistantRequest request) {
         if (request == null) throw new com.coffee.common.core.exception.ServiceException(400, "请求不能为空");
         RequestIdentity identity = AccessGuard.currentIdentity();
-        return Result.success(supervisor.execute(identity, request.storeId, request.sessionId, request.message));
+        return Result.success(supervisor.execute(identity, request.storeId, request.sessionId, request.message, request.planToken));
     }
 
     public static class AssistantRequest {
         public Long storeId;
         public String sessionId;
         public String message;
+        /** 当前会话里最新的待确认方案；用于“在此基础上再加一份”合并为一笔支付。 */
+        public String planToken;
     }
 }

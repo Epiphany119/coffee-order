@@ -204,7 +204,9 @@ public class CustomerAgentPlanRegistry {
                     || item.productName() == null || item.productName().isBlank() || item.productName().length() > 200
                     || item.size() == null || !ALLOWED_SIZES.contains(item.size().toUpperCase(Locale.ROOT))
                     || (item.quotedUnitPrice() != null
-                    && (!Double.isFinite(item.quotedUnitPrice()) || item.quotedUnitPrice() < 0))) {
+                    && (!Double.isFinite(item.quotedUnitPrice()) || item.quotedUnitPrice() < 0))
+                    || item.condiments() == null || item.condiments().size() > 10
+                    || item.condiments().stream().anyMatch(c -> c == null || c.isBlank() || c.length() > 40)) {
                 throw new ServiceException(400, "Agent 方案商品校验失败");
             }
         }

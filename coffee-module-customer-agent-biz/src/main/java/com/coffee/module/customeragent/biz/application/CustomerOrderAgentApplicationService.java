@@ -531,6 +531,177 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
     }
 
     @Override
+    public Map<String, Object> rebuild(Long storeId, Long userId, String guestId, String basePlanToken,
+                                       List<Map<String, Object>> lines, boolean replace, String note) {
+        if (storeId == null || storeId <= 0) throw new ServiceException(400, "请选择门店后再修改方案");
+        if (lines == null || lines.isEmpty()) throw new ServiceException(400, "没有需要保存的商品修改");
+
+        AgentOrderPlan base = null;
+        if (basePlanToken != null && !basePlanToken.isBlank()) {
+            // 读取原方案即校验门店与身份；浏览器不能伪造或跨身份修改方案。
+            base = planRegistry.resolve(basePlanToken, storeId, userId, guestId, false);
+        }
+        Map<String, MenuItemDTO> productsByCode = menuService.getAllProducts(storeId).stream()
+                .filter(this::validMenuSnapshot)
+                .collect(Collectors.toMap(MenuItemDTO::getCode, java.util.function.Function.identity(), (a, b) -> a, LinkedHashMap::new));
+        if (productsByCode.isEmpty()) throw new ServiceException(404, "当前门店暂无可售商品");
+
+        List<AgentOrderLine> merged = new ArrayList<>();
+        if (base != null && !replace) {
+            for (AgentOrderLine line : base.items()) {
+                MenuItemDTO product = productsByCode.get(line.productCode());
+                if (product == null) throw new ServiceException(409, "原方案中的商品已下架，请重新选择");
+                double price = menuService.calculatePrice(storeId, line.productCode(), line.size(), null, line.condiments());
+                merged.add(new AgentOrderLine(line.productCode(), line.size(), line.quantity(),
+                        product.getId(), product.getName(), price, line.condiments()));
+            }
+        }
+
+        for (Map<String, Object> request : lines) {
+            if (request == null) continue;
+            String code = String.valueOf(request.getOrDefault("productCode", "")).trim();
+            MenuItemDTO product = productsByCode.get(code);
+            if (product == null) throw new ServiceException(404, "商品不存在或已下架: " + code);
+            String size = normalizeEditedSize(request.get("size"));
+            int quantity = normalizeEditedQuantity(request.get("quantity"));
+            List<String> condiments = normalizeEditedCondiments(request.get("condiments"));
+            String signature = code + "|" + size + "|" + String.join(",", condiments);
+            int existingIndex = -1;
+            for (int i = 0; i < merged.size(); i++) {
+                AgentOrderLine current = merged.get(i);
+                String currentSignature = current.productCode() + "|" + current.size() + "|" + String.join(",", current.condiments());
+                if (signature.equals(currentSignature)) { existingIndex = i; break; }
+            }
+            int totalQuantity = quantity;
+            if (existingIndex >= 0) totalQuantity += merged.get(existingIndex).quantity();
+            if (totalQuantity < 1 || totalQuantity > 9) throw new ServiceException(400, "同一商品数量需在 1 到 9 份之间");
+            if (!inventoryService.hasAvailable(storeId, product.getId(), totalQuantity)) {
+                throw new ServiceException(409, "「" + product.getName() + "」库存不足");
+            }
+            double price = menuService.calculatePrice(storeId, code, size, null, condiments);
+            AgentOrderLine line = new AgentOrderLine(code, size, totalQuantity, product.getId(),
+                    product.getName(), price, condiments);
+            if (existingIndex >= 0) merged.set(existingIndex, line);
+            else {
+                if (merged.size() >= 10) throw new ServiceException(400, "一笔订单最多包含 10 种商品");
+                merged.add(line);
+            }
+        }
+
+        String resolvedNote = note == null || note.isBlank()
+                ? "已按你编辑的规格、配料和数量更新；确认后会创建一笔待支付订单。"
+                : note;
+        String planToken = issuePlanToken(new AgentOrderPlan(storeId, userId, guestId, merged, List.of(), resolvedNote));
+        if (planToken == null) throw new ServiceException(409, "修改后的方案未通过商品或库存校验，请重新选择");
+
+        List<Map<String, Object>> items = merged.stream()
+                .map(line -> editedPlanItem(productsByCode.get(line.productCode()), line, storeId))
+                .toList();
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("reply", "已按你的选择更新方案，确认后一次支付即可。");
+        response.put("items", items);
+        response.put("options", List.of());
+        response.put("signals", List.of());
+        response.put("promotion", Map.of("type", "NONE", "text", "", "threshold", 0, "amount", 0));
+        response.put("understanding", "按顾客编辑后的规格、配料与数量重建方案");
+        response.put("note", resolvedNote);
+        response.put("engine", "FIKA Customer Agent · edited-plan");
+        response.put("storeName", storeMeta(storeId).get("name"));
+        response.put("planToken", planToken);
+        response.put("expiresInSeconds", 300);
+        return response;
+    }
+
+    private Map<String, Object> editedPlanItem(MenuItemDTO product, AgentOrderLine line, Long storeId) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("productCode", line.productCode());
+        item.put("productId", line.productId());
+        item.put("name", line.productName());
+        item.put("description", product == null ? "" : safe(product.getDescription()));
+        item.put("imageUrl", product == null ? "" : safe(product.getImageUrl()));
+        item.put("categoryCode", product == null ? "" : safe(product.getCategoryCode()));
+        item.put("temperature", product == null ? "" : safe(product.getTemperature()));
+        item.put("size", line.size());
+        item.put("quantity", line.quantity());
+        item.put("estimatedPrice", line.quotedUnitPrice());
+        item.put("condiments", line.condiments());
+        item.put("reason", "按你的选择更新");
+        return item;
+    }
+
+    private String normalizeEditedSize(Object value) {
+        String size = value == null ? "MEDIUM" : String.valueOf(value).trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("SMALL", "MEDIUM", "LARGE").contains(size)) {
+            throw new ServiceException(400, "只支持小杯、中杯或大杯");
+        }
+        return size;
+    }
+
+    private int normalizeEditedQuantity(Object value) {
+        try {
+            int quantity = value instanceof Number number ? number.intValue() : Integer.parseInt(String.valueOf(value));
+            if (quantity < 1 || quantity > 9) throw new ServiceException(400, "商品数量需在 1 到 9 份之间");
+            return quantity;
+        } catch (NumberFormatException ex) {
+            throw new ServiceException(400, "商品数量格式无效");
+        }
+    }
+
+    private List<String> normalizeEditedCondiments(Object value) {
+        if (!(value instanceof List<?> values) || values.isEmpty()) return List.of();
+        Set<String> allowed = Set.of(
+                "珍珠", "波霸", "椰果", "芋圆", "芝士奶盖", "奶盖", "燕麦奶", "椰乳",
+                "摩卡", "焦糖", "香草", "榛果", "冰淇淋", "芝士波波", "芋泥波波",
+                "mocha", "whip", "caramel", "vanilla", "ice", "oat_milk",
+                "taro_ball", "coconut", "cheese_foam", "extra_sugar");
+        List<String> result = new ArrayList<>();
+        for (Object item : values) {
+            if (item == null) continue;
+            String code = String.valueOf(item).trim();
+            if (code.isEmpty()) continue;
+            if (!allowed.contains(code)) throw new ServiceException(400, "不支持的配料: " + code);
+            if (!result.contains(code)) result.add(code);
+        }
+        return result;
+    }
+
+    @Override
+    public Map<String, Object> view(String planToken, Long storeId, Long userId, String guestId) {
+        AgentOrderPlan plan = planRegistry.resolve(planToken, storeId, userId, guestId, false);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (AgentOrderLine line : plan.items()) {
+            MenuItemDTO product = menuService.getProductByCode(storeId, line.productCode());
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("productCode", line.productCode());
+            item.put("productId", line.productId());
+            item.put("name", line.productName());
+            item.put("description", product == null ? "" : safe(product.getDescription()));
+            item.put("imageUrl", product == null ? "" : safe(product.getImageUrl()));
+            item.put("categoryCode", product == null ? "" : safe(product.getCategoryCode()));
+            item.put("temperature", product == null ? "" : safe(product.getTemperature()));
+            item.put("size", line.size());
+            item.put("quantity", line.quantity());
+            item.put("condiments", line.condiments());
+            item.put("estimatedPrice", menuService.calculatePrice(
+                    storeId, line.productCode(), line.size(), null, line.condiments()));
+            item.put("reason", "当前待确认方案");
+            items.add(item);
+        }
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("reply", "这是当前待确认方案，请核对商品、规格和金额；确认无误后再进入支付。");
+        response.put("items", items);
+        response.put("options", List.of());
+        response.put("signals", List.of());
+        response.put("promotion", Map.of("type", "NONE", "text", "", "threshold", 0, "amount", 0));
+        response.put("note", plan.note());
+        response.put("engine", "FIKA Customer Agent · plan-review");
+        response.put("storeName", storeMeta(storeId).get("name"));
+        response.put("planToken", planToken);
+        response.put("expiresInSeconds", 300);
+        return response;
+    }
+
+    @Override
     public AgentOrderPlan confirm(String planToken, String idempotencyKey,
                                    Long storeId, Long userId, String guestId,
                                    boolean includeAddOn) {
@@ -544,7 +715,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
         boolean hasCompletePreviousTotal = true;
         for (AgentOrderLine line : selectedPlan.items()) {
             BigDecimal currentPrice = menuPriceAmount(menuService.calculatePrice(
-                    selectedPlan.storeId(), line.productCode(), line.size(), null, List.of()));
+                    selectedPlan.storeId(), line.productCode(), line.size(), null, line.condiments()));
             BigDecimal previousPrice = line.quotedUnitPrice() == null
                     ? null : menuPriceAmount(line.quotedUnitPrice());
             BigDecimal currentSubtotal = currentPrice.multiply(BigDecimal.valueOf(line.quantity()))
@@ -569,7 +740,7 @@ public class CustomerOrderAgentApplicationService implements CustomerOrderAgentS
                 changedItems.add(changedItem);
             }
             repricedLines.add(new AgentOrderLine(line.productCode(), line.size(), line.quantity(),
-                    line.productId(), line.productName(), currentPrice.doubleValue()));
+                    line.productId(), line.productName(), currentPrice.doubleValue(), line.condiments()));
         }
         if (!changedItems.isEmpty()) {
             AgentOrderPlan repricedPlan = new AgentOrderPlan(selectedPlan.storeId(), selectedPlan.userId(),

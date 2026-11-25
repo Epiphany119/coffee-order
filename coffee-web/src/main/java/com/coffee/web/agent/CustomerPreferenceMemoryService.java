@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -43,16 +44,23 @@ public class CustomerPreferenceMemoryService {
         Map<String, Object> extracted = extract(message);
         if (extracted.isEmpty()) return read(ownerKey, storeId);
         try {
-            Map<String, Object> merged = readJson(ownerKey, storeId);
+            Map<String, Object> previous = readJson(ownerKey, storeId);
+            Map<String, Object> merged = new LinkedHashMap<>(previous);
+            Map<String, Object> fresh = new LinkedHashMap<>();
+            extracted.forEach((key, value) -> {
+                if (!Objects.equals(previous.get(key), value)) fresh.put(key, value);
+            });
             merged.putAll(extracted);
-            LocalDateTime now = LocalDateTime.now();
-            String value = json.writeValueAsString(merged);
-            jdbc.update("""
-                    INSERT INTO agent_customer_preference(owner_key,store_id,preference_json,last_message_at,created_at,updated_at)
-                    VALUES (?,?,?,?,?,?)
-                    ON DUPLICATE KEY UPDATE preference_json=VALUES(preference_json),last_message_at=VALUES(last_message_at),updated_at=VALUES(updated_at)
-                    """, ownerKey, storeId, value, now, now, now);
-            return toMemory(merged);
+            if (!fresh.isEmpty()) {
+                LocalDateTime now = LocalDateTime.now();
+                String value = json.writeValueAsString(merged);
+                jdbc.update("""
+                        INSERT INTO agent_customer_preference(owner_key,store_id,preference_json,last_message_at,created_at,updated_at)
+                        VALUES (?,?,?,?,?,?)
+                        ON DUPLICATE KEY UPDATE preference_json=VALUES(preference_json),last_message_at=VALUES(last_message_at),updated_at=VALUES(updated_at)
+                        """, ownerKey, storeId, value, now, now, now);
+            }
+            return new Memory(merged, toSignals(merged), toSignals(fresh));
         } catch (Exception ex) {
             log.warn("customer preference memory skipped: {}", ex.getClass().getSimpleName());
             return Memory.empty();
@@ -68,7 +76,8 @@ public class CustomerPreferenceMemoryService {
                     "SELECT preference_json FROM agent_customer_preference WHERE owner_key=? AND store_id=?",
                     (rs, rowNum) -> rs.getString(1), ownerKey, storeId);
             if (values.isEmpty()) return Memory.empty();
-            return toMemory(json.readValue(values.get(0), new TypeReference<Map<String, Object>>() { }));
+            Map<String, Object> stored = json.readValue(values.get(0), new TypeReference<Map<String, Object>>() { });
+            return new Memory(stored, toSignals(stored), List.of());
         } catch (DataAccessException ex) {
             // 首次部署尚未执行迁移时，记忆是可选能力，不能让用户侧 Agent 整体不可用。
             log.debug("customer preference memory unavailable: {}", ex.getClass().getSimpleName());
@@ -109,8 +118,8 @@ public class CustomerPreferenceMemoryService {
         return result;
     }
 
-    private Memory toMemory(Map<String, Object> values) {
-        if (values == null || values.isEmpty()) return Memory.empty();
+    private List<String> toSignals(Map<String, Object> values) {
+        if (values == null || values.isEmpty()) return List.of();
         List<String> signals = new ArrayList<>();
         label(values, signals, "temperature", Map.of("COLD", "偏好冰饮", "HOT", "偏好热饮"));
         label(values, signals, "sweetness", Map.of("LOW", "偏好低糖", "NORMAL", "接受正常甜度"));
@@ -119,7 +128,7 @@ public class CustomerPreferenceMemoryService {
         label(values, signals, "pairing", Map.of("FOOD", "常搭配轻食或甜点"));
         Object budget = values.get("budget");
         if (budget != null) signals.add("最近预算约 ¥" + budget);
-        return new Memory(new LinkedHashMap<>(values), List.copyOf(signals));
+        return List.copyOf(signals);
     }
 
     private void label(Map<String, Object> values, List<String> signals, String key, Map<String, String> labels) {
@@ -132,8 +141,11 @@ public class CustomerPreferenceMemoryService {
         return false;
     }
 
-    public record Memory(Map<String, Object> values, List<String> signals) {
-        public static Memory empty() { return new Memory(Map.of(), List.of()); }
+    public record Memory(Map<String, Object> values, List<String> signals, List<String> freshSignals) {
+        public static Memory empty() { return new Memory(Map.of(), List.of(), List.of()); }
+
+        /** 只把本轮真正新增的偏好展示给用户，避免每条消息都挂一堆“已记住”。 */
+        public List<String> uiSignals() { return freshSignals == null ? List.of() : freshSignals; }
 
         public String promptContext() {
             return signals.isEmpty() ? "暂无已记录的口味偏好" : String.join("、", signals);

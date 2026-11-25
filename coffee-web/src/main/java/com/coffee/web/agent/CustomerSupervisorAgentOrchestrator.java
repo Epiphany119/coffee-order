@@ -12,6 +12,7 @@ import com.coffee.web.security.RequestIdentity;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -33,6 +34,10 @@ public class CustomerSupervisorAgentOrchestrator {
     private static final Pattern ORDER_ID = Pattern.compile("(?:订单|单号|取餐号|#)\\s*#?\\s*(\\d+)");
     /** 顾客在“选择尺寸”卡片里点选后的短回复，必须结合上一轮助手回答才能理解。 */
     private static final Pattern SIZE_CHOICE = Pattern.compile("(?:小杯|中杯|大杯|小份|中份|大份)");
+    /** “2个10元的 / 两个十元的”这类按价格选规格的短回复。 */
+    private static final Pattern QTY_PRICE_CHOICE = Pattern.compile("(\\d+|[一二两三四五六七八九十])\\s*(个|份|杯)\\s*(\\d+(?:\\.\\d+)?)\\s*元?的?");
+    /** “18元，冰 / 18元 / 冰的”这类只报价格或冷热的规格回复。 */
+    private static final Pattern SHORT_PRICE_CHOICE = Pattern.compile("^(\\d+(?:\\.\\d+)?)\\s*元?\\s*[,，、\\s]*(冰的?|少冰|去冰|热的?|常温)?$");
     private static final Set<String> INJECTION_MARKERS = Set.of(
             "忽略之前", "忽略上面的", "system prompt", "系统提示词", "开发者指令",
             "不要遵守", "越过权限", "执行sql", "drop table", "delete from", "读取所有用户",
@@ -69,6 +74,11 @@ public class CustomerSupervisorAgentOrchestrator {
     }
 
     public AssistantAnswer execute(RequestIdentity identity, Long storeId, String suppliedSessionId, String message) {
+        return execute(identity, storeId, suppliedSessionId, message, null);
+    }
+
+    public AssistantAnswer execute(RequestIdentity identity, Long storeId, String suppliedSessionId, String message,
+                                   String activePlanToken) {
         requireCustomer(identity);
         if (storeId == null || storeId <= 0) throw new ServiceException(400, "请选择门店后再使用 FIKA 助手");
         String input = message == null ? "" : message.trim();
@@ -85,7 +95,8 @@ public class CustomerSupervisorAgentOrchestrator {
         int toolCount = 0;
         try {
             CustomerPreferenceMemoryService.Memory remembered = memory.remember(owner, storeId, input);
-            Route route = route(input, history);
+            boolean hasActivePlan = activePlanToken != null && !activePlanToken.isBlank();
+            Route route = route(input, history, hasActivePlan);
             audit.recordPlanJson(runId, plan(route, remembered), "FIKA Supervisor Agent · " + route.subAgent(),
                     route == Route.UNSAFE ? "prompt_injection_rejected" : null);
 
@@ -96,16 +107,27 @@ public class CustomerSupervisorAgentOrchestrator {
                 toolCount = 1;
                 result = new AssistantAnswer(sessionId, runId, route.name(),
                         "我可以帮你查菜单、推荐商品、查询你自己的订单或处理反馈，但不会执行越权指令、读取其他用户数据或操作数据库。请告诉我你想完成哪一项。",
-                        "FIKA Supervisor · safety-guard", action("NONE", "", Map.of()), remembered.signals());
+                        "FIKA Supervisor · safety-guard", action("NONE", "", Map.of()), remembered.uiSignals());
             } else if (route == Route.ORDER_QUERY) {
                 result = orderQuery(identity, storeId, sessionId, runId, input, remembered);
                 toolCount = 1;
+            } else if (route == Route.CHECKOUT) {
+                result = checkout(identity, storeId, sessionId, runId, input, history, activePlanToken, remembered);
+                toolCount = 1;
+            } else if (route == Route.CONFIRM) {
+                result = confirmRecommendation(identity, storeId, sessionId, runId, input, history, activePlanToken, remembered);
+                toolCount = 2;
+            } else if (route == Route.CLARIFY) {
+                result = clarify(identity, storeId, sessionId, runId, hasActivePlan, remembered);
             } else if (route == Route.FEEDBACK) {
                 result = feedback(identity, storeId, sessionId, runId, input, remembered);
                 toolCount = 1;
             } else if (route == Route.ORDER) {
                 result = order(identity, storeId, sessionId, runId, input, history, remembered);
                 toolCount = 1;
+            } else if (route == Route.MERGE_ORDER) {
+                result = mergeOrder(identity, storeId, sessionId, runId, input, history, activePlanToken, remembered);
+                toolCount = 2;
             } else {
                 result = consult(identity, storeId, sessionId, runId, input, history, remembered);
                 toolCount = 3;
@@ -139,11 +161,122 @@ public class CustomerSupervisorAgentOrchestrator {
             throw ex;
         }
         String answer = String.valueOf(plan.getOrDefault("reply", "我已经根据当前门店菜单生成了一套方案，请先确认再下单。"));
-        if (!orderInput.equals(input)) {
+        if (isChoiceFollowUp(input, history)) {
             answer = "已按你选择的" + input + "：" + answer;
+        } else if (isConfirmationFollowUp(input, history)) {
+            answer = "好的，按刚才推荐的：" + answer;
         }
         return new AssistantAnswer(sessionId, runId, Route.ORDER.name(), answer,
-                "FIKA Supervisor → order-sub-agent", action("ORDER_PLAN", "确认这套搭配，去支付", plan), remembered.signals());
+                "FIKA Supervisor → order-sub-agent", action("ORDER_PLAN", "确认这套搭配，去支付", plan), remembered.uiSignals());
+    }
+
+    /** “在此基础上再加一份”：新推荐并入原方案，只生成一个待确认方案、一次支付。 */
+    private AssistantAnswer mergeOrder(RequestIdentity identity, Long storeId, String sessionId, String runId,
+                                       String input, List<String> history, String basePlanToken,
+                                       CustomerPreferenceMemoryService.Memory remembered) {
+        long started = System.nanoTime();
+        String orderInput = normalizeOrderInput(input, history, storeId);
+        Map<String, Object> proposed;
+        try {
+            proposed = orderAgent.plan(storeId, userId(identity), guestId(identity), orderInput);
+        } catch (RuntimeException ex) {
+            audit.recordStep(runId, 0, "order_sub_agent", true, "FAILED", elapsedMs(started), 0,
+                    Map.of("storeId", storeId), safeError(ex));
+            throw ex;
+        }
+        List<Map<String, Object>> additions = additionsFromPlan(proposed);
+        if (additions.isEmpty()) {
+            throw new com.coffee.common.core.exception.ServiceException(404, "没有找到可以追加到当前方案的商品");
+        }
+        Map<String, Object> merged = orderAgent.rebuild(storeId, userId(identity), guestId(identity),
+                basePlanToken, additions, false, "已在原方案基础上追加商品；确认后一次支付即可。");
+        audit.recordStep(runId, 1, "order_plan_merge", true, "SUCCEEDED", elapsedMs(started), additions.size(),
+                Map.of("storeId", storeId), "合并到同一方案，避免重复支付");
+        String answer = "已把你选的商品并入同一份方案，原先的推荐也在里面；确认后一次支付即可。";
+        return new AssistantAnswer(sessionId, runId, Route.ORDER.name(), answer,
+                "FIKA Supervisor → order-sub-agent · merge", action("ORDER_PLAN", "确认合并方案，去支付", merged), remembered.uiSignals());
+    }
+
+    private static List<Map<String, Object>> additionsFromPlan(Map<String, Object> proposed) {
+        List<Map<String, Object>> additions = new ArrayList<>();
+        if (proposed.get("items") instanceof List<?> rawItems) {
+            for (Object value : rawItems) {
+                if (!(value instanceof Map<?, ?> raw)) continue;
+                Map<String, Object> item = new LinkedHashMap<>();
+                raw.forEach((key, itemValue) -> item.put(String.valueOf(key), itemValue));
+                String code = String.valueOf(item.getOrDefault("productCode", "")).trim();
+                if (code.isEmpty() || "null".equals(code)) continue;
+                Map<String, Object> addition = new LinkedHashMap<>();
+                addition.put("productCode", code);
+                addition.put("size", item.getOrDefault("size", "MEDIUM"));
+                Object quantity = item.get("quantity");
+                addition.put("quantity", quantity instanceof Number number ? number.intValue() : 1);
+                addition.put("condiments", item.get("condiments") instanceof List<?> list ? list : List.of());
+                additions.add(addition);
+            }
+        }
+        return additions;
+    }
+
+    /** 取出上一轮推荐里尚未进入当前方案的商品，避免“好”把已选商品重复加一遍。 */
+    private List<String> recommendedProductsNotInPlan(List<String> history, Map<String, Object> currentPlan, Long storeId) {
+        String latest = latestAssistantAnswer(history);
+        if (latest == null || storeId == null) return List.of();
+        Set<String> existingCodes = new HashSet<>();
+        if (currentPlan.get("items") instanceof List<?> rawItems) {
+            for (Object value : rawItems) {
+                if (!(value instanceof Map<?, ?> raw)) continue;
+                Object code = raw.get("productCode");
+                if (code != null) existingCodes.add(String.valueOf(code));
+            }
+        }
+        List<MenuItemDTO> products;
+        try {
+            products = menuService.getAllProducts(storeId);
+        } catch (RuntimeException ex) {
+            return List.of();
+        }
+        List<String> additions = new ArrayList<>();
+        for (MenuItemDTO product : products) {
+            String name = product.getName();
+            if (name != null && !name.isBlank() && latest.contains(name)
+                    && !existingCodes.contains(product.getCode())) {
+                additions.add(name);
+            }
+        }
+        return additions;
+    }
+
+    /** “好/就这个”确认上一轮推荐：没有方案先生成，有方案则把新推荐合并后展示确认卡片。 */
+    private AssistantAnswer confirmRecommendation(RequestIdentity identity, Long storeId, String sessionId, String runId,
+                                                  String input, List<String> history, String activePlanToken,
+                                                  CustomerPreferenceMemoryService.Memory remembered) {
+        if (activePlanToken == null || activePlanToken.isBlank()) {
+            return order(identity, storeId, sessionId, runId, input, history, remembered);
+        }
+        Map<String, Object> currentPlan;
+        try {
+            currentPlan = orderAgent.view(activePlanToken, storeId, userId(identity), guestId(identity));
+        } catch (RuntimeException ex) {
+            return order(identity, storeId, sessionId, runId, input, history, remembered);
+        }
+        List<String> additions = recommendedProductsNotInPlan(history, currentPlan, storeId);
+        if (additions.isEmpty()) return checkout(identity, storeId, sessionId, runId, input, history, activePlanToken, remembered);
+
+        long started = System.nanoTime();
+        Map<String, Object> proposed = orderAgent.plan(storeId, userId(identity), guestId(identity),
+                "我要" + String.join("和", additions));
+        List<Map<String, Object>> lines = additionsFromPlan(proposed);
+        if (lines.isEmpty()) {
+            return checkout(identity, storeId, sessionId, runId, input, history, activePlanToken, remembered);
+        }
+        Map<String, Object> merged = orderAgent.rebuild(storeId, userId(identity), guestId(identity),
+                activePlanToken, lines, false, "已把刚确认的推荐并入同一方案；确认后一次支付即可。");
+        audit.recordStep(runId, 1, "order_plan_confirm_merge", true, "SUCCEEDED", elapsedMs(started), lines.size(),
+                Map.of("storeId", storeId), "把确认的推荐并入现有方案，等待顾客点按钮支付");
+        return new AssistantAnswer(sessionId, runId, Route.CONFIRM.name(),
+                "好的，已把刚才推荐的商品并入当前方案。请核对下方商品和金额，确认无误后再点击付款。",
+                "FIKA Supervisor → order-sub-agent · confirm", action("ORDER_PLAN", "确认方案，去支付", merged), remembered.uiSignals());
     }
 
     private AssistantAnswer consult(RequestIdentity identity, Long storeId, String sessionId, String runId,
@@ -197,7 +330,7 @@ public class CustomerSupervisorAgentOrchestrator {
         // 咨询回答里问“选哪个尺寸”时，附带真实菜单规格选项，由前端渲染成可点击卡片。
         CustomerAction choice = choiceAction(answer, input, storeId);
         return new AssistantAnswer(sessionId, runId, Route.CONSULT.name(), answer,
-                "FIKA Supervisor → consult-sub-agent", choice, remembered.signals(),
+                "FIKA Supervisor → consult-sub-agent", choice, remembered.uiSignals(),
                 hits.stream().map(hit -> new AnswerSource(hit.id(), hit.title(), hit.source(), hit.updatedAt(), hit.documentVersion(), hit.embeddingStatus(), hit.score())).toList());
     }
 
@@ -219,7 +352,68 @@ public class CustomerSupervisorAgentOrchestrator {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("orders", selected);
         return new AssistantAnswer(sessionId, runId, Route.ORDER_QUERY.name(), answer,
-                "FIKA Supervisor → order-query-sub-agent", action("VIEW_ORDERS", "打开我的订单", payload), remembered.signals());
+                "FIKA Supervisor → order-query-sub-agent", action("VIEW_ORDERS", "打开我的订单", payload), remembered.uiSignals());
+    }
+
+    /** “支付/付款/结算”只展示待确认方案；没有方案时按上一轮推荐补建，绝不直接创建订单或查历史订单。 */
+    private AssistantAnswer checkout(RequestIdentity identity, Long storeId, String sessionId, String runId,
+                                     String input, List<String> history,
+                                     String activePlanToken, CustomerPreferenceMemoryService.Memory remembered) {
+        long started = System.nanoTime();
+        Map<String, Object> plan = null;
+        boolean reused = false;
+        if (activePlanToken != null && !activePlanToken.isBlank()) {
+            try {
+                plan = orderAgent.view(activePlanToken, storeId, userId(identity), guestId(identity));
+                reused = true;
+            } catch (RuntimeException ex) {
+                audit.recordStep(runId, 0, "checkout_review", true, "FAILED", elapsedMs(started), 0,
+                        Map.of("storeId", storeId), safeError(ex));
+            }
+        }
+        if (plan == null || !(plan.get("items") instanceof List<?> items && !items.isEmpty())) {
+            try {
+                plan = planFromHistory(identity, storeId, history);
+            } catch (RuntimeException ex) {
+                audit.recordStep(runId, 1, "checkout_plan_rebuild", true, "FAILED", elapsedMs(started), 0,
+                        Map.of("storeId", storeId), safeError(ex));
+            }
+        }
+        if (plan == null || !(plan.get("items") instanceof List<?> items && !items.isEmpty())) {
+            audit.recordStep(runId, 2, "checkout_review", true, "SKIPPED", elapsedMs(started), 0,
+                    Map.of("storeId", storeId), "没有待确认方案，也没有可补建的推荐商品，不进入支付");
+            return new AssistantAnswer(sessionId, runId, Route.CHECKOUT.name(),
+                    "我还没找到你要付款的商品。先告诉我“来一杯…”或让我推荐一款，我准备好待确认订单后再付款。",
+                    "FIKA Supervisor · checkout-guard", action("NONE", "", Map.of()), remembered.uiSignals());
+        }
+        audit.recordStep(runId, reused ? 0 : 1, "checkout_review", true, "SUCCEEDED", elapsedMs(started), 1,
+                Map.of("storeId", storeId), reused
+                        ? "重新展示方案供二次确认，未创建订单、未查询历史订单"
+                        : "按上一轮推荐补建待确认方案，未创建订单、未查询历史订单");
+        String answer = reused
+                ? "这是当前待确认方案，请核对商品、规格和金额；确认无误后点击“确认方案，去支付”。"
+                : "已按刚才推荐的商品准备好待确认订单，请核对下方金额；确认无误后点击“确认方案，去支付”。";
+        return new AssistantAnswer(sessionId, runId, Route.CHECKOUT.name(), answer,
+                "FIKA Supervisor · checkout-review", action("ORDER_PLAN", "确认方案，去支付", plan), remembered.uiSignals());
+    }
+
+    /** 没有活动方案时，用最近提到的推荐商品补一份真实方案；只生成令牌，不创建订单。 */
+    private Map<String, Object> planFromHistory(RequestIdentity identity, Long storeId, List<String> history) {
+        String product = mentionedProduct(history, storeId);
+        if (product == null) return null;
+        String latest = latestAssistantAnswer(history);
+        String temperature = latest != null && contains(latest, "冰饮", "冰咖啡", "加冰", "冰") ? "冰饮" : "";
+        return orderAgent.plan(storeId, userId(identity), guestId(identity), "我要点" + product + temperature);
+    }
+
+    /** 用户只说“订单”这类含糊词时，不擅自打开订单记录，先确认意图。 */
+    private AssistantAnswer clarify(RequestIdentity identity, Long storeId, String sessionId, String runId,
+                                    boolean hasActivePlan, CustomerPreferenceMemoryService.Memory remembered) {
+        String answer = hasActivePlan
+                ? "你是想查看历史订单，还是支付刚才那套商品方案？说“查订单”或“支付”就行。"
+                : "你是想查看历史订单，还是重新选商品下单？说“查订单”或“我想点一杯…”就行。";
+        return new AssistantAnswer(sessionId, runId, Route.CLARIFY.name(), answer,
+                "FIKA Supervisor · intent-clarification", action("NONE", "", Map.of()), remembered.uiSignals());
     }
 
     private AssistantAnswer feedback(RequestIdentity identity, Long storeId, String sessionId, String runId,
@@ -263,7 +457,7 @@ public class CustomerSupervisorAgentOrchestrator {
         audit.recordStep(runId, 0, "feedback_sub_agent", true, "SUCCEEDED", elapsedMs(started), candidates.size(),
                 Map.of("storeId", storeId, "requiresUserConfirmation", true), "只生成反馈/售后入口，不自动提交写操作");
         return new AssistantAnswer(sessionId, runId, Route.FEEDBACK.name(), answer,
-                "FIKA Supervisor → feedback-sub-agent", action, remembered.signals());
+                "FIKA Supervisor → feedback-sub-agent", action, remembered.uiSignals());
     }
 
     private Map<String, Object> plan(Route route, CustomerPreferenceMemoryService.Memory remembered) {
@@ -271,7 +465,7 @@ public class CustomerSupervisorAgentOrchestrator {
         plan.put("supervisor", "customer");
         plan.put("route", route.name());
         plan.put("subAgent", route.subAgent());
-        plan.put("memorySignals", remembered.signals());
+        plan.put("memorySignals", remembered.uiSignals());
         plan.put("requiresUserConfirmation", route == Route.ORDER || route == Route.FEEDBACK);
         return plan;
     }
@@ -299,43 +493,197 @@ public class CustomerSupervisorAgentOrchestrator {
         return row;
     }
 
-    private Route route(String input, List<String> history) {
+    static Route route(String input, List<String> history, boolean hasActivePlan) {
         String text = input.toLowerCase(Locale.ROOT);
         if (contains(text, INJECTION_MARKERS.toArray(String[]::new))) return Route.UNSAFE;
-        if (contains(text, "订单", "物流", "配送到哪", "配送进度", "订单状态", "我的单", "取餐号", "查单")) {
-            return Route.ORDER_QUERY;
-        }
+        // 订单查询要求明确查询意图；单独的“订单/支付订单”不能再误打开历史订单。
+        if (isOrderQueryIntent(text)) return Route.ORDER_QUERY;
         if (contains(text, "反馈", "建议", "投诉", "差评", "退款", "售后", "重做", "换货", "漏做", "做错")) {
             return Route.FEEDBACK;
         }
+        // 已有待确认方案时，追加商品、回答规格问题、结束挑选都要回到同一份方案，而不是另起一笔。
+        if (hasActivePlan && isMergeFollowUp(text)) return Route.MERGE_ORDER;
+        if (hasActivePlan && isChoiceFollowUp(input, history)) return Route.MERGE_ORDER;
+        // 明确支付意图：只展示当前方案的确认卡片，不做历史订单查询，也不直接创建订单。
+        if (isCheckoutIntent(text)) return Route.CHECKOUT;
+        // “暂时不用了/就这样”表示挑选结束，把新推荐并入后展示待确认卡片。
+        if (isDoneFollowUp(input, history)) return Route.CONFIRM;
+        // “好/就这个”是在确认上一轮推荐：由确认处理器决定生成方案、合并推荐或展示确认卡片。
+        if (isConfirmationFollowUp(input, history)) return Route.CONFIRM;
+        if (contains(text, "订单", "单子")) return Route.CLARIFY;
         // “推荐/想喝”属于咨询：只回答菜单事实并给规格选择卡片，不直接生成支付方案。
         // 只有明确的点单动作，或在选择卡片里点选规格后的短回复，才进入点单子 Agent。
         if (isChoiceFollowUp(input, history)) return Route.ORDER;
-        if (contains(text, "下单", "来一杯", "点一杯", "点一份", "买一杯", "购物袋", "给我来")) {
+        if (contains(text, "下单", "来一杯", "要一杯", "要一份", "来杯", "点杯", "点一杯", "点一份", "买一杯", "购物袋", "给我来")) {
             return Route.ORDER;
         }
         return Route.CONSULT;
     }
 
-    /** 判断“中杯”这类短回复是否是在回答上一轮的规格提问。 */
-    private boolean isChoiceFollowUp(String input, List<String> history) {
+    /** “好/就这个/这个吧”是在确认上一轮推荐，而不是泛泛的聊天回复。 */
+    static boolean isConfirmationFollowUp(String input, List<String> history) {
+        String text = input == null ? "" : input.trim().replaceAll("[，,。！!\\s]", "");
+        if (text.isEmpty() || text.length() > 24) return false;
+        if (!text.matches("(?i)(?:(?:好|好的|行|行吧|可以|可以呀|可以啊|嗯|ok|okay|要得|确定|确认))?"
+                + "(?:(?:就这个|就要这个|就这个了|这个吧|这个就行|这个可以|来这个|就它|就它吧|就它了|就要它了"
+                + "|就这款|就这款了|按这个来|就按这个|确认一下|确认|确定了|就定了|就这么定了|就这些|就这些了))?")) {
+            return false;
+        }
+        String latest = latestAssistantAnswer(history);
+        return latest != null && contains(latest, "推荐", "建议", "为你准备", "给你准备", "这款",
+                "中杯价格", "小杯价格", "大杯价格", "还需要其他", "还需要别的", "还需要什么",
+                "需要其他推荐吗", "已为您记录", "已为你记录", "已选", "选择了");
+    }
+
+    private static String latestAssistantAnswer(List<String> history) {
+        if (history == null) return null;
+        for (int i = history.size() - 1; i >= 0; i--) {
+            String entry = history.get(i);
+            if (entry != null && entry.startsWith("assistant：")) {
+                return entry.substring(entry.indexOf('：') + 1);
+            }
+        }
+        return null;
+    }
+
+    /** 查询订单必须有查询动词、明确的所有格/状态词或订单号，避免“支付订单”这类表达误触发。 */
+    static boolean isOrderQueryIntent(String text) {
+        if (ORDER_ID.matcher(text).find()) return true;
+        if (contains(text, "物流", "配送到哪", "配送进度", "查单", "我的单", "单号", "取餐号")) return true;
+        if (contains(text, "我的订单", "订单记录", "订单列表", "历史订单", "最近订单", "所有订单",
+                "订单状态", "订单详情", "订单进度", "订单号",
+                "待支付订单", "待付款订单", "未支付订单", "订单呢")) return true;
+        if (!contains(text, "订单")) return false;
+        return contains(text, "查", "看", "找", "翻");
+    }
+
+    /** 支付动作只认明确意图，像“怎么支付/支付记录”仍是咨询或查询，不被当成确认付款。 */
+    static boolean isCheckoutIntent(String text) {
+        if (contains(text, "支付方式", "付款方式", "怎么支付", "如何支付", "怎么付款", "如何付款",
+                "支付记录", "支付成功", "支付失败", "待支付订单", "待付款订单", "未支付订单",
+                "一起结算", "一起结账", "一起支付", "一起付", "合并结算", "一起下单")) return false;
+        return contains(text, "支付", "付款", "买单", "结算", "去付", "确认下单", "确认方案", "就这套", "就要这个");
+    }
+
+    /** 顾客已有待确认方案时，这些表达表示“在同一笔里追加”，不是新建一笔订单。 */
+    static boolean isMergeFollowUp(String text) {
+        return contains(text, "在此基础上", "在这个基础上", "在原方案", "再加点", "再加一", "再加份",
+                "追加", "还想加", "还想再", "还需要一", "还要一", "再来一", "再要一", "顺便加", "顺便来",
+                "一起下单", "一起结算", "一起结账", "一起支付", "一起付", "同一笔", "合并", "搭配推荐");
+    }
+
+    /** “暂时不用了/就这样”表示挑选结束，应把已选商品整理成待确认方案。 */
+    static boolean isDoneFollowUp(String input, List<String> history) {
+        String text = input == null ? "" : input.trim().replaceAll("[，,。！!\\s]", "");
+        if (!text.matches("(?i)(?:暂时不用了|不用了|不用啦|不用|不了了|不了|不需要了|不需要啦|不需要"
+                + "|不要了|不要啦|不要|不啦|就这样|够了|没了|可以了|行了吧)")) return false;
+        String latest = latestAssistantAnswer(history);
+        return latest != null && contains(latest, "还需要其他", "还需要什么", "还需要别的", "还需要饮品",
+                "已为您记录", "已为你记录", "为你准备", "给您准备", "选好了吗", "还需要");
+    }
+
+    /** 判断“中杯 / 2个10元的”这类短回复是否是在回答上一轮的规格提问。 */
+    static boolean isChoiceFollowUp(String input, List<String> history) {
         String text = input == null ? "" : input.trim();
-        if (!SIZE_CHOICE.matcher(text).matches()) return false;
+        boolean sizeAnswer = SIZE_CHOICE.matcher(text).matches();
+        boolean priceAnswer = QTY_PRICE_CHOICE.matcher(text).matches();
+        boolean shortPriceAnswer = SHORT_PRICE_CHOICE.matcher(text).matches();
+        if (!sizeAnswer && !priceAnswer && !shortPriceAnswer) return false;
         if (history == null) return false;
         for (int i = history.size() - 1; i >= 0; i--) {
             String entry = history.get(i);
             if (entry == null || !entry.startsWith("assistant：")) continue;
             String answer = entry.substring(entry.indexOf('：') + 1);
-            return answer.contains("尺寸") || answer.contains("小杯") || answer.contains("中杯") || answer.contains("大杯");
+            return answer.contains("尺寸") || answer.contains("规格") || answer.contains("份量")
+                    || answer.contains("小杯") || answer.contains("中杯") || answer.contains("大杯")
+                    || answer.contains("小份") || answer.contains("中份") || answer.contains("大份")
+                    || answer.contains("冰") || answer.contains("热") || answer.contains("常温")
+                    || answer.contains("元");
         }
         return false;
     }
 
-    /** 把规格短回复补全为完整点单语句，避免点单子 Agent 只看到“中杯”而丢掉商品上下文。 */
+    /** 把“中杯/就这个”这类短回复补全为完整点单语句，避免点单子 Agent 丢掉商品上下文。 */
     private String normalizeOrderInput(String input, List<String> history, Long storeId) {
-        if (!isChoiceFollowUp(input, history)) return input;
-        String product = mentionedProduct(history, storeId);
-        return product == null ? "我要点一杯" + input : "我要点一杯" + product + input;
+        if (isChoiceFollowUp(input, history)) {
+            String product = mentionedProduct(history, storeId);
+            Matcher priceMatch = QTY_PRICE_CHOICE.matcher(input.trim());
+            if (priceMatch.matches()) {
+                int quantity = chineseNumberToInt(priceMatch.group(1));
+                String size = sizeByPrice(latestAssistantAnswer(history), priceMatch.group(3));
+                return "我要点" + quantity + "份" + (size == null ? "" : size) + (product == null ? "" : product);
+            }
+            Matcher shortPrice = SHORT_PRICE_CHOICE.matcher(input.trim());
+            if (shortPrice.matches()) {
+                String size = sizeByPrice(latestAssistantAnswer(history), shortPrice.group(1));
+                int quantity = quantityFromHistory(history);
+                String temperature = temperatureFromChoice(shortPrice.group(2));
+                return "我要点" + quantity + "份" + (size == null ? "" : size)
+                        + (product == null ? "" : product) + temperature;
+            }
+            return product == null ? "我要点" + input : "我要点" + product + input;
+        }
+        if (isConfirmationFollowUp(input, history) || isDoneFollowUp(input, history)) {
+            String product = mentionedProduct(history, storeId);
+            if (product == null) return input;
+            String latest = latestAssistantAnswer(history);
+            String temperature = latest != null && contains(latest, "冰饮", "冰咖啡", "加冰") ? "冰饮" : "";
+            return "我要点" + product + temperature;
+        }
+        return input;
+    }
+
+    private static int chineseNumberToInt(String value) {
+        if (value == null) return 1;
+        if (value.matches("\\d+")) {
+            try { return Math.max(1, Math.min(99, Integer.parseInt(value))); }
+            catch (NumberFormatException ignored) { return 1; }
+        }
+        return switch (value) {
+            case "一" -> 1;
+            case "两", "二" -> 2;
+            case "三" -> 3;
+            case "四" -> 4;
+            case "五" -> 5;
+            case "六" -> 6;
+            case "七" -> 7;
+            case "八" -> 8;
+            case "九" -> 9;
+            case "十" -> 10;
+            default -> 1;
+        };
+    }
+
+    /** 从最近的用户消息里找“2杯/两份/一个”，补齐全量；找不到按 1 份处理。 */
+    private static int quantityFromHistory(List<String> history) {
+        if (history == null) return 1;
+        Pattern quantity = Pattern.compile("(\\d+|[一二两三四五六七八九十])\\s*(杯|份|个)");
+        for (int i = history.size() - 1; i >= 0; i--) {
+            String entry = history.get(i);
+            if (entry == null || !entry.startsWith("user：")) continue;
+            Matcher matcher = quantity.matcher(entry);
+            if (matcher.find()) return chineseNumberToInt(matcher.group(1));
+        }
+        return 1;
+    }
+
+    private static String temperatureFromChoice(String choice) {
+        if (choice == null) return "";
+        if (choice.startsWith("热")) return "热饮";
+        if (choice.equals("常温")) return "常温";
+        if (choice.startsWith("冰") || choice.equals("少冰") || choice.equals("去冰")) return "冰饮";
+        return "";
+    }
+
+    /** 从上一轮“小份10元、中份15元”里按用户报出的价格反推规格。 */
+    private static String sizeByPrice(String answer, String price) {
+        if (answer == null || price == null) return null;
+        Matcher matcher = Pattern.compile("(小杯|中杯|大杯|小份|中份|大份)\\s*[¥￥]?\\s*(\\d+(?:\\.\\d+)?)\\s*元?")
+                .matcher(answer);
+        while (matcher.find()) {
+            if (price.equals(matcher.group(2))) return matcher.group(1);
+        }
+        return null;
     }
 
     private String mentionedProduct(List<String> history, Long storeId) {
@@ -479,7 +827,7 @@ public class CustomerSupervisorAgentOrchestrator {
         ).getOrDefault(String.valueOf(value), String.valueOf(value));
     }
 
-    private boolean contains(String text, String... words) {
+    static boolean contains(String text, String... words) {
         for (String word : words) if (text.contains(word.toLowerCase(Locale.ROOT))) return true;
         return false;
     }
@@ -503,7 +851,11 @@ public class CustomerSupervisorAgentOrchestrator {
     public enum Route {
         CONSULT("consult-sub-agent", "customer_consult_route"),
         ORDER("order-sub-agent", "customer_order_route"),
+        MERGE_ORDER("order-sub-agent", "customer_order_merge_route"),
         ORDER_QUERY("order-query-sub-agent", "customer_order_query_route"),
+        CHECKOUT("checkout-review", "customer_checkout_route"),
+        CONFIRM("recommendation-confirmation", "customer_recommendation_confirm_route"),
+        CLARIFY("intent-clarification", "customer_intent_clarification"),
         FEEDBACK("feedback-sub-agent", "customer_feedback_route"),
         UNSAFE("safety-guard", "prompt_injection_guard");
 

@@ -145,6 +145,18 @@ public class CustomerOrderAgentController {
         return emitter;
     }
 
+    /** 顾客编辑推荐商品的规格/配料/数量，或在原方案上追加商品；服务端重新计价并签发新令牌。 */
+    @PostMapping("/plans/rebuild")
+    public Result<Map<String, Object>> rebuild(@RequestBody RebuildPlanRequest request) {
+        if (request == null || request.storeId == null) throw new ServiceException(400, "请选择门店");
+        if (request.lines == null || request.lines.isEmpty()) throw new ServiceException(400, "没有需要保存的商品修改");
+        Identity identity = currentCustomerIdentity();
+        Map<String, Object> result = customerOrderAgentService.rebuild(
+                request.storeId, identity.userId(), identity.guestId(), request.planToken, request.lines,
+                request.replace, request.note);
+        return Result.success(result);
+    }
+
     @PostMapping("/plans/confirm")
     public Result<OrderResponse> confirm(@RequestHeader("Idempotency-Key") String idempotencyKey, @RequestBody ConfirmPlanRequest request) {
         if (request == null || request.storeId == null || request.planToken == null || request.planToken.isBlank()) {
@@ -183,7 +195,7 @@ public class CustomerOrderAgentController {
                             item.setProductCode(line.productCode());
                             item.setSize(line.size());
                             item.setQuantity(line.quantity());
-                            item.setCondiments(List.of());
+                            item.setCondiments(line.condiments());
                             return item;
                         }).toList());
                         if (plan.userId() != null && plan.userId() > 0) command.setCouponCode("AGENT_FIKA8");
@@ -307,5 +319,13 @@ public class CustomerOrderAgentController {
     private record AgentConfirmFingerprint(String planToken, Long storeId, String fulfillmentType,
                                            Long deliveryAddressId, boolean includeAddOn) { }
     public static class CustomerAgentRequest { public Long storeId; public Long userId; public String guestId; public String message; }
+    public static class RebuildPlanRequest {
+        public Long storeId;
+        public String planToken;
+        public List<Map<String, Object>> lines;
+        /** true 表示 lines 是完整方案（编辑规格时用）；false 表示在原子方案上追加。 */
+        public boolean replace;
+        public String note;
+    }
     public static class ConfirmPlanRequest { public String planToken; public String runId; public Long storeId; public Long userId; public String guestId; public String fulfillmentType; public Long deliveryAddressId; public boolean includeAddOn; }
 }
