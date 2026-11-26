@@ -356,8 +356,9 @@ public class CustomerSupervisorAgentOrchestrator {
             CustomerDraftOrderToolService.ToolOutcome preview = draftTool.previewCheckout(
                     sessionId, sessionOwner, storeId, userId(identity), guestId(identity), activePlanToken);
             if (preview.matched() && preview.payload() instanceof Map<?, ?> raw) {
-                currentPlan = new LinkedHashMap<>();
-                raw.forEach((k, v) -> currentPlan.put(String.valueOf(k), v));
+                Map<String, Object> previewPlan = new LinkedHashMap<>();
+                raw.forEach((k, v) -> previewPlan.put(String.valueOf(k), v));
+                currentPlan = previewPlan;
             }
         }
         if (currentPlan == null && activePlanToken != null && !activePlanToken.isBlank()) {
