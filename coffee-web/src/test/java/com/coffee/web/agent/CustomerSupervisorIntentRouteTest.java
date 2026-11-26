@@ -1,10 +1,13 @@
 package com.coffee.web.agent;
 
+import com.coffee.module.menu.api.dto.MenuItemDTO;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CustomerSupervisorIntentRouteTest {
 
@@ -48,8 +51,16 @@ class CustomerSupervisorIntentRouteTest {
                 CustomerSupervisorAgentOrchestrator.route("2个10元的", sizeQuestion, false));
         assertEquals(CustomerSupervisorAgentOrchestrator.Route.MERGE_ORDER,
                 CustomerSupervisorAgentOrchestrator.route("我还需要一个汉堡", sizeQuestion, true));
-        assertEquals(CustomerSupervisorAgentOrchestrator.Route.MERGE_ORDER,
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.CHECKOUT,
                 CustomerSupervisorAgentOrchestrator.route("饮品跟汉堡一起结算", sizeQuestion, true));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.CHECKOUT,
+                CustomerSupervisorAgentOrchestrator.route("饮品跟汉堡一起结账", sizeQuestion, true));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.MERGE_ORDER,
+                CustomerSupervisorAgentOrchestrator.route("再加一份可颂一起结账", sizeQuestion, true));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.REMOVE_ITEM,
+                CustomerSupervisorAgentOrchestrator.route("不要汉堡了", sizeQuestion, true));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.REMOVE_ITEM,
+                CustomerSupervisorAgentOrchestrator.route("清空方案", sizeQuestion, true));
 
         List<String> doneQuestion = List.of(
                 "assistant：好的，为您准备2份小份汉堡，每份10元，共计20元。您还需要其他什么吗？");
@@ -91,6 +102,42 @@ class CustomerSupervisorIntentRouteTest {
                 CustomerSupervisorAgentOrchestrator.route("支付方式有哪些", List.of(), true));
         assertEquals(CustomerSupervisorAgentOrchestrator.Route.CONSULT,
                 CustomerSupervisorAgentOrchestrator.route("怎么付款", List.of(), true));
+    }
+
+    @Test
+    void dessertAddOnUsesRealMenuInsteadOfKnowledgeSnippets() {
+        List<String> history = List.of(
+                "user：我还想加点",
+                "assistant：根据您想加甜点的需求，我们目前有以下甜点可供选择。");
+        assertEquals("dessert", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("我还想加点", history));
+        assertEquals("dessert", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("还有别的吗", history));
+
+        List<MenuItemDTO> products = List.of(
+                product("latte", "拿铁", "coffee"),
+                product("croissant", "法式可颂", "dessert"),
+                product("tiramisu", "提拉米苏", "dessert"),
+                product("macarons", "法式马卡龙", "dessert"));
+        List<MenuItemDTO> candidates = CustomerSupervisorAgentOrchestrator.menuCandidates(products, "dessert");
+        assertEquals(List.of("法式可颂", "提拉米苏", "法式马卡龙"),
+                candidates.stream().map(MenuItemDTO::getName).toList());
+
+        assertEquals(8, CustomerSupervisorAgentOrchestrator.menuOffset("还有别的吗",
+                List.of("user：还有别的吗")));
+        String answer = CustomerSupervisorAgentOrchestrator.menuListAnswer("dessert", candidates, 12, 0);
+        assertTrue(answer.contains("提拉米苏"));
+        assertTrue(answer.contains("¥18"));
+        assertFalse(answer.contains("健达奇趣蛋"));
+        assertFalse(answer.contains("黄金豆"));
+    }
+
+    private static MenuItemDTO product(String code, String name, String categoryCode) {
+        MenuItemDTO item = new MenuItemDTO();
+        item.setCode(code);
+        item.setName(name);
+        item.setCategoryCode(categoryCode);
+        item.setBasePrice(18.0);
+        item.setDescription("当前门店在售商品");
+        return item;
     }
 
     @Test

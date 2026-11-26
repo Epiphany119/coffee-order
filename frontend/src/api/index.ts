@@ -599,18 +599,19 @@ export const customerAgentApi = {
     })
   },
 
-  /** 编辑推荐商品的规格/配料/数量，或在原方案上追加商品，服务端重新计价并签发新令牌。 */
+  /** 编辑推荐商品的规格/配料/数量，或在原方案上追加商品，服务端重新计价并同步草稿单。 */
   rebuild: (data: {
     storeId: number
+    sessionId?: string | null
     planToken?: string | null
     lines: Array<{ productCode: string; size: string; quantity: number; condiments?: string[] }>
-    /** true=lines 是完整方案（编辑规格）；false=在原子方案上追加商品。 */
+    /** true=lines 是完整方案（编辑规格或清空）；false=在原方案上追加商品。 */
     replace?: boolean
     note?: string
   }) => request.post<any, CustomerAgentPlan>('/customer-agent/plans/rebuild', data),
 
   /** 只提交一次性方案令牌；商品行由服务端从已审计的方案快照读取。 */
-  confirm: (data: { planToken: string; runId?: string | null; storeId: number; userId?: number | null; guestId?: string | null; fulfillmentType: string; deliveryAddressId?: number | null; includeAddOn?: boolean }, idempotencyKey = createAgentOrderIdempotencyKey(data.planToken)) =>
+  confirm: (data: { planToken: string; sessionId?: string | null; runId?: string | null; storeId: number; userId?: number | null; guestId?: string | null; fulfillmentType: string; deliveryAddressId?: number | null; includeAddOn?: boolean }, idempotencyKey = createAgentOrderIdempotencyKey(data.planToken)) =>
     request.post<any, OrderResponse>('/customer-agent/plans/confirm', data, { headers: { 'Idempotency-Key': idempotencyKey } })
 }
 

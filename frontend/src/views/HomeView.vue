@@ -227,7 +227,7 @@ async function submitOrder() {
 }
 
 /** Agent 方案确认后直接创建待支付订单：不写购物袋，但仍复用订单幂等、身份、价格与库存校验。 */
-async function submitAgentOrder(planToken: string, includeAddOn = false, runId?: string) {
+async function submitAgentOrder(planToken: string, includeAddOn = false, runId?: string, sessionId?: string | null) {
   if (!planToken || !store.currentStore?.storeId) return
   if (fulfillmentType.value === 'DELIVERY') {
     if (!store.isLoggedIn) {
@@ -245,6 +245,7 @@ async function submitAgentOrder(planToken: string, includeAddOn = false, runId?:
   try {
     const data = await customerAgentApi.confirm({
       planToken,
+      sessionId: sessionId || null,
       runId: runId || null,
       storeId: store.currentStore.storeId,
       fulfillmentType: fulfillmentType.value,
@@ -286,7 +287,7 @@ async function submitAgentOrder(planToken: string, includeAddOn = false, runId?:
           cancelButtonText: '暂不下单',
           type: 'warning'
         })
-        await submitAgentOrder(priceChange.planToken, includeAddOn, runId)
+        await submitAgentOrder(priceChange.planToken, includeAddOn, runId, sessionId)
       } catch (confirmError: any) {
         if (confirmError !== 'cancel' && confirmError !== 'close') {
           ElMessage.error(`Agent 下单失败：${confirmError?.message || '请求失败'}`)

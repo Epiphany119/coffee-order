@@ -10,7 +10,7 @@ const props = defineProps<{ modelValue: boolean }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  checkout: [planToken: string, includeAddOn: boolean, runId?: string]
+  checkout: [planToken: string, includeAddOn: boolean, runId?: string, sessionId?: string | null]
   'go-orders': []
   'open-feedback': [orderId: number, draft?: string]
   'open-after-sale': [orderId: number, draft?: string]
@@ -44,12 +44,11 @@ interface AssistantMessage {
   role: 'user' | 'assistant'
   content: string
   response?: CustomerAssistantResponse
-  /** 后端下发的规格选项；未重启后端时由回答内容兜底识别。 */
+  /** 后端下发的规格/商品选项。 */
   choices?: AssistantChoice[]
   selectedChoice?: string
-  /** 后端未直接返回支付方案时，前端按所选规格向点单 Agent 请求的方案。 */
+  /** 行内编辑/删除后由后端 /plans/rebuild 返回的最新方案快照。 */
   localPlan?: CustomerAgentPlan
-  planLoading?: boolean
 }
 
 type AssistantOrder = Partial<OrderRecord> & { id: number }
@@ -92,7 +91,7 @@ function orderList(response?: CustomerAssistantResponse): AssistantOrder[] {
   return Array.isArray(orders) ? orders.filter(item => item && Number.isFinite(Number(item.id))).map(item => item as AssistantOrder) : []
 }
 
-/** 后端下发的规格选择卡片数据。 */
+/** 后端下发的规格/商品选择卡片数据。 */
 function choiceList(response?: CustomerAssistantResponse): AssistantChoice[] {
   if (response?.action?.type !== 'ASK_CHOICE') return []
   const choices = response.action.payload?.choices
@@ -102,37 +101,9 @@ function choiceList(response?: CustomerAssistantResponse): AssistantChoice[] {
     .map(item => ({ label: String(item.label), value: String(item.value), price: Number.isFinite(Number(item.price)) ? Number(item.price) : undefined }))
 }
 
-function mentionedProductName(content: string): string {
-  const product = store.products.find(item =>
-    (item.name && content.includes(item.name))
-    || (item.code && content.toLowerCase().includes(item.code.toLowerCase())))
-  return product?.name || ''
-}
-
-/** 兼容尚未重启的旧后端：回答明确询问尺寸且列出了杯型价格时，仍然渲染选择卡片。 */
-function fallbackChoices(content: string): AssistantChoice[] {
-  if (!/哪个尺寸|什么尺寸|选择尺寸|什么份量|哪个份量|选择份量|需要多大|选哪个.{0,4}(杯|份)/.test(content)) return []
-  const productName = mentionedProductName(content)
-  if (!productName) return []
-  const regex = /(小杯|中杯|大杯|小份|中份|大份)\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*元?/g
-  const result: AssistantChoice[] = []
-  let match: RegExpExecArray | null = regex.exec(content)
-  while (match) {
-    const label = match[1]
-    result.push({
-      label,
-      value: /^(小杯|小份)$/.test(label) ? 'SMALL' : /^(大杯|大份)$/.test(label) ? 'LARGE' : 'MEDIUM',
-      price: Number(match[2])
-    })
-    match = regex.exec(content)
-  }
-  return result.length >= 2 ? result : []
-}
-
 function choicesFor(message: AssistantMessage): AssistantChoice[] {
   if (message.role !== 'assistant') return []
-  const fromBackend = choiceList(message.response)
-  return fromBackend.length ? fromBackend : fallbackChoices(message.content)
+  return choiceList(message.response)
 }
 
 function findChoice(text: string): { message: AssistantMessage; choice: AssistantChoice } | null {
@@ -151,11 +122,17 @@ function findChoice(text: string): { message: AssistantMessage; choice: Assistan
 }
 
 function planFor(message: AssistantMessage): CustomerAgentPlan | null {
-  return message.localPlan || orderPlan(message.response)
+  const plan = message.localPlan || orderPlan(message.response)
+  if (!plan || plan.cleared || !Array.isArray(plan.items) || plan.items.length === 0) return null
+  return plan
 }
 
 function setActivePlan(plan: CustomerAgentPlan | null) {
-  if (plan?.planToken) activePlan.value = plan
+  if (plan?.planToken && Array.isArray(plan.items) && plan.items.length > 0 && !plan.cleared) {
+    activePlan.value = plan
+  } else {
+    activePlan.value = null
+  }
 }
 
 function isActivePlan(plan: CustomerAgentPlan | null): boolean {
@@ -176,8 +153,23 @@ function condimentLabel(code: string): string {
   return CONDIMENTS[code]?.name || code
 }
 
-function sizeLabel(size: string): string {
-  return size === 'SMALL' ? '小杯' : size === 'LARGE' ? '大杯' : size === 'CUSTOM' ? '定制' : '中杯'
+function sizeUnitOf(categoryCode?: string): string {
+  return categoryCode === 'food' || categoryCode === 'dessert' ? '份' : '杯'
+}
+
+function sizeLabel(size: string, categoryCode?: string): string {
+  if (size === 'CUSTOM') return '定制'
+  const unit = sizeUnitOf(categoryCode)
+  return size === 'SMALL' ? `小${unit}` : size === 'LARGE' ? `大${unit}` : `中${unit}`
+}
+
+function sizeOptionsFor(item: CustomerAgentItem | null) {
+  const unit = sizeUnitOf(item?.categoryCode)
+  return [
+    { value: 'SMALL', label: `小${unit}` },
+    { value: 'MEDIUM', label: `中${unit}` },
+    { value: 'LARGE', label: `大${unit}` }
+  ]
 }
 
 function itemKey(messageIndex: number, itemIndex: number): string {
@@ -224,16 +216,13 @@ async function saveEdit(message: AssistantMessage) {
   const draft = editDraft.value
   const key = editingKey.value
   if (!plan?.planToken || !draft || !key || rebuilding.value) return
-  const [messageIndexText, itemIndexText] = key.split('-')
+  const [, itemIndexText] = key.split('-')
   const itemIndex = Number(itemIndexText)
   const items = Array.isArray(plan.items) ? plan.items : []
   if (!items[itemIndex]) return
   rebuilding.value = true
   try {
-    const identity = store.isLoggedIn && store.currentUser?.id
-      ? { userId: store.currentUser.id }
-      : { guestId: await store.ensureGuestId() }
-    // 编辑是“替换式”：lines 是顾客想要的全部商品，服务端重新计价后签发新令牌。
+    if (!store.isLoggedIn) await store.ensureGuestId()
     const lines = items.map((item, index) => ({
       productCode: item.productCode,
       size: index === itemIndex ? draft.size : (['SMALL', 'MEDIUM', 'LARGE'].includes(item.size) ? item.size : 'MEDIUM'),
@@ -242,7 +231,7 @@ async function saveEdit(message: AssistantMessage) {
     }))
     const updated = await customerAgentApi.rebuild({
       storeId: store.currentStore!.storeId,
-      ...identity,
+      sessionId: sessionId.value,
       planToken: plan.planToken,
       lines,
       replace: true,
@@ -259,13 +248,62 @@ async function saveEdit(message: AssistantMessage) {
   }
 }
 
-function orderTotal(plan: CustomerAgentPlan): number {
+async function removeItem(message: AssistantMessage, itemIndex: number) {
+  const plan = planFor(message)
+  if (!plan?.planToken || rebuilding.value) return
+  const items = Array.isArray(plan.items) ? plan.items : []
+  if (!items[itemIndex]) return
+  rebuilding.value = true
+  try {
+    if (!store.isLoggedIn) await store.ensureGuestId()
+    const remainingLines = items
+      .filter((_, index) => index !== itemIndex)
+      .map(item => ({
+        productCode: item.productCode,
+        size: ['SMALL', 'MEDIUM', 'LARGE'].includes(item.size) ? item.size : 'MEDIUM',
+        quantity: Number(item.quantity) || 1,
+        condiments: condimentsOf(item)
+      }))
+    const updated = await customerAgentApi.rebuild({
+      storeId: store.currentStore!.storeId,
+      sessionId: sessionId.value,
+      planToken: plan.planToken,
+      lines: remainingLines,
+      replace: true,
+      note: remainingLines.length ? '已移除商品并重新计价。' : '已清空当前方案。'
+    })
+    message.localPlan = updated
+    setActivePlan(updated)
+    cancelEdit()
+    ElMessage.success(remainingLines.length ? '已移除该商品并更新合计' : '已清空当前待确认方案')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '移除商品失败，请重试')
+  } finally {
+    rebuilding.value = false
+  }
+}
+
+function orderSubtotal(plan: CustomerAgentPlan): number {
+  if (plan.pricing && Number.isFinite(Number(plan.pricing.itemsSubtotal))) {
+    return Number(plan.pricing.itemsSubtotal)
+  }
   return (plan.items || []).reduce((sum, item) => sum + Number(item.estimatedPrice || 0) * Number(item.quantity || 1), 0)
+}
+
+function orderPayable(plan: CustomerAgentPlan): number {
+  if (plan.pricing && Number.isFinite(Number(plan.pricing.estimatedPayable))) {
+    return Number(plan.pricing.estimatedPayable)
+  }
+  return orderSubtotal(plan)
 }
 
 function routeLabel(response?: CustomerAssistantResponse): string {
   switch (response?.route) {
     case 'ORDER': return '点单子 Agent'
+    case 'MERGE_ORDER': return '点单合并'
+    case 'REMOVE_ITEM': return '方案调整'
+    case 'CHECKOUT': return '结账审核'
+    case 'CONFIRM': return '方案确认'
     case 'ORDER_QUERY': return '订单查询子 Agent'
     case 'FEEDBACK': return '反馈子 Agent'
     case 'UNSAFE': return '安全守卫'
@@ -308,7 +346,6 @@ async function send(text = input.value, selected?: { message: AssistantMessage; 
       planToken: activePlan.value?.planToken || null
     })
     sessionId.value = response.sessionId
-    const previousAnswer = [...messages.value].reverse().find(item => item.role === 'assistant')?.content || ''
     const assistantMessage: AssistantMessage = {
       role: 'assistant',
       content: response.answer || '我暂时没有生成可用回答，请换一种方式描述。',
@@ -316,42 +353,12 @@ async function send(text = input.value, selected?: { message: AssistantMessage; 
       choices: choiceList(response)
     }
     messages.value.push(assistantMessage)
-    const backendPlan = orderPlan(response)
-    if (backendPlan) setActivePlan(backendPlan)
 
-    if (response.action?.type === 'CHECKOUT_PLAN') {
-      // 旧后端把“支付”直接转成收银台；现在只回到聊天里的确认卡片，由用户点按钮才付款。
-      const token = String(response.action.payload?.planToken || '')
-      if (activePlan.value && (!token || token === activePlan.value.planToken)) {
-        assistantMessage.localPlan = activePlan.value
-      }
-    } else if (matched && !backendPlan) {
-      // 后端已返回支付方案就直接用；未返回时按所选规格补一份，避免出现“选完了却没支付入口”。
-      await attachChoicePlan(assistantMessage, matched.choice)
-    } else if (!backendPlan && localChoicePlanMessage(message, previousAnswer)) {
-      // “2个10元的”按价格反推规格，并入当前方案或先生成一份方案。
-      const planMessage = localChoicePlanMessage(message, previousAnswer)!
-      if (activePlan.value) {
-        await attachMergedPlan(assistantMessage, previousAnswer, message, planMessage)
-      } else {
-        await attachTextPlan(assistantMessage, planMessage)
-      }
-    } else if (!backendPlan && activePlan.value && isLocalMergeIntent(message)) {
-      // 兼容旧后端：“再加个甜点/一起结算”也要并入同一方案，而不是另起一笔。
-      await attachMergedPlan(assistantMessage, response.answer || '', message)
-    } else if (!backendPlan && isLocalConfirmation(message, previousAnswer) && !matched) {
-      // 兼容旧后端：“可以，就它了/不用”确认推荐时，先补出待确认方案卡片。
-      await attachRecommendationPlan(assistantMessage, previousAnswer)
-    } else if (!backendPlan && isLocalPaymentIntent(message)) {
-      // 兼容旧后端：说付款时没有方案，就按上一轮推荐补一张待确认卡片，绝不直接弹收银台。
-      if (response.action?.type === 'VIEW_ORDERS') {
-        assistantMessage.response = { ...response, action: { type: 'NONE', payload: {} } }
-      }
-      if (activePlan.value) {
-        assistantMessage.localPlan = activePlan.value
-      } else {
-        await attachRecommendationPlan(assistantMessage, previousAnswer)
-      }
+    const backendPlan = orderPlan(response)
+    if (backendPlan) {
+      setActivePlan(backendPlan)
+    } else if (response.route === 'REMOVE_ITEM' && response.action?.type === 'NONE' && (response.answer || '').includes('清空')) {
+      setActivePlan(null)
     }
   } catch (error: any) {
     ElMessage.error(error?.message || '顾客助手暂时不可用，请稍后重试')
@@ -360,223 +367,9 @@ async function send(text = input.value, selected?: { message: AssistantMessage; 
   }
 }
 
-function isLocalConfirmation(text: string, context: string): boolean {
-  if (!/推荐|建议|为你准备|给你准备|还需要其他|还需要别的|还需要什么|还需要饮品|请问您还需要|已为您记录|已为你记录|选择了|已选/.test(context)) return false
-  const normalized = text.trim().replace(/[，,。！!\s]/g, '')
-  return /^(好|好的|行|行吧|可以|可以呀|可以啊|嗯|ok|okay|要得|确定|确认|就这个|就要这个|就这个了|这个吧|这个就行|这个可以|来这个|就它|就它吧|就它了|就要它了|就这款|就这款了|按这个来|就按这个|确认一下|就定了|就这么定了|就这些|就这些了|暂时不用了|不用了|不用啦|不用|不了了|不了|不需要了|不需要|不要了|不要|不啦|就这样|够了|没了|可以了)$/i.test(normalized)
-}
-
-function isLocalMergeIntent(text: string): boolean {
-  return /再加|追加|还想加|顺便加|在此基础上|在这个基础上|搭配推荐|再推荐|再给我推荐|一起下单|同一笔|合并/.test(text)
-}
-
-function isLocalPaymentIntent(text: string): boolean {
-  if (/怎么支付|如何支付|支付方式|付款方式|支付记录|支付成功|支付失败|查.{0,6}订单|订单记录|订单状态/.test(text)) return false
-  return /支付|付款|买单|结算|确认方案|就这套/.test(text)
-}
-
-function mentionedProductNames(content: string): string[] {
-  return store.products.filter(item => item.name && content.includes(item.name)).map(item => item.name)
-}
-
-function localQty(value: string): number {
-  if (/^\d+$/.test(value)) return Math.max(1, Math.min(99, Number(value)))
-  const map: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 }
-  return map[value] || 1
-}
-
-function localQuantityFromHistory(): number {
-  const pattern = /(\d+|[一二两三四五六七八九十])\s*(杯|份|个)/
-  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
-    const message = messages.value[index]
-    if (message.role !== 'user') continue
-    const found = message.content.match(pattern)
-    if (found) return localQty(found[1])
-  }
-  return 1
-}
-
-function localTemperature(value?: string): string {
-  if (!value) return ''
-  if (value.startsWith('热')) return '热饮'
-  if (value === '常温') return '常温'
-  return '冰饮'
-}
-
-/** “2个10元的 / 18元，冰”→完整点单语句，从上一轮价格表反推规格。 */
-function localChoicePlanMessage(text: string, answer: string): string | null {
-  const trimmed = text.trim()
-  let quantity = 1
-  let price = ''
-  let temperature = ''
-  const qtyPrice = trimmed.match(/^(\d+|[一二两三四五六七八九十])\s*个\s*(\d+(?:\.\d+)?)\s*元的?$/)
-  if (qtyPrice) {
-    quantity = localQty(qtyPrice[1])
-    price = qtyPrice[2]
-  } else {
-    const shortPrice = trimmed.match(/^(\d+(?:\.\d+)?)\s*元?\s*[,，、\s]*(冰的?|少冰|去冰|热的?|常温)?$/)
-    if (!shortPrice) return null
-    price = shortPrice[1]
-    temperature = localTemperature(shortPrice[2])
-    quantity = localQuantityFromHistory()
-  }
-  const product = mentionedProductName(answer)
-  if (!product) return null
-  const regex = /(小杯|中杯|大杯|小份|中份|大份)\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*元?/g
-  let size = ''
-  let item: RegExpExecArray | null = regex.exec(answer)
-  while (item) {
-    if (item[2] === price) { size = item[1]; break }
-    item = regex.exec(answer)
-  }
-  return `我要点${quantity}份${size}${product}${temperature}`
-}
-
-async function attachTextPlan(message: AssistantMessage, planMessage: string) {
-  if (!hasStore.value) return
-  message.planLoading = true
-  try {
-    const identity = store.isLoggedIn && store.currentUser?.id
-      ? { userId: store.currentUser.id }
-      : { guestId: await store.ensureGuestId() }
-    const plan = await customerAgentApi.plan({
-      storeId: store.currentStore!.storeId,
-      ...identity,
-      message: planMessage
-    })
-    if (plan?.planToken && Array.isArray(plan.items) && plan.items.length) {
-      message.localPlan = plan
-      setActivePlan(plan)
-    } else {
-      ElMessage.warning('暂时没能生成支付方案，请重新选择规格或稍后再试')
-    }
-  } catch (error: any) {
-    ElMessage.warning(error?.message || '支付方案生成失败，可以再点一次规格')
-  } finally {
-    message.planLoading = false
-  }
-}
-
-/** 把新推荐并入现有方案，返回同一张待确认卡片；不直接创建订单。 */
-async function attachMergedPlan(message: AssistantMessage, answer: string, userMessage: string, planMessageOverride?: string) {
-  if (!hasStore.value || !activePlan.value) return
-  const names = mentionedProductNames(answer)
-  const targets = names.length ? names : [userMessage]
-  const newProducts = store.products.filter(product =>
-    !!product.name && targets.includes(product.name)
-    && !activePlan.value!.items.some(item => item.productCode === product.code))
-  if (!newProducts.length) {
-    message.localPlan = activePlan.value
-    return
-  }
-  message.planLoading = true
-  try {
-    const identity = store.isLoggedIn && store.currentUser?.id
-      ? { userId: store.currentUser.id }
-      : { guestId: await store.ensureGuestId() }
-    const proposed = await customerAgentApi.plan({
-      storeId: store.currentStore!.storeId,
-      ...identity,
-      message: planMessageOverride || `我要${newProducts.map(product => product.name).join('和')}`
-    })
-    const wantedCodes = new Set(newProducts.map(product => product.code))
-    const lines = (proposed.items || [])
-      .filter(item => !!item.productCode && wantedCodes.has(item.productCode))
-      .map(item => ({
-        productCode: item.productCode,
-        size: item.size || 'MEDIUM',
-        quantity: item.quantity || 1,
-        condiments: condimentsOf(item)
-      }))
-    if (!lines.length) {
-      message.localPlan = activePlan.value
-      return
-    }
-    const merged = await customerAgentApi.rebuild({
-      storeId: store.currentStore!.storeId,
-      planToken: activePlan.value.planToken,
-      lines,
-      replace: false,
-      note: '已把新推荐并入同一方案；确认后一次支付即可。'
-    })
-    if (merged?.planToken && Array.isArray(merged.items) && merged.items.length) {
-      message.localPlan = merged
-      setActivePlan(merged)
-    } else {
-      ElMessage.warning('暂时没能合并方案，请重新选择商品或稍后再试')
-    }
-  } catch (error: any) {
-    ElMessage.warning(error?.message || '方案合并失败，可以再试一次')
-  } finally {
-    message.planLoading = false
-  }
-}
-
-/** 旧后端把“好/就这个”当咨询时，前端按上一轮推荐补出待确认方案卡片。 */
-async function attachRecommendationPlan(message: AssistantMessage, previousAnswer: string) {
-  if (!hasStore.value || !previousAnswer) return
-  if (activePlan.value) {
-    await attachMergedPlan(message, previousAnswer, previousAnswer)
-    return
-  }
-  const names = mentionedProductNames(previousAnswer)
-  if (!names.length) return
-  message.planLoading = true
-  try {
-    const identity = store.isLoggedIn && store.currentUser?.id
-      ? { userId: store.currentUser.id }
-      : { guestId: await store.ensureGuestId() }
-    const temperature = /冰饮|冰咖啡|加冰/.test(previousAnswer) ? '冰饮' : ''
-    const plan = await customerAgentApi.plan({
-      storeId: store.currentStore!.storeId,
-      ...identity,
-      message: `我要${names.map(name => `${name}${temperature}`).join('和')}`
-    })
-    if (plan?.planToken && Array.isArray(plan.items) && plan.items.length) {
-      message.localPlan = plan
-      setActivePlan(plan)
-    } else {
-      ElMessage.warning('暂时没能生成支付方案，请重新点选商品或稍后再试')
-    }
-  } catch (error: any) {
-    ElMessage.warning(error?.message || '支付方案生成失败，可以再试一次')
-  } finally {
-    message.planLoading = false
-  }
-}
-
-/** 旧后端还没给“中杯”生成支付方案时，用点单 Agent 的真实方案令牌兜底。 */
-async function attachChoicePlan(message: AssistantMessage, choice: AssistantChoice) {
-  if (!hasStore.value) return
-  message.planLoading = true
-  try {
-    const identity = store.isLoggedIn && store.currentUser?.id
-      ? { userId: store.currentUser.id }
-      : { guestId: await store.ensureGuestId() }
-    const productName = message.response?.action?.payload?.productName
-      || mentionedProductName(message.content)
-    const description = productName ? `${productName}${choice.label}` : choice.label
-    const plan = await customerAgentApi.plan({
-      storeId: store.currentStore!.storeId,
-      ...identity,
-      message: `我要点${description}`
-    })
-    if (plan?.planToken && Array.isArray(plan.items) && plan.items.length) {
-      message.localPlan = plan
-      setActivePlan(plan)
-    } else {
-      ElMessage.warning('暂时没能生成支付方案，请重新选择规格或稍后再试')
-    }
-  } catch (error: any) {
-    ElMessage.warning(error?.message || '支付方案生成失败，可以再点一次规格')
-  } finally {
-    message.planLoading = false
-  }
-}
-
 function checkoutPlan(plan: CustomerAgentPlan, runId?: string) {
   if (!plan?.planToken) return
-  emit('checkout', plan.planToken, false, runId || plan.runId)
+  emit('checkout', plan.planToken, false, runId || plan.runId, sessionId.value)
   emit('update:modelValue', false)
 }
 
@@ -589,7 +382,7 @@ function runAction(response: CustomerAssistantResponse) {
   } else if (type === 'CHECKOUT_PLAN') {
     const token = String(payload.planToken || activePlan.value?.planToken || '')
     if (token && activePlan.value?.planToken === token) {
-      emit('checkout', token, false, response.runId)
+      emit('checkout', token, false, response.runId, sessionId.value)
       emit('update:modelValue', false)
     } else {
       ElMessage.warning('当前方案已更新，请用最新方案确认支付')
@@ -677,15 +470,16 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 
             <template v-if="message.response">
               <div v-if="message.response.memorySignals?.length" class="memory-row">
-                <span v-for="signal in message.response.memorySignals" :key="signal">新偏好 · {{ signal }}</span>
+                <span v-for="signal in message.response.memorySignals" :key="signal">已记住 · {{ signal }}</span>
               </div>
-
-              <div v-if="message.planLoading" class="plan-loading">正在生成支付方案…</div>
 
               <section v-if="planFor(message)" class="order-plan-card" :class="{ muted: !isActivePlan(planFor(message)) }">
                 <div class="card-title">
-                  <b>本次建议</b>
-                  <span>{{ isActivePlan(planFor(message)) ? '待你确认 · 可编辑' : '已合并到最新方案' }}</span>
+                  <b>
+                    待确认订单
+                    <em v-if="planFor(message)!.draftVersion" class="draft-ver">v{{ planFor(message)!.draftVersion }}</em>
+                  </b>
+                  <span>{{ isActivePlan(planFor(message)) ? '待你审核 · 可编辑/移除' : '已合并到最新方案' }}</span>
                 </div>
                 <div v-for="(item, itemIndex) in planFor(message)!.items" :key="`${item.productCode}-${item.size}-${itemIndex}`" class="plan-item">
                   <div class="plan-image">
@@ -693,19 +487,31 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
                     <span v-else>☕</span>
                   </div>
                   <div class="plan-main">
-                    <div><b>{{ item.name }}</b><strong>¥{{ Number(item.estimatedPrice || 0).toFixed(2) }}</strong></div>
+                    <div>
+                      <b>{{ item.name }}</b>
+                      <strong>¥{{ (Number(item.estimatedPrice || 0) * Number(item.quantity || 1)).toFixed(2) }}</strong>
+                    </div>
                     <small>
-                      {{ item.temperature === 'COLD' ? '冰饮' : item.temperature === 'HOT' ? '热饮' : '冷热可选' }}
-                      · {{ sizeLabel(item.size) }} · {{ item.quantity }} 份
+                      <template v-if="item.categoryCode !== 'food' && item.categoryCode !== 'dessert'">
+                        {{ item.temperature === 'COLD' ? '冰饮' : item.temperature === 'HOT' ? '热饮' : '冷热可选' }} ·
+                      </template>
+                      {{ sizeLabel(item.size, item.categoryCode) }} · ¥{{ Number(item.estimatedPrice || 0).toFixed(2) }} × {{ item.quantity }}
                       <template v-if="condimentsOf(item).length"> · {{ condimentsOf(item).map(condimentLabel).join('、') }}</template>
                     </small>
-                    <button
-                      v-if="isActivePlan(planFor(message))"
-                      type="button"
-                      class="edit-plan-item"
-                      :disabled="rebuilding || (editingKey !== null && editingKey !== itemKey(index, itemIndex))"
-                      @click="startEdit(index, itemIndex, item)"
-                    >编辑规格 / 加料</button>
+                    <div v-if="isActivePlan(planFor(message))" class="plan-item-actions">
+                      <button
+                        type="button"
+                        class="edit-plan-item"
+                        :disabled="rebuilding || (editingKey !== null && editingKey !== itemKey(index, itemIndex))"
+                        @click="startEdit(index, itemIndex, item)"
+                      >编辑规格 / 加料</button>
+                      <button
+                        type="button"
+                        class="remove-plan-item"
+                        :disabled="rebuilding"
+                        @click="removeItem(message, itemIndex)"
+                      >移除</button>
+                    </div>
                   </div>
                 </div>
 
@@ -713,7 +519,7 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
                   <div class="editor-row">
                     <label>规格</label>
                     <button
-                      v-for="size in [{ value: 'SMALL', label: '小杯' }, { value: 'MEDIUM', label: '中杯' }, { value: 'LARGE', label: '大杯' }]"
+                      v-for="size in sizeOptionsFor(editingItemFor(index))"
                       :key="size.value"
                       type="button"
                       :class="{ selected: editDraft.size === size.value }"
@@ -746,9 +552,23 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
                   </div>
                 </div>
 
+                <div v-if="planFor(message)!.pricing" class="pricing-breakdown">
+                  <div class="pricing-line">
+                    <span>商品小计</span>
+                    <span>¥{{ orderSubtotal(planFor(message)!).toFixed(2) }}</span>
+                  </div>
+                  <div v-if="Number(planFor(message)!.pricing?.estimatedCouponDiscount || 0) > 0" class="pricing-line discount">
+                    <span>Agent 满减优惠</span>
+                    <span>-¥{{ Number(planFor(message)!.pricing!.estimatedCouponDiscount).toFixed(2) }}</span>
+                  </div>
+                  <div v-if="planFor(message)!.pricing?.promotionText" class="pricing-promo">
+                    {{ planFor(message)!.pricing!.promotionText }}
+                  </div>
+                </div>
+
                 <div class="plan-footer">
-                  <span>预计合计</span>
-                  <strong>¥{{ orderTotal(planFor(message)!).toFixed(2) }}</strong>
+                  <span>预计实付</span>
+                  <strong>¥{{ orderPayable(planFor(message)!).toFixed(2) }}</strong>
                   <button
                     type="button"
                     :disabled="!isActivePlan(planFor(message))"
@@ -831,22 +651,26 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 .choice-options button span { color: var(--orange); font-size: 10px; }
 .choice-options button.selected span { color: #ffd8bf; }
 .choice-options button:disabled { cursor: default; }
-.plan-loading { margin-top: 8px; color: #7d8e82; font-size: 10px; }
 .order-plan-card, .order-list-card { margin-top: 8px; padding: 11px; border: 1px solid #f0d8c9; border-radius: 14px; background: linear-gradient(120deg, #fffaf6, #fff); }
 .card-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--ink); font-size: 12px; }
+.card-title .draft-ver { margin-left: 4px; padding: 1px 5px; border-radius: 999px; background: #f8e5d8; color: #b65d2c; font-size: 10px; font-style: normal; font-weight: 600; }
 .card-title span { color: #c16a3f; font-size: 10px; }
 .plan-item { display: flex; gap: 8px; padding: 7px 0; border-top: 1px solid #f4e9e1; }
 .plan-item:first-of-type { border-top: 0; }
 .plan-image { display: grid; place-items: center; flex: none; width: 44px; height: 44px; overflow: hidden; border-radius: 10px; color: #b67857; background: #f8eadf; }
 .plan-image img { width: 100%; height: 100%; object-fit: cover; }
 .plan-main { min-width: 0; flex: 1; }
-.plan-main > div { display: flex; justify-content: space-between; gap: 8px; color: var(--ink); font-size: 12px; }
+.plan-main > div:first-child { display: flex; justify-content: space-between; gap: 8px; color: var(--ink); font-size: 12px; }
 .plan-main strong, .plan-footer strong { color: var(--orange); }
 .plan-main small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .order-plan-card.muted { opacity: .62; }
-.edit-plan-item { margin-top: 6px; border: 1px solid #eadbd0; border-radius: 8px; padding: 4px 7px; color: #9a633f; background: #fffaf5; font-size: 10px; cursor: pointer; }
+.plan-item-actions { display: flex; gap: 6px; margin-top: 6px; }
+.edit-plan-item, .remove-plan-item { border: 1px solid #eadbd0; border-radius: 8px; padding: 4px 7px; font-size: 10px; cursor: pointer; }
+.edit-plan-item { color: #9a633f; background: #fffaf5; }
 .edit-plan-item:hover:not(:disabled) { border-color: var(--orange); color: var(--orange); }
-.edit-plan-item:disabled { opacity: .45; cursor: default; }
+.remove-plan-item { color: #a8524b; background: #fff6f5; border-color: #f0d2cf; }
+.remove-plan-item:hover:not(:disabled) { border-color: #d9534f; color: #c9302c; }
+.edit-plan-item:disabled, .remove-plan-item:disabled { opacity: .45; cursor: default; }
 .plan-editor { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px dashed #e4cdbd; border-radius: 11px; background: #fffdfa; }
 .editor-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .editor-row label { min-width: 28px; color: var(--muted); font-size: 10px; }
@@ -856,6 +680,10 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 .editor-actions button { border: 1px solid #e0d3c8; border-radius: 8px; padding: 6px 11px; color: #795d4b; background: #fff; font-size: 10px; cursor: pointer; }
 .editor-actions button.save { border: 0; color: #fff; background: var(--orange); font-weight: 700; }
 .editor-actions button:disabled { opacity: .55; cursor: wait; }
+.pricing-breakdown { display: grid; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #f4e9e1; font-size: 11px; color: var(--muted); }
+.pricing-line { display: flex; justify-content: space-between; align-items: center; }
+.pricing-line.discount { color: #3c7a57; font-weight: 600; }
+.pricing-promo { font-size: 10px; color: #8c6b53; }
 .plan-footer { display: flex; align-items: center; gap: 9px; margin-top: 7px; padding-top: 9px; border-top: 1px dashed #ecd8cb; color: var(--muted); font-size: 10px; }
 .plan-footer strong { margin-right: auto; font-size: 16px; }
 .plan-footer button, .action-button { border: 0; border-radius: 9px; padding: 9px 11px; color: #fff; background: var(--orange); font-size: 11px; font-weight: 700; cursor: pointer; }

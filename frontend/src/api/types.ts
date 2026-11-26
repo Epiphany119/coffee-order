@@ -353,6 +353,13 @@ export interface CustomerAgentPromotion {
   canAddOn?: boolean
 }
 
+export interface CustomerAgentPricing {
+  itemsSubtotal: number
+  estimatedCouponDiscount: number
+  estimatedPayable: number
+  promotionText: string
+}
+
 export interface CustomerAgentPlan {
   reply: string
   items: CustomerAgentItem[]
@@ -365,6 +372,13 @@ export interface CustomerAgentPlan {
   engine?: string
   storeName?: string
   planToken: string
+  /** 服务端会话草稿单元数据与实时计价汇总。 */
+  sessionId?: string
+  draftVersion?: number
+  draftStatus?: 'EMPTY' | 'DRAFTING' | 'REVIEW_READY' | 'SUBMITTED' | string
+  fulfillmentType?: string
+  pricing?: CustomerAgentPricing
+  cleared?: boolean
   /** 本次点单 Agent 运行编号，用于把最终下单结果回写到观测轨迹。 */
   runId?: string
   expiresInSeconds: number

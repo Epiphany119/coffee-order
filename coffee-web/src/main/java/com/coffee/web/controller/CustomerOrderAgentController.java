@@ -45,6 +45,8 @@ public class CustomerOrderAgentController {
     private final PaymentService paymentService;
     private final AgentRunAuditService agentAudit;
     private final ZhipuChatClient chatClient;
+    private final com.coffee.web.agent.CustomerSessionDraftService draftService;
+    private final com.coffee.web.agent.CustomerDraftOrderToolService draftTool;
 
     public CustomerOrderAgentController(CustomerOrderAgentService customerOrderAgentService,
                                         OrderService orderService,
@@ -53,7 +55,9 @@ public class CustomerOrderAgentController {
                                         StoreService storeService,
                                         PaymentService paymentService,
                                         AgentRunAuditService agentAudit,
-                                        ZhipuChatClient chatClient) {
+                                        ZhipuChatClient chatClient,
+                                        com.coffee.web.agent.CustomerSessionDraftService draftService,
+                                        com.coffee.web.agent.CustomerDraftOrderToolService draftTool) {
         this.customerOrderAgentService = customerOrderAgentService;
         this.orderService = orderService;
         this.idempotencyService = idempotencyService;
@@ -62,6 +66,8 @@ public class CustomerOrderAgentController {
         this.paymentService = paymentService;
         this.agentAudit = agentAudit;
         this.chatClient = chatClient;
+        this.draftService = draftService;
+        this.draftTool = draftTool;
     }
     
     @PostMapping("/plan")
@@ -145,13 +151,17 @@ public class CustomerOrderAgentController {
         return emitter;
     }
 
-    /** 顾客编辑推荐商品的规格/配料/数量，或在原方案上追加商品；服务端重新计价并签发新令牌。 */
+    /** 顾客编辑推荐商品的规格/配料/数量，或在原方案上追加商品；服务端重新计价并同步会话草稿单。 */
     @PostMapping("/plans/rebuild")
     public Result<Map<String, Object>> rebuild(@RequestBody RebuildPlanRequest request) {
         if (request == null || request.storeId == null) throw new ServiceException(400, "请选择门店");
-        if (request.lines == null || request.lines.isEmpty()) throw new ServiceException(400, "没有需要保存的商品修改");
+        if (!request.replace && (request.lines == null || request.lines.isEmpty())) {
+            throw new ServiceException(400, "没有需要保存的商品修改");
+        }
+        RequestIdentity requestIdentity = AccessGuard.currentIdentity();
         Identity identity = currentCustomerIdentity();
-        Map<String, Object> result = customerOrderAgentService.rebuild(
+        Map<String, Object> result = draftTool.syncRebuild(
+                request.sessionId, scopedOwner(requestIdentity, request.storeId),
                 request.storeId, identity.userId(), identity.guestId(), request.planToken, request.lines,
                 request.replace, request.note);
         return Result.success(result);
@@ -220,6 +230,9 @@ public class CustomerOrderAgentController {
                         created.setPaymentNo(payment.getPaymentNo());
                         return created;
                     });
+            if (request.sessionId != null && !request.sessionId.isBlank()) {
+                draftService.markSubmitted(request.sessionId, scopedOwner(requestIdentity, request.storeId), request.storeId);
+            }
             recordOwnedConfirm(requestIdentity, request.runId, response, elapsedMs(started), true, null);
             return Result.success(response);
         } catch (RuntimeException ex) {
@@ -289,6 +302,11 @@ public class CustomerOrderAgentController {
         throw new ServiceException(403, "点单 Agent 仅支持顾客或游客身份");
     }
 
+    private String scopedOwner(RequestIdentity identity, Long storeId) {
+        String owner = identity.kind().name() + ":" + (identity.id() == null ? identity.guestId() : identity.id());
+        return owner + "|STORE:" + storeId;
+    }
+
     private String normalizeFulfillment(String raw) {
         String fulfillment = raw == null || raw.isBlank()
                 ? "PICKUP" : raw.trim().toUpperCase(Locale.ROOT);
@@ -321,11 +339,12 @@ public class CustomerOrderAgentController {
     public static class CustomerAgentRequest { public Long storeId; public Long userId; public String guestId; public String message; }
     public static class RebuildPlanRequest {
         public Long storeId;
+        public String sessionId;
         public String planToken;
         public List<Map<String, Object>> lines;
-        /** true 表示 lines 是完整方案（编辑规格时用）；false 表示在原子方案上追加。 */
+        /** true 表示 lines 是完整方案（编辑规格或清空时用）；false 表示在原方案上追加。 */
         public boolean replace;
         public String note;
     }
-    public static class ConfirmPlanRequest { public String planToken; public String runId; public Long storeId; public Long userId; public String guestId; public String fulfillmentType; public Long deliveryAddressId; public boolean includeAddOn; }
+    public static class ConfirmPlanRequest { public String planToken; public String sessionId; public String runId; public Long storeId; public Long userId; public String guestId; public String fulfillmentType; public Long deliveryAddressId; public boolean includeAddOn; }
 }
