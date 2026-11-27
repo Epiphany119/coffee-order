@@ -104,15 +104,17 @@ public class CustomerPreferenceMemoryService {
         Map<String, Object> result = new LinkedHashMap<>();
         String text = message == null ? "" : message.trim().toLowerCase();
         if (text.isBlank()) return result;
+        String normalizedForCategory = text.replaceAll("甜点[的儿](?![心品食])", "偏甜");
         if (contains(text, "冰", "冷", "冷饮")) result.put("temperature", "COLD");
         else if (contains(text, "热", "暖", "热饮")) result.put("temperature", "HOT");
         if (contains(text, "无糖", "不加糖", "不甜", "低糖", "少糖")) result.put("sweetness", "LOW");
-        else if (contains(text, "全糖", "正常糖", "甜一点")) result.put("sweetness", "NORMAL");
+        else if (contains(text, "甜点的", "甜点儿", "甜一点", "偏甜", "甜口", "喜欢甜", "爱喝甜")) result.put("sweetness", "SWEET");
+        else if (contains(text, "全糖", "正常糖")) result.put("sweetness", "NORMAL");
         if (contains(text, "不苦", "别太苦", "清爽", "清淡")) result.put("taste", "LIGHT");
         else if (contains(text, "浓郁", "提神", "苦一点", "醇厚")) result.put("taste", "STRONG");
         if (contains(text, "咖啡", "拿铁", "美式", "浓缩")) result.put("category", "COFFEE");
         else if (contains(text, "奶茶", "茶", "果茶")) result.put("category", "TEA");
-        if (contains(text, "甜点", "蛋糕", "小食", "轻食", "汉堡")) result.put("pairing", "FOOD");
+        if (contains(normalizedForCategory, "甜点", "甜品", "蛋糕", "小食", "轻食", "汉堡")) result.put("pairing", "FOOD");
         Matcher matcher = BUDGET.matcher(text);
         if (matcher.find()) result.put("budget", matcher.group(1));
         return result;
@@ -122,7 +124,7 @@ public class CustomerPreferenceMemoryService {
         if (values == null || values.isEmpty()) return List.of();
         List<String> signals = new ArrayList<>();
         label(values, signals, "temperature", Map.of("COLD", "偏好冰饮", "HOT", "偏好热饮"));
-        label(values, signals, "sweetness", Map.of("LOW", "偏好低糖", "NORMAL", "接受正常甜度"));
+        label(values, signals, "sweetness", Map.of("LOW", "偏好低糖", "NORMAL", "接受正常甜度", "SWEET", "偏好偏甜口味"));
         label(values, signals, "taste", Map.of("LIGHT", "偏好清爽不苦", "STRONG", "偏好浓郁提神"));
         label(values, signals, "category", Map.of("COFFEE", "常探索咖啡", "TEA", "常探索茶饮"));
         label(values, signals, "pairing", Map.of("FOOD", "常搭配轻食或甜点"));

@@ -413,7 +413,8 @@ public class CustomerSupervisorAgentOrchestrator {
             category = "";
         }
         int offset = menuOffset(input, history);
-        int end = Math.min(offset + 8, candidates.size());
+        int pageSize = "drink".equals(category) ? 14 : 8;
+        int end = Math.min(offset + pageSize, candidates.size());
         List<MenuItemDTO> shown = candidates.subList(Math.min(offset, end), end);
         List<Map<String, Object>> facts = shown.stream().map(this::productFact).toList();
         audit.recordStep(runId, 0, "consult_menu_sub_agent", true, "SUCCEEDED", elapsedMs(menuStarted), facts.size(),
@@ -1039,12 +1040,29 @@ public class CustomerSupervisorAgentOrchestrator {
         return "";
     }
 
+    /** 去除表示“偏甜/甜一点”的口语修饰（如“甜点的/甜点儿”），避免被子串误判为“甜点”品类。 */
+    static String stripSweetTasteModifiers(String text) {
+        if (text == null || text.isBlank()) return "";
+        return text.replaceAll("甜点[的儿](?![心品食])", "偏甜");
+    }
+
     private static String detectCategoryKeyword(String text) {
-        if (contains(text, "甜点", "甜品", "甜食", "蛋糕", "曲奇", "可颂", "马卡龙", "布朗尼",
-                "慕斯", "布丁", "泡芙", "还想加", "还想加点", "加点甜", "加个甜")) return "dessert";
-        if (contains(text, "轻食", "汉堡", "三明治", "薯条", "小吃", "鸡翅", "披萨")) return "food";
-        if (contains(text, "咖啡", "拿铁", "美式", "浓缩", "卡布奇诺")) return "coffee";
-        if (contains(text, "奶茶", "果茶", "柠檬茶", "茶饮", "饮品")) return "tea";
+        if (text == null || text.isBlank()) return "";
+        String normalized = stripSweetTasteModifiers(text);
+        boolean explicitDessert = contains(normalized, "甜点", "甜品", "甜食", "蛋糕", "曲奇", "可颂", "马卡龙", "布朗尼",
+                "慕斯", "布丁", "泡芙", "还想加", "还想加点", "加点甜", "加个甜");
+        boolean explicitFood = contains(normalized, "轻食", "汉堡", "三明治", "薯条", "小吃", "鸡翅", "披萨");
+        boolean explicitCoffee = contains(normalized, "咖啡", "拿铁", "美式", "浓缩", "卡布奇诺", "摩卡", "冷萃", "玛奇朵");
+        boolean explicitTea = contains(normalized, "奶茶", "果茶", "柠檬茶", "茶饮", "花茶", "乌龙", "红茶", "抹茶");
+        boolean explicitDrink = contains(normalized, "饮品", "饮料", "喝的", "喝点", "解渴", "冰沙", "奶昔");
+
+        if (explicitDessert && !explicitCoffee && !explicitTea && !explicitDrink) return "dessert";
+        if (explicitFood && !explicitCoffee && !explicitTea && !explicitDrink) return "food";
+        if (explicitCoffee) return "coffee";
+        if (explicitTea) return "tea";
+        if (explicitDrink) return "drink";
+        if (explicitDessert) return "dessert";
+        if (explicitFood) return "food";
         return "";
     }
 
@@ -1065,16 +1083,23 @@ public class CustomerSupervisorAgentOrchestrator {
         if (category == null || category.isBlank()) return products;
         List<MenuItemDTO> result = new ArrayList<>();
         for (MenuItemDTO product : products) {
-            if (category.equals(product.getCategoryCode())) {
+            String code = product.getCategoryCode() == null ? "" : product.getCategoryCode().toLowerCase(Locale.ROOT);
+            String haystack = String.valueOf(product.getName()) + " " + String.valueOf(product.getDescription());
+            String text = haystack.toLowerCase(Locale.ROOT);
+            if ("drink".equals(category)) {
+                boolean isDessertOrFood = "dessert".equals(code) || "food".equals(code)
+                        || (code.isEmpty() && contains(text, "甜点", "蛋糕", "曲奇", "可颂", "马卡龙", "布朗尼", "慕斯", "布丁", "泡芙", "汉堡", "三明治", "薯条", "披萨"));
+                if (!isDessertOrFood) result.add(product);
+                continue;
+            }
+            if (category.equals(code)) {
                 result.add(product);
                 continue;
             }
-            String haystack = String.valueOf(product.getName()) + " " + String.valueOf(product.getDescription());
-            String text = haystack.toLowerCase(Locale.ROOT);
             boolean matched = switch (category) {
                 case "dessert" -> contains(text, "甜点", "蛋糕", "曲奇", "可颂", "马卡龙", "布朗尼", "慕斯", "布丁", "泡芙", "挞");
                 case "food" -> contains(text, "汉堡", "三明治", "薯条", "小吃", "鸡翅", "披萨");
-                case "coffee" -> contains(text, "咖啡", "拿铁", "美式", "浓缩", "卡布奇诺");
+                case "coffee" -> contains(text, "咖啡", "拿铁", "美式", "浓缩", "卡布奇诺", "摩卡", "冷萃", "玛奇朵");
                 case "tea" -> contains(text, "茶", "奶茶", "果茶");
                 default -> false;
             };
@@ -1103,6 +1128,7 @@ public class CustomerSupervisorAgentOrchestrator {
             case "food" -> "轻食";
             case "coffee" -> "咖啡";
             case "tea" -> "茶饮";
+            case "drink" -> "饮品";
             default -> "商品";
         };
         StringBuilder builder = new StringBuilder("根据当前门店实时菜单，" + label + "类有：");

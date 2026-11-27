@@ -167,4 +167,21 @@ class CustomerSupervisorIntentRouteTest {
         assertEquals(CustomerSupervisorAgentOrchestrator.Route.CHECKOUT,
                 CustomerSupervisorAgentOrchestrator.route("选好了", List.of(), true));
     }
+
+    @Test
+    void sweetTasteModifierForDrinksDoesNotMisclassifyAsDessert() {
+        assertEquals("drink", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("帮我推荐几种饮品，我喜欢甜点的", List.of()));
+        assertEquals("coffee", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("给我推荐一杯甜点的咖啡", List.of()));
+        assertEquals("dessert", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("有什么低糖甜点？", List.of()));
+        assertEquals("dessert", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("帮我推荐几款甜品", List.of()));
+
+        List<MenuItemDTO> products = List.of(
+                product("latte", "经典拿铁", "coffee"),
+                product("peach_oolong", "蜜桃乌龙", "tea"),
+                product("cheesecake", "芝士蛋糕", "dessert"),
+                product("burger", "芝士汉堡", "food"));
+        List<MenuItemDTO> drinks = CustomerSupervisorAgentOrchestrator.menuCandidates(products, "drink");
+        assertEquals(List.of("经典拿铁", "蜜桃乌龙"),
+                drinks.stream().map(MenuItemDTO::getName).toList());
+    }
 }
