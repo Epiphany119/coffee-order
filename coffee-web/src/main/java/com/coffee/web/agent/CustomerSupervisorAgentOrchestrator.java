@@ -659,6 +659,8 @@ public class CustomerSupervisorAgentOrchestrator {
         }
         // 已有待确认草稿单时，删除/清空指令优先命中草稿单删改工具。
         if (hasActivePlan && isRemoveIntent(text)) return Route.REMOVE_ITEM;
+        // 多选商品批量提交（如“我要点：芝士蛋糕×1、提拉米苏×1”或“选好了：…”）：优先走点单/合并，绝不误判为空结账。
+        if (isBatchSelectionInput(text)) return hasActivePlan ? Route.MERGE_ORDER : Route.ORDER;
         // 明确结账/一起结账意图（且不伴随“再加/追加”新商品）：直接进入草稿单审核与结账预览。
         if (isCheckoutIntent(text) && !hasExplicitAddVerb(text)) return Route.CHECKOUT;
         // 已有待确认方案时，追加商品、回答规格问题都要回到同一份方案，而不是另起一笔。
@@ -715,10 +717,25 @@ public class CustomerSupervisorAgentOrchestrator {
         return contains(text, "查", "看", "找", "翻");
     }
 
-    /** 支付/结账/选品完成动作：包含“选好了/一起结账/合并结算”；像“怎么支付/支付记录”仍是咨询或查询。 */
+    /** 判断是否为多选商品批量提交（如“我要点：芝士蛋糕×1、提拉米苏×1”或“选好了：…”），优先进入点单/合并工具。 */
+    static boolean isBatchSelectionInput(String text) {
+        if (text == null || text.isBlank()) return false;
+        if (text.startsWith("我要点：") || text.startsWith("我要点:")
+                || text.startsWith("选好了：") || text.startsWith("选好了:")
+                || text.startsWith("点好了：") || text.startsWith("点好了:")
+                || text.startsWith("点单：") || text.startsWith("点单:")) {
+            return true;
+        }
+        return (text.contains("×") || text.matches(".*\\b[xX*]\\s*\\d+.*")) && !isOrderQueryIntent(text);
+    }
+
+    /** 支付/结账/选品完成动作：包含“选好了/一起结账/合并结算”；带商品明细的批量提交不走空结账。 */
     static boolean isCheckoutIntent(String text) {
         if (contains(text, "支付方式", "付款方式", "怎么支付", "如何支付", "怎么付款", "如何付款",
                 "支付记录", "支付成功", "支付失败", "待支付订单", "待付款订单", "未支付订单")) return false;
+        if (isBatchSelectionInput(text)) {
+            return false;
+        }
         return contains(text, "支付", "付款", "买单", "结算", "结账", "去付", "确认下单", "确认方案",
                 "就这套", "就要这个", "选好了", "点好了", "就选这些", "就点这些", "生成订单", "汇总订单");
     }
@@ -943,7 +960,7 @@ public class CustomerSupervisorAgentOrchestrator {
             choices.add(productChoiceCard(product));
         }
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("prompt", "为你检索到的门店商品 · 点击即可加入订单");
+        payload.put("prompt", "为你检索到的门店商品 · 可多选并调节份数，选好后统一生成订单");
         payload.put("choiceKind", "PRODUCT");
         payload.put("choices", choices);
         return action("ASK_CHOICE", "选择商品", payload);
@@ -961,11 +978,13 @@ public class CustomerSupervisorAgentOrchestrator {
         return row;
     }
 
-    /** 判断用户是否直接点选/输入了当前门店的具体在售商品名（例如点击商品卡片“提拉米苏”），防止误落入咨询死循环。 */
+    /** 判断用户是否直接点选/批量提交了当前门店的具体在售商品名（例如“我要点：茉莉花茶×2、手打柠檬茶×1”）。 */
     private boolean isDirectProductSelection(String input, Long storeId) {
         if (input == null || storeId == null) return false;
         String trimmed = input.trim();
-        if (trimmed.isEmpty() || trimmed.length() > 28) return false;
+        boolean batchSubmit = isBatchSelectionInput(trimmed);
+        int maxLen = batchSubmit ? 240 : 28;
+        if (trimmed.isEmpty() || trimmed.length() > maxLen) return false;
         String lower = trimmed.toLowerCase(Locale.ROOT);
         if (contains(lower, "有没有", "有什么", "推荐", "哪个", "哪款", "什么", "多少钱", "价格", "介绍",
                 "成分", "热量", "甜不甜", "苦不苦", "好喝吗", "好吃吗", "还有别的", "还有更多", "换一批", "?", "？")) {

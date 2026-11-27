@@ -51,6 +51,9 @@ interface AssistantMessage {
   /** 后端下发的规格/商品选项。 */
   choices?: AssistantChoice[]
   selectedChoice?: string
+  /** 商品卡片多选数量表（key=productCode, value=1..9），点击“选好了”后一次性提交。 */
+  pickedQuantities?: Record<string, number>
+  selectionSubmitted?: boolean
   /** 行内编辑/删除后由后端 /plans/rebuild 返回的最新方案快照。 */
   localPlan?: CustomerAgentPlan
 }
@@ -125,6 +128,52 @@ function categoryEmoji(categoryCode?: string): string {
   if (categoryCode === 'food') return '🥪'
   if (categoryCode === 'ice') return '🧊'
   return '☕'
+}
+
+function formatDisplayText(text: string): string {
+  return (text || '').replace(/\*\*/g, '')
+}
+
+function pickedQty(message: AssistantMessage, choiceValue: string): number {
+  return Number(message.pickedQuantities?.[choiceValue] || 0)
+}
+
+function adjustPickedQty(message: AssistantMessage, choice: AssistantChoice, delta: number) {
+  if (loading.value) return
+  const map = { ...(message.pickedQuantities || {}) }
+  const next = Math.max(0, Math.min(9, (map[choice.value] || 0) + delta))
+  if (next === 0) delete map[choice.value]
+  else map[choice.value] = next
+  message.pickedQuantities = map
+  message.selectionSubmitted = false
+}
+
+function pickedSummary(message: AssistantMessage): { totalCount: number; totalPrice: number; items: Array<{ choice: AssistantChoice; qty: number }> } {
+  const items: Array<{ choice: AssistantChoice; qty: number }> = []
+  let totalCount = 0
+  let totalPrice = 0
+  for (const choice of choicesFor(message)) {
+    const qty = pickedQty(message, choice.value)
+    if (qty > 0) {
+      items.push({ choice, qty })
+      totalCount += qty
+      totalPrice += Number(choice.price || 0) * qty
+    }
+  }
+  return { totalCount, totalPrice, items }
+}
+
+function clearPicked(message: AssistantMessage) {
+  message.pickedQuantities = {}
+  message.selectionSubmitted = false
+}
+
+async function submitPickedSelection(message: AssistantMessage) {
+  const summary = pickedSummary(message)
+  if (!summary.totalCount || loading.value) return
+  const text = '我要点：' + summary.items.map(({ choice, qty }) => `${choice.label}×${qty}`).join('、')
+  message.selectionSubmitted = true
+  await send(text)
 }
 
 function choicesFor(message: AssistantMessage): AssistantChoice[] {
@@ -472,39 +521,56 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
               <b>{{ message.role === 'user' ? displayName : 'FIKA Assistant' }}</b>
               <span v-if="message.response">{{ routeLabel(message.response) }}</span>
             </div>
-            <p class="message-content">{{ message.content }}</p>
+            <p class="message-content">{{ formatDisplayText(message.content) }}</p>
 
             <section v-if="choicesFor(message).length" class="choice-card">
               <div class="choice-title">
                 <b>{{ message.response?.action?.payload?.prompt || (isProductChoiceCard(message) ? '为你推荐的门店商品' : '选择规格') }}</b>
-                <span>{{ isProductChoiceCard(message) ? '点击即可加入订单' : '点选后继续下单' }}</span>
+                <span>{{ isProductChoiceCard(message) ? '可多选 · 选好后统一提交' : '点选后继续下单' }}</span>
               </div>
-              <div v-if="isProductChoiceCard(message)" class="product-choice-grid">
-                <button
-                  v-for="choice in choicesFor(message)"
-                  :key="choice.value"
-                  type="button"
-                  class="product-choice-item"
-                  :class="{ selected: message.selectedChoice === choice.label }"
-                  :disabled="loading"
-                  @click="send(choice.label, { message, choice })"
-                >
-                  <div class="product-choice-thumb">
-                    <img v-if="choice.imageUrl" :src="choice.imageUrl" :alt="choice.label" />
-                    <span v-else>{{ categoryEmoji(choice.categoryCode) }}</span>
-                  </div>
-                  <div class="product-choice-info">
-                    <div class="product-choice-head">
-                      <b>{{ choice.label }}</b>
-                      <em v-if="choice.temperature === 'COLD' || choice.temperature === 'HOT'">{{ choice.temperature === 'COLD' ? '冰' : '热' }}</em>
+              <div v-if="isProductChoiceCard(message)" class="product-choice-wrap">
+                <div class="product-choice-grid">
+                  <div
+                    v-for="choice in choicesFor(message)"
+                    :key="choice.value"
+                    class="product-choice-item"
+                    :class="{ selected: pickedQty(message, choice.value) > 0 }"
+                    @click="pickedQty(message, choice.value) === 0 && adjustPickedQty(message, choice, 1)"
+                  >
+                    <div class="product-choice-thumb">
+                      <img v-if="choice.imageUrl" :src="choice.imageUrl" :alt="choice.label" />
+                      <span v-else>{{ categoryEmoji(choice.categoryCode) }}</span>
                     </div>
-                    <p v-if="choice.description">{{ choice.description }}</p>
-                    <div class="product-choice-foot">
-                      <strong v-if="choice.price != null">¥{{ Number(choice.price).toFixed(2) }}</strong>
-                      <span class="pick-tag">{{ message.selectedChoice === choice.label ? '✓ 已加入' : '+ 选这款' }}</span>
+                    <div class="product-choice-info">
+                      <div class="product-choice-head">
+                        <b>{{ choice.label }}</b>
+                        <em v-if="choice.temperature === 'COLD' || choice.temperature === 'HOT'">{{ choice.temperature === 'COLD' ? '冰' : '热' }}</em>
+                      </div>
+                      <p v-if="choice.description">{{ choice.description }}</p>
+                      <div class="product-choice-foot">
+                        <strong v-if="choice.price != null">¥{{ Number(choice.price).toFixed(2) }}</strong>
+                        <div v-if="pickedQty(message, choice.value) > 0" class="qty-stepper" @click.stop>
+                          <button type="button" :disabled="loading" @click="adjustPickedQty(message, choice, -1)">−</button>
+                          <span>{{ pickedQty(message, choice.value) }}</span>
+                          <button type="button" :disabled="loading || pickedQty(message, choice.value) >= 9" @click="adjustPickedQty(message, choice, 1)">+</button>
+                        </div>
+                        <button v-else type="button" class="pick-tag" :disabled="loading" @click.stop="adjustPickedQty(message, choice, 1)">+ 选这款</button>
+                      </div>
                     </div>
                   </div>
-                </button>
+                </div>
+                <div v-if="pickedSummary(message).totalCount > 0" class="product-choice-bar">
+                  <div class="picked-meta">
+                    已选 <b>{{ pickedSummary(message).totalCount }}</b> 件 · 预计 <strong>¥{{ pickedSummary(message).totalPrice.toFixed(2) }}</strong>
+                    <button type="button" class="clear-picked" :disabled="loading" @click="clearPicked(message)">清空</button>
+                  </div>
+                  <button
+                    type="button"
+                    class="submit-picked"
+                    :disabled="loading || message.selectionSubmitted"
+                    @click="submitPickedSelection(message)"
+                  >{{ message.selectionSubmitted ? '✓ 已提交生成订单' : (activePlan ? '选好了，合并进订单 →' : '选好了，生成订单 →') }}</button>
+                </div>
               </div>
               <div v-else class="choice-options">
                 <button
@@ -718,9 +784,19 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 .product-choice-info p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
 .product-choice-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 1px; }
 .product-choice-foot strong { color: var(--orange); font-size: 12px; }
-.product-choice-foot .pick-tag { padding: 2px 6px; border-radius: 999px; background: #edf5ee; color: #2f6548; font-size: 9px; font-weight: 600; }
-.product-choice-item.selected .pick-tag { background: var(--pine); color: #fff; }
-@media (max-width: 560px) { .product-choice-grid { grid-template-columns: 1fr; } }
+.product-choice-wrap { display: grid; gap: 9px; }
+.product-choice-foot .pick-tag { border: 0; padding: 3px 7px; border-radius: 999px; background: #edf5ee; color: #2f6548; font-size: 10px; font-weight: 600; cursor: pointer; }
+.qty-stepper { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 999px; background: var(--pine); color: #fff; }
+.qty-stepper button { width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 12px; line-height: 1; cursor: pointer; display: grid; place-items: center; }
+.qty-stepper button:disabled { opacity: .45; cursor: default; }
+.qty-stepper span { min-width: 12px; text-align: center; font-size: 11px; font-weight: 700; }
+.product-choice-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px dashed #cfe0d2; }
+.picked-meta { display: flex; align-items: center; gap: 5px; color: #466351; font-size: 11px; }
+.picked-meta strong { color: var(--orange); font-size: 13px; }
+.clear-picked { border: 0; background: transparent; color: #8c9c91; font-size: 10px; cursor: pointer; text-decoration: underline; }
+.submit-picked { border: 0; border-radius: 9px; padding: 7px 12px; color: #fff; background: var(--orange); font-size: 11px; font-weight: 700; cursor: pointer; }
+.submit-picked:disabled { background: #9db8a6; cursor: default; }
+@media (max-width: 560px) { .product-choice-grid { grid-template-columns: 1fr; } .product-choice-bar { flex-direction: column; align-items: stretch; } .submit-picked { width: 100%; } }
 .order-plan-card, .order-list-card { margin-top: 8px; padding: 11px; border: 1px solid #f0d8c9; border-radius: 14px; background: linear-gradient(120deg, #fffaf6, #fff); }
 .card-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--ink); font-size: 12px; }
 .card-title .draft-ver { margin-left: 4px; padding: 1px 5px; border-radius: 999px; background: #f8e5d8; color: #b65d2c; font-size: 10px; font-style: normal; font-weight: 600; }

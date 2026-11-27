@@ -153,4 +153,18 @@ class CustomerSupervisorIntentRouteTest {
         assertEquals(CustomerSupervisorAgentOrchestrator.Route.ORDER,
                 CustomerSupervisorAgentOrchestrator.route("我要一杯拿铁", List.of(), false));
     }
+
+    @Test
+    void batchMultiSelectionAlwaysRoutesToOrderOrMerge() {
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.ORDER,
+                CustomerSupervisorAgentOrchestrator.route("我要点：芝士蛋糕×1、提拉米苏×1、巧克力布朗尼×1", List.of(), false));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.MERGE_ORDER,
+                CustomerSupervisorAgentOrchestrator.route("我要点：芝士蛋糕×1、提拉米苏×1", List.of(), true));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.ORDER,
+                CustomerSupervisorAgentOrchestrator.route("选好了：芝士蛋糕×1、提拉米苏×1、巧克力布朗尼×1", List.of(), false));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.MERGE_ORDER,
+                CustomerSupervisorAgentOrchestrator.route("选好了：芝士蛋糕×1、提拉米苏×1", List.of(), true));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.CHECKOUT,
+                CustomerSupervisorAgentOrchestrator.route("选好了", List.of(), true));
+    }
 }

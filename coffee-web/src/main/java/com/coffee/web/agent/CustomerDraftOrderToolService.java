@@ -38,6 +38,7 @@ public class CustomerDraftOrderToolService {
 
     private static final Pattern EXPLICIT_QTY_PATTERN = Pattern.compile(
             "(\\d{1,2}|[一二两兩三四五六七八九十])\\s*(?:个|份|杯|碗|块|件)");
+    private static final Pattern MULT_QTY_PATTERN = Pattern.compile("[×xX*]\\s*(\\d{1,2})");
 
     private final CustomerSessionDraftService draftService;
     private final CustomerOrderAgentService orderAgent;
@@ -67,6 +68,12 @@ public class CustomerDraftOrderToolService {
         }
         SessionDraftOrder draft = draftService.getOrCreate(sessionId, ownerKey, storeId);
         String text = rawInput == null ? "" : rawInput.trim();
+
+        // 0. 批量多选提交（如“选好了：茉莉花茶×2、手打柠檬茶×1”）一次原子合并进草稿单
+        ToolOutcome batchOutcome = tryBatchAddSelections(sessionId, ownerKey, storeId, userId, guestId, text, history, available, draft);
+        if (batchOutcome != null) {
+            return batchOutcome;
+        }
 
         // 1. 解析目标商品（优先当前输入点名 → 其次草稿待选商品 → 其次最近对话提到的商品）
         List<MenuItemDTO> matched = matchProducts(text, available);
@@ -184,6 +191,94 @@ public class CustomerDraftOrderToolService {
         String summaryText = buildOrderSummaryText(nextItems, planPayload,
                 hadPrevious ? "好的，已把 " + addedDesc + " 合并进当前订单。" : "好的，已为你准备好 " + addedDesc + "。");
         return ToolOutcome.orderPlan(summaryText, hadPrevious ? "确认合并方案，去支付" : "确认方案，去支付", planPayload);
+    }
+
+    /**
+     * 解析前端多选提交（例如“选好了：茉莉花茶×2、手打柠檬茶×1”）或自然语言多品并列输入，一次合并入草稿单。
+     */
+    private ToolOutcome tryBatchAddSelections(String sessionId, String ownerKey, Long storeId,
+                                              Long userId, String guestId,
+                                              String text, List<String> history,
+                                              List<MenuItemDTO> available, SessionDraftOrder draft) {
+        if (text == null || text.isBlank()) return null;
+        boolean explicitBatchPrefix = text.startsWith("选好了：") || text.startsWith("选好了:")
+                || text.startsWith("点好了：") || text.startsWith("点好了:")
+                || text.startsWith("我要点：") || text.startsWith("我要点:")
+                || text.startsWith("点单：") || text.startsWith("点单:");
+        boolean hasMultiplier = MULT_QTY_PATTERN.matcher(text).find();
+        String body = text.replaceFirst("^(?:选好了|点好了|我要点|我要|点单|帮我点)[:：]?\\s*", "").trim();
+        String[] rawSegments = body.split("[、,，\\n]+|(?:\\s*和\\s*)");
+        if (!explicitBatchPrefix && !hasMultiplier && rawSegments.length < 2) {
+            return null;
+        }
+        record ParsedPick(MenuItemDTO product, String size, int quantity) { }
+        List<ParsedPick> picks = new ArrayList<>();
+        for (String seg : rawSegments) {
+            String trimmed = seg == null ? "" : seg.trim();
+            if (trimmed.isEmpty()) continue;
+            List<MenuItemDTO> hits = matchProducts(trimmed, available);
+            if (hits.size() != 1) return null;
+            MenuItemDTO product = hits.get(0);
+            int qty = extractQuantity(trimmed, 1);
+            String size = resolveSize(trimmed, product, history);
+            picks.add(new ParsedPick(product, size == null ? "MEDIUM" : size, Math.max(1, Math.min(MAX_ITEM_QUANTITY, qty))));
+        }
+        if (picks.isEmpty()) return null;
+
+        List<DraftLineItem> nextItems = new ArrayList<>(draft.items());
+        List<String> addedDescriptions = new ArrayList<>();
+        for (ParsedPick pick : picks) {
+            MenuItemDTO product = pick.product();
+            String normalizedSize = normalizeSize(pick.size());
+            int qty = pick.quantity();
+            double unitPrice = menuService.calculatePrice(storeId, product.getCode(), normalizedSize, null, List.of());
+            DraftLineItem incoming = new DraftLineItem(
+                    product.getCode(), product.getId(), product.getName(),
+                    safe(product.getCategoryCode()), safe(product.getTemperature()),
+                    normalizedSize, qty, List.of(), unitPrice,
+                    safe(product.getImageUrl()), safe(product.getDescription()));
+            boolean mergedExisting = false;
+            for (int i = 0; i < nextItems.size(); i++) {
+                DraftLineItem existing = nextItems.get(i);
+                if (existing.mergeKey().equals(incoming.mergeKey())) {
+                    int combinedQty = existing.quantity() + incoming.quantity();
+                    if (combinedQty > MAX_ITEM_QUANTITY) {
+                        throw new ServiceException(400, "同一商品单笔最多点 " + MAX_ITEM_QUANTITY + " 份");
+                    }
+                    if (!inventoryService.hasAvailable(storeId, product.getId(), combinedQty)) {
+                        throw new ServiceException(409, "「" + product.getName() + "」当前库存不足 " + combinedQty + " 份");
+                    }
+                    nextItems.set(i, new DraftLineItem(
+                            existing.productCode(), existing.productId(), existing.productName(),
+                            existing.categoryCode(), existing.temperature(), existing.size(),
+                            combinedQty, existing.condiments(), unitPrice,
+                            existing.imageUrl(), existing.description()));
+                    mergedExisting = true;
+                    break;
+                }
+            }
+            if (!mergedExisting) {
+                if (nextItems.size() >= MAX_LINE_COUNT) {
+                    throw new ServiceException(400, "一笔订单最多包含 " + MAX_LINE_COUNT + " 种商品");
+                }
+                if (!inventoryService.hasAvailable(storeId, product.getId(), qty)) {
+                    throw new ServiceException(409, "「" + product.getName() + "」当前库存不足 " + qty + " 份");
+                }
+                nextItems.add(incoming);
+            }
+            addedDescriptions.add(formatItemShort(product.getName(), product.getCategoryCode(), normalizedSize, qty));
+        }
+
+        boolean hadPrevious = draft.hasItems();
+        Map<String, Object> planPayload = issueDraftPlan(sessionId, ownerKey, storeId, userId, guestId,
+                nextItems, DraftStatus.REVIEW_READY,
+                hadPrevious ? "已将所选商品统一合并进当前待确认订单，核对无误后一次支付即可。"
+                        : "已按你选好的商品组装好待确认订单，核对无误后点击去支付即可。");
+        String lead = hadPrevious
+                ? "好的，已把 " + String.join("、", addedDescriptions) + " 合并进当前订单。"
+                : "好的，已为你组装好待确认订单：" + String.join("、", addedDescriptions) + "。";
+        String summaryText = buildOrderSummaryText(nextItems, planPayload, lead);
+        return ToolOutcome.orderPlan(summaryText, "确认方案，去支付", planPayload);
     }
 
     /**
@@ -498,6 +593,10 @@ public class CustomerDraftOrderToolService {
 
     static int extractQuantity(String text, int defaultQty) {
         if (text == null || text.isBlank()) return defaultQty;
+        Matcher multMatcher = MULT_QTY_PATTERN.matcher(text);
+        if (multMatcher.find()) {
+            return parseChineseOrDigit(multMatcher.group(1), defaultQty);
+        }
         Matcher matcher = EXPLICIT_QTY_PATTERN.matcher(text);
         if (matcher.find()) {
             return parseChineseOrDigit(matcher.group(1), defaultQty);

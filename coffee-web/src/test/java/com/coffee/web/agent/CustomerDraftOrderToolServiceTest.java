@@ -158,7 +158,19 @@ class CustomerDraftOrderToolServiceTest {
         assertEquals("jasmine_tea", items5.get(0).get("productCode"));
         assertEquals(16.0, ((Map<String, Object>) payload5.get("pricing")).get("itemsSubtotal"));
 
-        // 6. 确认下单后标记 SUBMITTED，草稿单不再有活动商品
+        // 6. 批量多选一次提交（“选好了：茉莉花茶×2、汉堡×1”）-> 一次合并入草稿单并直接进入 REVIEW_READY
+        draftService.clear(sessionId, owner, 1L);
+        var batch = toolService.addByUserInput(sessionId, owner, 1L, 7L, null,
+                "选好了：茉莉花茶×2、汉堡×1", List.of(), false);
+        assertTrue(batch.matched());
+        assertEquals("ORDER_PLAN", batch.actionType());
+        Map<String, Object> batchPayload = (Map<String, Object>) batch.payload();
+        assertEquals("REVIEW_READY", batchPayload.get("draftStatus"));
+        List<Map<String, Object>> batchItems = (List<Map<String, Object>>) batchPayload.get("items");
+        assertEquals(2, batchItems.size());
+        assertEquals(47.0, ((Map<String, Object>) batchPayload.get("pricing")).get("itemsSubtotal"));
+
+        // 7. 确认下单后标记 SUBMITTED，草稿单不再有活动商品
         draftService.markSubmitted(sessionId, owner, 1L);
         assertFalse(draftService.hasActiveItems(sessionId, owner, 1L));
     }
