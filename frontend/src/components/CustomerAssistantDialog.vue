@@ -252,7 +252,12 @@ function itemKey(messageIndex: number, itemIndex: number): string {
 }
 
 function startEdit(messageIndex: number, itemIndex: number, item: CustomerAgentItem) {
-  editingKey.value = itemKey(messageIndex, itemIndex)
+  const key = itemKey(messageIndex, itemIndex)
+  if (editingKey.value === key) {
+    cancelEdit()
+    return
+  }
+  editingKey.value = key
   editDraft.value = {
     size: ['SMALL', 'MEDIUM', 'LARGE'].includes(item.size) ? item.size : 'MEDIUM',
     quantity: Math.max(1, Math.min(9, Number(item.quantity) || 1)),
@@ -273,17 +278,8 @@ function toggleEditCondiment(code: string) {
     : [...draft.condiments, code]
 }
 
-function editingItemFor(messageIndex: number): CustomerAgentItem | null {
-  if (!editingKey.value) return null
-  const [messageIndexText, itemIndexText] = editingKey.value.split('-')
-  if (Number(messageIndexText) !== messageIndex) return null
-  const items = planFor(messages.value[messageIndex])?.items || []
-  return items[Number(itemIndexText)] || null
-}
-
-function editingCondimentOptions(messageIndex: number): string[] {
-  const item = editingItemFor(messageIndex)
-  return item ? (productFor(item)?.allowedCondiments || []) : []
+function condimentOptionsFor(item: CustomerAgentItem): string[] {
+  return productFor(item)?.allowedCondiments || []
 }
 
 async function saveEdit(message: AssistantMessage) {
@@ -600,74 +596,82 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
                   </b>
                   <span>{{ isActivePlan(planFor(message)) ? '待你审核 · 可编辑/移除' : '已合并到最新方案' }}</span>
                 </div>
-                <div v-for="(item, itemIndex) in planFor(message)!.items" :key="`${item.productCode}-${item.size}-${itemIndex}`" class="plan-item">
-                  <div class="plan-image">
-                    <img v-if="item.imageUrl" :src="item.imageUrl" :alt="item.name" />
-                    <span v-else>☕</span>
-                  </div>
-                  <div class="plan-main">
-                    <div>
-                      <b>{{ item.name }}</b>
-                      <strong>¥{{ (Number(item.estimatedPrice || 0) * Number(item.quantity || 1)).toFixed(2) }}</strong>
+                <div
+                  v-for="(item, itemIndex) in planFor(message)!.items"
+                  :key="`${item.productCode}-${item.size}-${itemIndex}`"
+                  class="plan-item-block"
+                  :class="{ editing: editingKey === itemKey(index, itemIndex) }"
+                >
+                  <div class="plan-item">
+                    <div class="plan-image">
+                      <img v-if="item.imageUrl" :src="item.imageUrl" :alt="item.name" />
+                      <span v-else>☕</span>
                     </div>
-                    <small>
-                      <template v-if="item.categoryCode !== 'food' && item.categoryCode !== 'dessert'">
-                        {{ item.temperature === 'COLD' ? '冰饮' : item.temperature === 'HOT' ? '热饮' : '冷热可选' }} ·
-                      </template>
-                      {{ sizeLabel(item.size, item.categoryCode) }} · ¥{{ Number(item.estimatedPrice || 0).toFixed(2) }} × {{ item.quantity }}
-                      <template v-if="condimentsOf(item).length"> · {{ condimentsOf(item).map(condimentLabel).join('、') }}</template>
-                    </small>
-                    <div v-if="isActivePlan(planFor(message))" class="plan-item-actions">
-                      <button
-                        type="button"
-                        class="edit-plan-item"
-                        :disabled="rebuilding || (editingKey !== null && editingKey !== itemKey(index, itemIndex))"
-                        @click="startEdit(index, itemIndex, item)"
-                      >编辑规格 / 加料</button>
-                      <button
-                        type="button"
-                        class="remove-plan-item"
-                        :disabled="rebuilding"
-                        @click="removeItem(message, itemIndex)"
-                      >移除</button>
+                    <div class="plan-main">
+                      <div>
+                        <b>{{ item.name }}</b>
+                        <strong>¥{{ (Number(item.estimatedPrice || 0) * Number(item.quantity || 1)).toFixed(2) }}</strong>
+                      </div>
+                      <small>
+                        <template v-if="item.categoryCode !== 'food' && item.categoryCode !== 'dessert'">
+                          {{ item.temperature === 'COLD' ? '冰饮' : item.temperature === 'HOT' ? '热饮' : '冷热可选' }} ·
+                        </template>
+                        {{ sizeLabel(item.size, item.categoryCode) }} · ¥{{ Number(item.estimatedPrice || 0).toFixed(2) }} × {{ item.quantity }}
+                        <template v-if="condimentsOf(item).length"> · {{ condimentsOf(item).map(condimentLabel).join('、') }}</template>
+                      </small>
+                      <div v-if="isActivePlan(planFor(message))" class="plan-item-actions">
+                        <button
+                          type="button"
+                          class="edit-plan-item"
+                          :class="{ active: editingKey === itemKey(index, itemIndex) }"
+                          :disabled="rebuilding"
+                          @click="startEdit(index, itemIndex, item)"
+                        >{{ editingKey === itemKey(index, itemIndex) ? '收起编辑' : '编辑规格 / 加料' }}</button>
+                        <button
+                          type="button"
+                          class="remove-plan-item"
+                          :disabled="rebuilding"
+                          @click="removeItem(message, itemIndex)"
+                        >移除</button>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div v-if="editingItemFor(index) && editDraft" class="plan-editor">
-                  <div class="editor-row">
-                    <label>规格</label>
-                    <button
-                      v-for="size in sizeOptionsFor(editingItemFor(index))"
-                      :key="size.value"
-                      type="button"
-                      :class="{ selected: editDraft.size === size.value }"
-                      @click="editDraft!.size = size.value"
-                    >{{ size.label }}</button>
-                  </div>
-                  <div class="editor-row">
-                    <label>数量</label>
-                    <button
-                      v-for="quantity in [1, 2, 3, 4]"
-                      :key="quantity"
-                      type="button"
-                      :class="{ selected: editDraft.quantity === quantity }"
-                      @click="editDraft!.quantity = quantity"
-                    >{{ quantity }} 份</button>
-                  </div>
-                  <div v-if="editingCondimentOptions(index).length" class="editor-row">
-                    <label>加料</label>
-                    <button
-                      v-for="code in editingCondimentOptions(index)"
-                      :key="code"
-                      type="button"
-                      :class="{ selected: editDraft!.condiments.includes(code) }"
-                      @click="toggleEditCondiment(code)"
-                    >{{ condimentLabel(code) }}</button>
-                  </div>
-                  <div class="editor-actions">
-                    <button type="button" @click="cancelEdit">取消</button>
-                    <button type="button" class="save" :disabled="rebuilding" @click="saveEdit(message)">{{ rebuilding ? '更新中…' : '保存修改' }}</button>
+                  <div v-if="editingKey === itemKey(index, itemIndex) && editDraft" class="plan-editor">
+                    <div class="editor-row">
+                      <label>规格</label>
+                      <button
+                        v-for="size in sizeOptionsFor(item)"
+                        :key="size.value"
+                        type="button"
+                        :class="{ selected: editDraft.size === size.value }"
+                        @click="editDraft!.size = size.value"
+                      >{{ size.label }}</button>
+                    </div>
+                    <div class="editor-row">
+                      <label>数量</label>
+                      <button
+                        v-for="quantity in [1, 2, 3, 4]"
+                        :key="quantity"
+                        type="button"
+                        :class="{ selected: editDraft.quantity === quantity }"
+                        @click="editDraft!.quantity = quantity"
+                      >{{ quantity }} 份</button>
+                    </div>
+                    <div v-if="condimentOptionsFor(item).length" class="editor-row">
+                      <label>加料</label>
+                      <button
+                        v-for="code in condimentOptionsFor(item)"
+                        :key="code"
+                        type="button"
+                        :class="{ selected: editDraft!.condiments.includes(code) }"
+                        @click="toggleEditCondiment(code)"
+                      >{{ condimentLabel(code) }}</button>
+                    </div>
+                    <div class="editor-actions">
+                      <button type="button" @click="cancelEdit">取消</button>
+                      <button type="button" class="save" :disabled="rebuilding" @click="saveEdit(message)">{{ rebuilding ? '更新中…' : '保存修改' }}</button>
+                    </div>
                   </div>
                 </div>
 
@@ -801,8 +805,10 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 .card-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--ink); font-size: 12px; }
 .card-title .draft-ver { margin-left: 4px; padding: 1px 5px; border-radius: 999px; background: #f8e5d8; color: #b65d2c; font-size: 10px; font-style: normal; font-weight: 600; }
 .card-title span { color: #c16a3f; font-size: 10px; }
-.plan-item { display: flex; gap: 8px; padding: 7px 0; border-top: 1px solid #f4e9e1; }
-.plan-item:first-of-type { border-top: 0; }
+.plan-item-block { padding: 7px 0; border-top: 1px solid #f4e9e1; }
+.plan-item-block:first-of-type { border-top: 0; }
+.plan-item-block.editing { margin: 2px -6px; padding: 8px 6px; border-radius: 11px; background: #fff7f0; }
+.plan-item { display: flex; gap: 8px; }
 .plan-image { display: grid; place-items: center; flex: none; width: 44px; height: 44px; overflow: hidden; border-radius: 10px; color: #b67857; background: #f8eadf; }
 .plan-image img { width: 100%; height: 100%; object-fit: cover; }
 .plan-main { min-width: 0; flex: 1; }
@@ -813,7 +819,7 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 .plan-item-actions { display: flex; gap: 6px; margin-top: 6px; }
 .edit-plan-item, .remove-plan-item { border: 1px solid #eadbd0; border-radius: 8px; padding: 4px 7px; font-size: 10px; cursor: pointer; }
 .edit-plan-item { color: #9a633f; background: #fffaf5; }
-.edit-plan-item:hover:not(:disabled) { border-color: var(--orange); color: var(--orange); }
+.edit-plan-item:hover:not(:disabled), .edit-plan-item.active { border-color: var(--orange); color: var(--orange); background: #fff2e8; }
 .remove-plan-item { color: #a8524b; background: #fff6f5; border-color: #f0d2cf; }
 .remove-plan-item:hover:not(:disabled) { border-color: #d9534f; color: #c9302c; }
 .edit-plan-item:disabled, .remove-plan-item:disabled { opacity: .45; cursor: default; }
