@@ -38,6 +38,10 @@ interface AssistantChoice {
   label: string
   value: string
   price?: number
+  imageUrl?: string
+  description?: string
+  categoryCode?: string
+  temperature?: string
 }
 
 interface AssistantMessage {
@@ -91,14 +95,36 @@ function orderList(response?: CustomerAssistantResponse): AssistantOrder[] {
   return Array.isArray(orders) ? orders.filter(item => item && Number.isFinite(Number(item.id))).map(item => item as AssistantOrder) : []
 }
 
-/** 后端下发的规格/商品选择卡片数据。 */
+/** 后端下发的规格/商品选择卡片数据（含商品图片、简介、品类与冷热属性）。 */
 function choiceList(response?: CustomerAssistantResponse): AssistantChoice[] {
   if (response?.action?.type !== 'ASK_CHOICE') return []
   const choices = response.action.payload?.choices
   if (!Array.isArray(choices)) return []
   return choices
     .filter(item => item && typeof item.label === 'string' && typeof item.value === 'string')
-    .map(item => ({ label: String(item.label), value: String(item.value), price: Number.isFinite(Number(item.price)) ? Number(item.price) : undefined }))
+    .map(item => ({
+      label: String(item.label),
+      value: String(item.value),
+      price: Number.isFinite(Number(item.price)) ? Number(item.price) : undefined,
+      imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : '',
+      description: typeof item.description === 'string' ? item.description : '',
+      categoryCode: typeof item.categoryCode === 'string' ? item.categoryCode : '',
+      temperature: typeof item.temperature === 'string' ? item.temperature : ''
+    }))
+}
+
+function isProductChoiceCard(message: AssistantMessage): boolean {
+  const kind = message.response?.action?.payload?.choiceKind
+  if (kind === 'PRODUCT') return true
+  return choicesFor(message).some(c => !!c.imageUrl || !!c.description || !!c.categoryCode)
+}
+
+function categoryEmoji(categoryCode?: string): string {
+  if (categoryCode === 'tea') return '🍵'
+  if (categoryCode === 'dessert') return '🍰'
+  if (categoryCode === 'food') return '🥪'
+  if (categoryCode === 'ice') return '🧊'
+  return '☕'
 }
 
 function choicesFor(message: AssistantMessage): AssistantChoice[] {
@@ -450,10 +476,37 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 
             <section v-if="choicesFor(message).length" class="choice-card">
               <div class="choice-title">
-                <b>{{ message.response?.action?.payload?.prompt || '选择规格' }}</b>
-                <span>点选后继续下单</span>
+                <b>{{ message.response?.action?.payload?.prompt || (isProductChoiceCard(message) ? '为你推荐的门店商品' : '选择规格') }}</b>
+                <span>{{ isProductChoiceCard(message) ? '点击即可加入订单' : '点选后继续下单' }}</span>
               </div>
-              <div class="choice-options">
+              <div v-if="isProductChoiceCard(message)" class="product-choice-grid">
+                <button
+                  v-for="choice in choicesFor(message)"
+                  :key="choice.value"
+                  type="button"
+                  class="product-choice-item"
+                  :class="{ selected: message.selectedChoice === choice.label }"
+                  :disabled="loading"
+                  @click="send(choice.label, { message, choice })"
+                >
+                  <div class="product-choice-thumb">
+                    <img v-if="choice.imageUrl" :src="choice.imageUrl" :alt="choice.label" />
+                    <span v-else>{{ categoryEmoji(choice.categoryCode) }}</span>
+                  </div>
+                  <div class="product-choice-info">
+                    <div class="product-choice-head">
+                      <b>{{ choice.label }}</b>
+                      <em v-if="choice.temperature === 'COLD' || choice.temperature === 'HOT'">{{ choice.temperature === 'COLD' ? '冰' : '热' }}</em>
+                    </div>
+                    <p v-if="choice.description">{{ choice.description }}</p>
+                    <div class="product-choice-foot">
+                      <strong v-if="choice.price != null">¥{{ Number(choice.price).toFixed(2) }}</strong>
+                      <span class="pick-tag">{{ message.selectedChoice === choice.label ? '✓ 已加入' : '+ 选这款' }}</span>
+                    </div>
+                  </div>
+                </button>
+              </div>
+              <div v-else class="choice-options">
                 <button
                   v-for="choice in choicesFor(message)"
                   :key="choice.value"
@@ -651,6 +704,23 @@ function chooseFeedbackOrder(response: CustomerAssistantResponse, order: Assista
 .choice-options button span { color: var(--orange); font-size: 10px; }
 .choice-options button.selected span { color: #ffd8bf; }
 .choice-options button:disabled { cursor: default; }
+.product-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.product-choice-item { display: flex; gap: 8px; align-items: center; text-align: left; border: 1px solid #d8e7db; border-radius: 11px; padding: 8px; background: #fff; cursor: pointer; transition: border-color .16s, box-shadow .16s, background .16s; }
+.product-choice-item:hover:not(:disabled) { border-color: var(--pine); box-shadow: 0 3px 10px rgba(45, 90, 65, .08); background: #f8fcf8; }
+.product-choice-item.selected { border-color: var(--pine); background: #edf6ef; }
+.product-choice-item:disabled { opacity: .6; cursor: wait; }
+.product-choice-thumb { display: grid; place-items: center; flex: none; width: 48px; height: 48px; overflow: hidden; border-radius: 9px; background: #f8eadf; font-size: 18px; }
+.product-choice-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.product-choice-info { min-width: 0; flex: 1; display: grid; gap: 3px; }
+.product-choice-head { display: flex; align-items: center; gap: 5px; }
+.product-choice-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 11px; }
+.product-choice-head em { flex: none; padding: 1px 4px; border-radius: 4px; background: #e8f3ec; color: #366c4e; font-size: 9px; font-style: normal; }
+.product-choice-info p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
+.product-choice-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 1px; }
+.product-choice-foot strong { color: var(--orange); font-size: 12px; }
+.product-choice-foot .pick-tag { padding: 2px 6px; border-radius: 999px; background: #edf5ee; color: #2f6548; font-size: 9px; font-weight: 600; }
+.product-choice-item.selected .pick-tag { background: var(--pine); color: #fff; }
+@media (max-width: 560px) { .product-choice-grid { grid-template-columns: 1fr; } }
 .order-plan-card, .order-list-card { margin-top: 8px; padding: 11px; border: 1px solid #f0d8c9; border-radius: 14px; background: linear-gradient(120deg, #fffaf6, #fff); }
 .card-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--ink); font-size: 12px; }
 .card-title .draft-ver { margin-left: 4px; padding: 1px 5px; border-radius: 999px; background: #f8e5d8; color: #b65d2c; font-size: 10px; font-style: normal; font-weight: 600; }

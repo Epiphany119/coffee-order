@@ -111,6 +111,12 @@ class CustomerSupervisorIntentRouteTest {
                 "assistant：根据您想加甜点的需求，我们目前有以下甜点可供选择。");
         assertEquals("dessert", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("我还想加点", history));
         assertEquals("dessert", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("还有别的吗", history));
+        assertEquals("", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("你们今天营业到几点", history));
+        assertEquals("coffee", CustomerSupervisorAgentOrchestrator.menuCategoryIntent("推荐一杯咖啡", history));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.CHECKOUT,
+                CustomerSupervisorAgentOrchestrator.route("选好了", history, true));
+        assertEquals(CustomerSupervisorAgentOrchestrator.Route.CHECKOUT,
+                CustomerSupervisorAgentOrchestrator.route("点好了", history, true));
 
         List<MenuItemDTO> products = List.of(
                 product("latte", "拿铁", "coffee"),
