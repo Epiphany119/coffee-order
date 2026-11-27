@@ -65,13 +65,13 @@ class CustomerDraftOrderToolServiceTest {
         when(menuService.getAllProducts(1L)).thenReturn(List.of(jasmineTea, burger));
         when(inventoryService.hasAvailable(eq(1L), anyLong(), anyInt())).thenReturn(true);
         when(menuService.calculatePrice(eq(1L), eq("jasmine_tea"), anyString(), isNull(), anyList()))
-                .thenAnswer(inv -> switch (String.valueOf(inv.getArgument(2))) {
+                .thenAnswer(inv -> switch (String.valueOf(inv.getArgument(2, String.class))) {
                     case "SMALL" -> 14.0;
                     case "LARGE" -> 19.0;
                     default -> 16.0;
                 });
         when(menuService.calculatePrice(eq(1L), eq("beef_burger"), anyString(), isNull(), anyList()))
-                .thenAnswer(inv -> switch (String.valueOf(inv.getArgument(2))) {
+                .thenAnswer(inv -> switch (String.valueOf(inv.getArgument(2, String.class))) {
                     case "SMALL" -> 10.0;
                     case "LARGE" -> 20.0;
                     default -> 15.0;
